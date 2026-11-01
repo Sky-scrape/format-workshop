@@ -106,3 +106,42 @@ def test_body_restyling_records_what_changed(baseline):
     for it in items:
         assert "pt" in it["note"], f"条目没说清目标字号：{it['note']}"
         assert it["before"] == "" and it["after"] == "", "正文套版不该携带文字快照"
+
+
+def test_audit_carries_ruleset_assumptions(baseline):
+    """报告要带上本刊的推定项。
+
+    规则集里写着「样本无副标题实例，按与主标题同号推定」，报告却只报 26pt，
+    用户会以为是期刊规定。推定值必须自报家门。
+    """
+    rules = json.loads((RULES / f"{TARGET_JOURNAL}.json").read_text(encoding="utf-8"))
+    assert baseline.audit.get("assumptions") == (rules.get("assumptions") or [])
+    assert baseline.audit["assumptions"], "统计研究有 3 条推定项，不该为空"
+
+
+def test_assumed_typography_is_labelled_in_report(tmp_path):
+    """标了 measured:false 的字号，条目里必须写「推定值」。"""
+    from test_manuscript_matrix import build_messy_manuscript
+
+    src = build_messy_manuscript(tmp_path / "m.docx")
+
+    tjyj = render_into(tmp_path / "tjyj", src, target="tjyj")
+    notes = [it["note"] for it in tjyj.items if it["action"] == "副标题套版"]
+    assert notes, "稿件里有副标题，却没有副标题套版条目"
+    assert any("推定" in n for n in notes), f"统计研究的副标题是推定值，却没标注：{notes}"
+
+    # 没写 subtitle 规则的刊走代码默认值，不该冒称推定
+    cjyj = render_into(tmp_path / "cjyj", src, target="cjyj")
+    defaults = [it["note"] for it in cjyj.items if it["action"] == "副标题套版"]
+    assert all("推定" not in n for n in defaults), f"无该规则时不应标推定：{defaults}"
+
+
+def test_report_page_lists_assumptions(baseline, tmp_path):
+    """审计页要真的把这些推定项列出来，不能只存在 JSON 里。"""
+    from conftest import run_tool
+
+    out = tmp_path / "audit.html"
+    run_tool("render_audit.py", baseline.docx.with_suffix(".audit.json"), "-o", out, "--job", "t1")
+    page = out.read_text(encoding="utf-8")
+    assert "推定项" in page, "审计页没有列出推定项"
+    assert baseline.audit["assumptions"][0][:12] in page, "推定项内容没有渲染进页面"

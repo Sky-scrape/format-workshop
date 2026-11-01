@@ -22,11 +22,15 @@ KIND = {
     "文章标题套版": "A",
     "副标题套版": "A",
     "作者署名套版": "A",
+    "正文套版": "A",
+    "图片段解除固定行距": "A",
+    "表格重设为三线表": "A",
+    "参考文献悬挂缩进": "A",
     "标题重新编号": "B",
     "题注归一": "B",
     "标签归一": "B",
-    "参考文献悬挂缩进": "A",
-    "表格重设为三线表": "A",
+    "关键词分隔符归一": "B",
+    "文献表标题归一": "B",
     "表注／图注层序调整": "B",
 }
 
@@ -116,6 +120,17 @@ def render(d, job=None):
                      f'<p class="meta">该刊要求正文匿名，工具另出一份匿名稿，删除下列 '
                      f'{len(anon["removed"])} 处身份信息；署名稿保持完整，供留档与校样使用。</p>'
                      f'<ul class="anon">{rows}</ul></section>')
+
+    # 推定项：这些值没有官方明文或实测样本支撑，是本工具按同类惯例推的。
+    # 藏着不说，等于把"推定"当"规范"卖给用户——这正是本产品不该做的事。
+    assumptions = d.get("assumptions") or []
+    assume_html = ""
+    if assumptions:
+        rows = "".join(f"<li>{html.escape(a)}</li>" for a in assumptions)
+        assume_html = (f'<section id="assumeSection"><h2>本刊的推定项（{len(assumptions)} 条）</h2>'
+                       f'<p class="meta">下列值在稿约与样张里都找不到依据，是按同类期刊惯例推的。'
+                       f'投稿前请人工确认——这类地方推错了，责任在工具，不在期刊。</p>'
+                       f'<ul class="anon">{rows}</ul></section>')
 
     out = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -238,6 +253,8 @@ tr.rejected .new{{color:var(--ink3);text-decoration:line-through}}
 </section>
 
 {anon_html}
+
+{assume_html}
 
 <p class="meta" style="margin-top:20px">A 档＝纯版式，不触及文字；B 档＝触及字符但不动字词，全部可回溯。
 正文与表格内文字零改动，本报告可直接用于投稿说明或导师核对。</p>

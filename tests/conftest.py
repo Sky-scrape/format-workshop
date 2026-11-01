@@ -78,15 +78,22 @@ def normalize(text):
 def content_of(text, btype):
     """标签块只比对冒号之后的正文。
 
-    「内容摘要：」→「摘  要：」「参考文献」→「参考文献：」这类属于标签归一
-    （B 档，规则集明确定义），改动的是标签本身，不是内容。比对时把标签剥掉，
-    剩下的差异才算真改动。
+    「内容摘要：」→「摘  要：」这类属于标签归一（B 档，规则集明确定义），改的是
+    标签本身，不是内容。比对时把标签剥掉，剩下的差异才算真改动。
+
+    冒号要同时认半角——真实稿件里「内容摘要:」很常见，标签归一顺带把它改成全角，
+    这是允许的，不该被判成改字。
+
+    文献表标题是纯标签（「参考文献」本身没有正文），一律比对为空——它改成
+    「参考文献：」属于 `文献表标题归一`，有独立审计条目管着。
     """
     if btype not in ("abstract", "keywords", "references_heading"):
         return text
-    if "：" in text and not text.endswith("："):
-        return text.split("：", 1)[1]
-    return text.rstrip("：")
+    m = re.search(r"[:：]", text)
+    # 标签很短（"内容摘要:" 6 个字），指望号出现在前 12 个字内才算标签分隔
+    if m and m.start() <= 12:
+        return text[m.end():]
+    return "" if btype == "references_heading" else text.rstrip("：:")
 
 
 def signature(text, btype):
@@ -170,19 +177,29 @@ NS_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 def note_reorder_blocks(p):
-    """只换了位置、没换文字的题注/表注块。
+    """只换了位置、没换文字的表格注。
 
-    目标刊要求「注」在「资料来源」之前时，渲染器会交换这两段的内容（`表注／图注
-    层序调整`）。逐块比对必然误判成「改了字」，所以先把这类纯换位识别出来：
-    这些块的文字整体守恒（多重集合相同），只是换了承载的段落。
+    目标刊要求「注」与「资料来源」的先后不同时，渲染器会交换这两段的内容
+    （`表注／图注层序调整`）。逐块比对必然误判成「改了字」，所以先把这类纯换位
+    识别出来：这些块各自的文字都变了，但整组文字守恒。
+
+    只认 table_note——题注（表1 xxx）不参与层序调整，它们的空格归一是另一回事，
+    混进来会让整组文字不守恒，反而识别不出真正的换位。
     """
-    note_types = {"table_note", "figure_caption", "table_caption"}
-    notes = {i for i in p.changed_idx if p.block_type.get(i) in note_types}
-    if not notes:
+    notes = {i for i in p.changed_idx if p.block_type.get(i) == "table_note"}
+    if len(notes) < 2:
         return set()
-    before = Counter(p.source_texts[i] for i in notes)
-    after = Counter(p.output_texts[i] for i in notes)
-    return notes if before == after else set()
+
+    def sig(idx, texts):
+        return signature(texts[idx], "table_note")
+
+    changed = {i for i in notes if sig(i, p.source_texts) != sig(i, p.output_texts)}
+    if not changed:
+        return set()
+
+    before = Counter(sig(i, p.source_texts) for i in notes)
+    after = Counter(sig(i, p.output_texts) for i in notes)
+    return changed if before == after else set()
 
 
 def run_sizes(docx_path):
@@ -203,3 +220,44 @@ def run_sizes(docx_path):
 def baseline(tmp_path_factory, sample_docx):
     """基准渲染结果，多个用例共用；流程只跑一次。"""
     return render_into(tmp_path_factory.mktemp("baseline"), sample_docx)
+
+
+def invariant_failures(p):
+    """一次核对四条不变式，返回问题清单（空表示全部通过）。
+
+    单独用例外面的矩阵测试靠它复用同一套判断——不然每换一个期刊组合，
+    就得把同样的断言抄一遍，抄着抄着就漏了。
+    """
+    problems = []
+    reordered = note_reorder_blocks(p)
+    recorded = {it["idx"] for it in p.items}
+
+    missing = sorted(p.changed_idx - recorded - reordered)
+    if missing:
+        problems.append(f"文字变了却没有审计记录：{missing[:5]}")
+
+    for idx in sorted(p.changed_idx - reordered):
+        btype = p.block_type.get(idx, "")
+        if signature(p.source_texts[idx], btype) != signature(p.output_texts[idx], btype):
+            problems.append(
+                f"块 {idx}（{btype}）超出白名单改动："
+                f"{p.source_texts[idx][:20]} → {p.output_texts[idx][:20]}")
+
+    if set(p.output_texts) != set(p.source_texts):
+        problems.append("段落数量变了：源稿与成品的 body 子元素不再一一对应")
+
+    def prints(texts):
+        return Counter(signature(t, p.block_type.get(i, "")) for i, t in texts.items())
+
+    before, after = prints(p.source_texts), prints(p.output_texts)
+    if before - after:
+        problems.append(f"成品里丢了文字：{[''.join(s)[:20] for s in (before - after)][:3]}")
+    if after - before:
+        problems.append(f"成品里凭空多出文字：{[''.join(s)[:20] for s in (after - before)][:3]}")
+
+    for it in p.items:
+        if not (it.get("action") or "").strip():
+            problems.append(f"审计条目缺动作名：{it.get('id')}")
+            break
+
+    return problems

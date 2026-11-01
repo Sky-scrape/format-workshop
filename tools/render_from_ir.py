@@ -107,6 +107,14 @@ def fmt_delta(before, after, target):
     return (f"改{'、'.join(changed)} → {target}" if changed else target)
 
 
+def assumed(tp):
+    """规则集标了 measured: false 的属于推定值，报告里必须说明。
+
+    用户有权知道这个字号是期刊明文写的，还是我们照着别的刊推出来的。
+    """
+    return "，推定值（样本未实测）" if isinstance(tp, dict) and tp.get("measured") is False else ""
+
+
 def set_run(run, cn=None, latin=None, size=None, bold=None, letter_spacing=None):
     rpr = run._element.get_or_add_rPr()
     rf = rpr.find(qn("w:rFonts"))
@@ -378,14 +386,16 @@ def main():
                         align="center", line_pt=round(sz * 1.5), bold=False,
                         before_pt=round(sz * 0.2), after_pt=round(sz * 0.25),
                         letter_spacing=title_tp.get("letter_spacing_pt"))
-                audit.add(blk["idx"], t, "文章标题套版", note=f"{sz}pt，行距 {round(sz * 1.5)}pt",
+                audit.add(blk["idx"], t, "文章标题套版",
+                          note=f"{sz}pt，行距 {round(sz * 1.5)}pt" + assumed(title_tp),
                           rule="typography.title")
             elif fm_index == 2 and txt.startswith(("——", "—", "-")):
                 sz = sub_tp.get("size_pt", 16)
                 restyle(p, cn=sub_tp.get("font_cn", "黑体"), latin=latin, size=sz,
                         align="center", line_pt=round(sz * 1.5), bold=False,
                         after_pt=round(sz * 0.2))
-                audit.add(blk["idx"], t, "副标题套版", note=f"{sz}pt", rule="typography.subtitle~")
+                audit.add(blk["idx"], t, "副标题套版", note=f"{sz}pt" + assumed(sub_tp),
+                          rule="typography.subtitle~")
             else:
                 # 作者署名：期刊可单独定字体字号（如四号楷体），未定则随正文
                 au = rules["typography"].get("authors") or {}
@@ -411,6 +421,17 @@ def main():
         if isinstance(p, Table):
             continue
 
+        if t == "figure":
+            # 图片段落必须解除固定行距：固定 18 磅的段落会把 12cm 高的内嵌图裁成一条。
+            # 末尾的正文套版会给所有剩余块设固定行距，所以这里必须提前拦下、直接跳过。
+            clear_para_formatting(p)
+            p.alignment = ALIGN["center"]
+            p.paragraph_format.line_spacing = 1.0
+            audit.add(blk["idx"], t, "图片段解除固定行距",
+                      note="固定行距会裁切内嵌图片，改为单倍行距并居中",
+                      rule="figures")
+            continue
+
         if t == "references_heading":
             # 文献表标题的写法逐刊不同（「参考文献」/「参 考 文 献」/「﹝参考文献﹞」），
             # 必须按规则集改写；版式默认同一级标题，可用 typography.references_heading 覆盖
@@ -431,14 +452,6 @@ def main():
             restyle(p, cn=rh.get("font_cn", lv1.get("font_cn", cn)), latin=latin,
                     size=rh_size, align=rh.get("align", lv1.get("align", "center")),
                     line_pt=head_line_pt(lv1, rh_size, line_pt), bold=False)
-            continue
-
-            # 图片段落必须解除固定行距：固定 18 磅的段落会把 12cm 高的内嵌图裁成一条
-            clear_para_formatting(p)
-            p.alignment = ALIGN["center"]
-            p.paragraph_format.line_spacing = 1.0
-            audit.add(blk["idx"], t, "图片段解除固定行距",
-                      note="固定行距会裁切内嵌图片，改为单倍行距并居中")
             continue
         # 作者信息与缺失要件是用户补录后注入的块（apply_details 产出）。
         # 这里只把"语义块"映射到规则集里的样式键，字号字体一律查表，
@@ -680,6 +693,7 @@ def main():
     audit_path = out.with_suffix(".audit.json")
     audit_path.write_text(json.dumps({"source": ir["source"], "target": rules["journal"]["name_zh"],
                                       "items": audit.items,
+                                      "assumptions": rules.get("assumptions") or [],
                                       "rejected": sorted(rejects)},
                                      ensure_ascii=False, indent=2),
                           encoding="utf-8")
