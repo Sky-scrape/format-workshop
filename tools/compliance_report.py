@@ -159,12 +159,37 @@ def check(ir, rules):
 
     lim_abs = limits.get("abstract") or {}
     abstract_info = None
-    if lim_abs.get("value"):
+    abs_lo = lim_abs.get("min")
+    abs_hi = lim_abs.get("max") or lim_abs.get("value")
+    if abs_lo or abs_hi:
         abs_text = "".join(b.get("text", "") for b in ir["blocks"] if b["type"] == "abstract")
         actual = measure(abs_text, lim_abs.get("metric", "chars_cn"))
-        abstract_info = {"value": lim_abs["value"], "actual": actual,
-                         "over": actual - lim_abs["value"], "note": lim_abs.get("note", ""),
+        abstract_info = {"lo": abs_lo, "hi": abs_hi, "value": abs_hi, "actual": actual,
+                         "over": max(0, actual - abs_hi) if abs_hi else 0,
+                         "under": max(0, abs_lo - actual) if abs_lo else 0,
+                         "note": lim_abs.get("note", ""),
                          "strict": lim_abs.get("strict", False), "found": bool(abs_text)}
+
+    # 关键词条数：须知写的是「3–5 个」，多半是硬性要求，但增减关键词属于改内容，
+    # 只能报给作者，工具不替他删词也不替他补词
+    lim_kw = limits.get("keywords") or {}
+    keywords_info = None
+    if lim_kw.get("min") or lim_kw.get("max"):
+        kw_text = "".join(b.get("text", "") for b in ir["blocks"] if b["type"] == "keywords")
+        body = kw_text.split("：", 1)[-1] if "：" in kw_text else kw_text
+        count = len([x for x in re.split(r"[；;、,，\s\u3000]+", body) if x.strip()])
+        keywords_info = {"min": lim_kw.get("min"), "max": lim_kw.get("max"),
+                         "count": count, "found": bool(kw_text.strip())}
+
+    # 标题字数：少数刊有明文限制（如国际金融研究 20 字）
+    lim_title = limits.get("title_chars_max")
+    title_info = None
+    if lim_title:
+        title_text = next((b.get("text", "") for b in ir["blocks"]
+                           if b.get("type") == "front_matter"), "")
+        n_title = measure(title_text, "chars_cn")
+        title_info = {"max": lim_title, "actual": n_title,
+                      "over": max(0, n_title - lim_title), "found": bool(title_text)}
 
     style, nrefs = detect_citation_style(ir)
     want = rules["citation"]["system"]
@@ -205,6 +230,8 @@ def check(ir, rules):
         "sections": sections,
         "total_limit": total_info,
         "abstract_limit": abstract_info,
+        "keywords_limit": keywords_info,
+        "title_limit": title_info,
         "citation": {"actual": style, "want": want, "ok": cite_ok, "n": nrefs},
         "anonymous": anon,
         "tables": sum(1 for b in ir["blocks"] if b["type"] == "table"),
@@ -243,20 +270,55 @@ def render(ir, rules, res):
     tl, al = res.get("total_limit"), res.get("abstract_limit")
 
     def limit_cell(info, unit=""):
-        """把「实测值 / 上限」渲染成一格，并区分硬性超限与建议值超出。"""
+        """把「实测值 / 允许范围」渲染成一格，并区分硬性超限与建议值超出。
+
+        规则集里字数上限有两种写法：单向的 `value`，和 `min`/`max` 区间
+        （如统计研究「300–500 字为宜」）。两种都要能显示，否则写区间的刊
+        在报告里等于没有这条限制。
+        """
         if not info:
             return '<span class="muted">该刊未声明</span>'
-        over = info["over"]
-        if over > 0:
+        lo, hi = info.get("lo"), info.get("hi") or info.get("value")
+        actual = info["actual"]
+        target = f"{lo:,}–{hi:,}" if (lo and hi) else (f"{hi:,}" if hi else f"≥{lo:,}")
+        if hi and actual > hi:
             word = "超出" if info.get("strict") else "高于建议值"
             cls = "bad" if info.get("strict") else "warn"
-            tail = f'<span class="pill {cls}">{word} {over:,}{unit}</span>'
+            tail = f'<span class="pill {cls}">{word} {actual - hi:,}{unit}</span>'
+        elif lo and actual < lo:
+            tail = f'<span class="pill warn">低于下限 {lo - actual:,}{unit}</span>'
+        elif hi:
+            tail = f'<span class="pill good">余量 {hi - actual:,}{unit}</span>'
         else:
-            tail = f'<span class="pill good">余量 {-over:,}{unit}</span>'
-        return f'{info["actual"]:,} / {info["value"]:,}{unit} {tail}'
+            tail = '<span class="pill good">在范围内</span>'
+        return f'{actual:,} / {target}{unit} {tail}'
 
     metric_name = {"A": "字符数（不计空格）", "B": "中文字符 + 英文单词",
                    "C": "字符数（计空格）"}.get((tl or {}).get("metric"), "待确认")
+
+    kw = res.get("keywords_limit") or {}
+    if not kw:
+        kw_cell = '<span class="muted">该刊未声明关键词数量</span>'
+    elif not kw.get("found"):
+        kw_cell = '<span class="muted">稿件未检出关键词</span>'
+    else:
+        lo_kw, hi_kw = kw.get("min"), kw.get("max")
+        rng = (f"{lo_kw}–{hi_kw} 个" if lo_kw and hi_kw
+               else f"{hi_kw} 个以内" if hi_kw else f"不少于 {lo_kw} 个")
+        bad = (hi_kw and kw["count"] > hi_kw) or (lo_kw and kw["count"] < lo_kw)
+        kw_cell = (f'{kw["count"]} 个 / {rng} ' +
+                   ('<span class="pill warn">不在范围内</span>' if bad
+                    else '<span class="pill good">在范围内</span>'))
+
+    ti = res.get("title_limit") or {}
+    if not ti:
+        title_cell = '<span class="muted">该刊未声明标题字数</span>'
+    elif not ti.get("found"):
+        title_cell = '<span class="muted">未检出标题</span>'
+    else:
+        title_cell = (f'{ti["actual"]} / {ti["max"]} 字 ' +
+                      ('<span class="pill warn">超出</span>' if ti["over"]
+                       else '<span class="pill good">在范围内</span>'))
 
     manual = []
     anon = res.get("anonymous") or {}
@@ -278,6 +340,17 @@ def render(ir, rules, res):
     if al and al.get("found") and al["over"] > 0:
         manual.append(f"摘要 {al['actual']} 字，{'上限' if al.get('strict') else '建议值'} {al['value']} 字，"
                       f"超出 {al['over']} 字，需作者自行精简")
+    if al and al.get("found") and al.get("under"):
+        manual.append(f"摘要 {al['actual']} 字，低于该刊下限 {al['lo']} 字，需作者补充内容")
+    kw = res.get("keywords_limit") or {}
+    if kw.get("found"):
+        if kw.get("max") and kw["count"] > kw["max"]:
+            manual.append(f"关键词 {kw['count']} 个，超过该刊上限 {kw['max']} 个，删哪个由作者决定")
+        elif kw.get("min") and kw["count"] < kw["min"]:
+            manual.append(f"关键词 {kw['count']} 个，少于该刊下限 {kw['min']} 个，补什么由作者决定")
+    ti = res.get("title_limit") or {}
+    if ti.get("over"):
+        manual.append(f"标题 {ti['actual']} 字，超过该刊 {ti['max']} 字的上限，如何精简由作者决定")
 
     # ---- 判决句：作者只想知道"能不能投" ----
     n_missing = len(missing)
@@ -413,6 +486,8 @@ border:1px solid var(--line);color:var(--ink2)}}
 <tr><td class="k">本刊采用口径</td><td>{metric_name}{'（见规则集 limits.total.metric）' if tl else '（规则集未声明，待确认）'}</td></tr>
 <tr><td class="k">统计范围</td><td>{html.escape((tl or {}).get('scope') or '全部正文段落（不含表格内文字）')}</td></tr>
 <tr><td class="k">摘要</td><td>{limit_cell(al, ' 字') if al else '<span class="muted">该刊未声明摘要字数</span>'}</td></tr>
+<tr><td class="k">关键词</td><td>{kw_cell}</td></tr>
+<tr><td class="k">标题字数</td><td>{title_cell}</td></tr>
 </table>
 {f'''<h2 style="margin-top:22px">分节字数（定位用，不是修改建议）</h2><table>
 <thead><tr><th>章节</th><th>字数</th><th>占比</th><th>表</th></tr></thead>

@@ -34,7 +34,10 @@ MAX_HEADING_LEN = 40
 AI_UPGRADE_FROM = {"body", "front_matter"}
 
 PAT = {
-    "abstract": re.compile(r"^(内容摘要|摘\s*要)\s*[:：]"),
+    # 内容提要／提要 是「内容摘要／摘要」的常见变体（《经济研究》即用「内容提要」）。
+    # 这里必须与 render_from_ir 的标签归一正则保持一致，否则解析认不出、
+    # 渲染就进不了摘要分支：字号不套、字数不查、标签也不归一。
+    "abstract": re.compile(r"^(内容摘要|内容提要|摘\s*要|提\s*要)\s*[:：]"),
     "keywords": re.compile(r"^关\s*键\s*词\s*[:：]"),
     "classification": re.compile(r"^(中图分类号|JEL分类号|JEL|文献标识码)"),
     "ref_head": re.compile(r"^参\s*考\s*文\s*献\s*[:：]?$"),
