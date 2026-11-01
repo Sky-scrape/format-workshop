@@ -29,6 +29,9 @@ ALIGN = {
     "both": WD_ALIGN_PARAGRAPH.JUSTIFY,
 }
 
+# 规则集用中文描述题注编号与标题的间隔，这里映射成实际空格
+CAPTION_GAP = {"一字空": "  ", "半字空": " ", "两字空": "    ", "无间隔": ""}
+
 CN_SEQ = "一二三四五六七八九十"
 NUM_PREFIX = {
     1: re.compile(r"^[一二三四五六七八九十]{1,3}、\s*"),
@@ -68,10 +71,40 @@ class Audit:
     def blocked(self, idx, action):
         return f"{idx}|{action}" in self.rejects
 
-    def add(self, idx, btype, action, before="", after="", note="", rejected=False):
+    def add(self, idx, btype, action, before="", after="", note="", rejected=False, rule=""):
+        """rule 是本条改动的依据，指向规则集里的具体字段（见 rules_ref.py）。
+
+        结尾带 `~` 表示该键在部分规则集里可缺省，缺省时按代码内约定取值。
+        """
         self.items.append({"id": f"{idx}|{action}", "idx": idx, "sec": self.sec, "block": btype,
                            "action": action, "before": before, "after": after, "note": note,
-                           "rejected": bool(rejected)})
+                           "rule": rule, "rejected": bool(rejected)})
+
+
+def fmt_snapshot(p):
+    """取段落当前的字体、字号与行距，用于判断这次套版到底改没改东西。"""
+    sizes, cns, latins = set(), set(), set()
+    for r in p.runs:
+        if r.font.size is not None:
+            sizes.add(round(r.font.size.pt, 2))
+        rpr = r._element.rPr
+        if rpr is not None:
+            rf = rpr.find(qn("w:rFonts"))
+            if rf is not None:
+                if rf.get(qn("w:eastAsia")):
+                    cns.add(rf.get(qn("w:eastAsia")))
+                if rf.get(qn("w:ascii")):
+                    latins.add(rf.get(qn("w:ascii")))
+    ls = p.paragraph_format.line_spacing
+    line = round(ls.pt, 2) if hasattr(ls, "pt") else (ls if isinstance(ls, (int, float)) else None)
+    return {"sizes": sizes, "cn": cns, "latin": latins, "line": line}
+
+
+def fmt_delta(before, after, target):
+    """把「改了什么」写成一句话。没变化就只报目标值。"""
+    names = {("sizes", "字号"), ("cn", "中文字体"), ("latin", "西文字体"), ("line", "行距")}
+    changed = [label for key, label in sorted(names) if before[key] != after[key]]
+    return (f"改{'、'.join(changed)} → {target}" if changed else target)
 
 
 def set_run(run, cn=None, latin=None, size=None, bold=None, letter_spacing=None):
@@ -249,7 +282,8 @@ def reorder_notes(elems, ir, rules, audit):
             audit.add(b["idx"], b["type"], "表注／图注层序调整",
                       " / ".join(kind_of(n["text"]) for n in notes),
                       " / ".join(kind_of(n["text"]) for n in notes),
-                      "已驳回：保持原层序", rejected=True)
+                      "已驳回：保持原层序", rejected=True,
+                      rule=f"{b['type']}s.note_layers")
             continue
         if b["type"] == "table":
             anchor = elems[b["idx"]]._tbl
@@ -266,7 +300,8 @@ def reorder_notes(elems, ir, rules, audit):
             cur = el
         audit.add(b["idx"], b["type"], "表注／图注层序调整",
                   " / ".join(kind_of(n["text"]) for n in notes),
-                  " / ".join(kind_of(n["text"]) for n in ordered))
+                  " / ".join(kind_of(n["text"]) for n in ordered),
+                  rule=f"{b['type']}s.note_layers")
 
 
 def main():
@@ -310,7 +345,8 @@ def main():
     mg_txt = "，".join(f"{cn}{mg[side]:g}" for side, cn in
                        (("top", "上"), ("bottom", "下"), ("left", "左"), ("right", "右")))
     audit.add(-1, "page", "页面设置",
-              note=f"纸张 {rules['page']['size']}，页边距 {mg_txt} mm")
+              note=f"纸张 {rules['page']['size']}，页边距 {mg_txt} mm",
+              rule="page.margin_mm")
 
     # 建立 idx → 元素映射
     elems = {}
@@ -342,13 +378,14 @@ def main():
                         align="center", line_pt=round(sz * 1.5), bold=False,
                         before_pt=round(sz * 0.2), after_pt=round(sz * 0.25),
                         letter_spacing=title_tp.get("letter_spacing_pt"))
-                audit.add(blk["idx"], t, "文章标题套版", note=f"{sz}pt，行距 {round(sz * 1.5)}pt")
+                audit.add(blk["idx"], t, "文章标题套版", note=f"{sz}pt，行距 {round(sz * 1.5)}pt",
+                          rule="typography.title")
             elif fm_index == 2 and txt.startswith(("——", "—", "-")):
                 sz = sub_tp.get("size_pt", 16)
                 restyle(p, cn=sub_tp.get("font_cn", "黑体"), latin=latin, size=sz,
                         align="center", line_pt=round(sz * 1.5), bold=False,
                         after_pt=round(sz * 0.2))
-                audit.add(blk["idx"], t, "副标题套版", note=f"{sz}pt")
+                audit.add(blk["idx"], t, "副标题套版", note=f"{sz}pt", rule="typography.subtitle~")
             else:
                 # 作者署名：期刊可单独定字体字号（如四号楷体），未定则随正文
                 au = rules["typography"].get("authors") or {}
@@ -358,14 +395,17 @@ def main():
                         line_pt=max(line_pt, round(asz * 1.5)), bold=False,
                         before_pt=round(asz * 0.15), after_pt=round(asz * 0.9))
                 audit.add(blk["idx"], t, "作者署名套版",
-                          note=f"{au.get('font_cn', cn)} {asz}pt 居中")
+                          note=f"{au.get('font_cn', cn)} {asz}pt 居中",
+                          # 该刊没单列 authors 样式时随正文，依据就是正文样式
+                          rule="typography.authors" if au else "typography.body")
             continue
 
         if t == "table":
             table_no += 1
             apply_table(p, rules["tables"]["border_pt"], rules["tables"].get("font_size_pt", 9), cn, latin)
             audit.add(blk["idx"], t, "表格重设为三线表",
-                      note=f"清除原有 {len(blk.get('borders') or {})} 处单元格级边框后重设")
+                      note=f"清除原有 {len(blk.get('borders') or {})} 处单元格级边框后重设",
+                      rule="tables.border_pt")
             continue
 
         if isinstance(p, Table):
@@ -380,10 +420,12 @@ def main():
             if want and old.strip() != want:
                 if audit.blocked(blk["idx"], "文献表标题归一"):
                     audit.add(blk["idx"], t, "文献表标题归一", old, old,
-                              "已驳回：保留原写法", rejected=True)
+                              "已驳回：保留原写法", rejected=True,
+                              rule="blocks:references/label")
                 else:
                     replace_text(p, want)
-                    audit.add(blk["idx"], t, "文献表标题归一", old, want, "仅改标题写法，条目未动")
+                    audit.add(blk["idx"], t, "文献表标题归一", old, want, "仅改标题写法，条目未动",
+                              rule="blocks:references/label")
             rh = rules["typography"].get("references_heading") or {}
             rh_size = rh.get("size_pt", lv1.get("size_pt") or size)
             restyle(p, cn=rh.get("font_cn", lv1.get("font_cn", cn)), latin=latin,
@@ -478,10 +520,12 @@ def main():
             if new != old:
                 if audit.blocked(blk["idx"], "标题重新编号"):
                     audit.add(blk["idx"], t, "标题重新编号", old, new,
-                              "已驳回：保留原编号", rejected=True)
+                              "已驳回：保留原编号", rejected=True,
+                              rule="headings.numbering")
                 else:
                     replace_text(p, new)
-                    audit.add(blk["idx"], t, "标题重新编号", old, new, "仅改编号前缀，标题文字未动")
+                    audit.add(blk["idx"], t, "标题重新编号", old, new, "仅改编号前缀，标题文字未动",
+                              rule="headings.numbering")
             if level == 1:
                 audit.sec = core  # 后续改动都归到这个一级标题下，审计里才能定位
             restyle(p, cn=lv1["font_cn"] if level == 1 else cn,
@@ -511,10 +555,12 @@ def main():
                     new = want + old[m.end():]
                     if audit.blocked(blk["idx"], "标签归一"):
                         audit.add(blk["idx"], t, "标签归一", old, new,
-                                  "已驳回：保留原标签", rejected=True)
+                                  "已驳回：保留原标签", rejected=True,
+                                  rule=f"blocks:{t}/zh/label")
                     else:
                         replace_text(p, new)
-                        audit.add(blk["idx"], t, "标签归一", old, new, "仅改标签前缀，正文文字未动")
+                        audit.add(blk["idx"], t, "标签归一", old, new, "仅改标签前缀，正文文字未动",
+                                  rule=f"blocks:{t}/zh/label")
             # 关键词分隔符归一：各刊要求「；」「，」或空格，稿件里常是混的
             sep = next((b.get("separator") for b in rules["blocks"]
                         if b["type"] == "keywords" and b.get("lang") == "zh"), None)
@@ -525,11 +571,13 @@ def main():
                 if new_kw != before_kw and len(items) >= 2:
                     if audit.blocked(blk["idx"], "关键词分隔符归一"):
                         audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, new_kw,
-                                  "已驳回：保留原分隔符", rejected=True)
+                                  "已驳回：保留原分隔符", rejected=True,
+                                  rule="blocks:keywords/zh/separator")
                     else:
                         replace_text(p, new_kw)
                         audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, new_kw,
-                                  f"改为「{sep}」，关键词数量与文字未动")
+                                  f"改为「{sep}」，关键词数量与文字未动",
+                                  rule="blocks:keywords/zh/separator")
             # 摘要与关键词常各自定字体（统计研究：提要宋体、关键词黑体），必须分别取
             key = ("abstract_en" if t == "abstract" else "keywords_en") if blk.get("lang") == "en" \
                 else ("abstract" if t == "abstract" else "keywords")
@@ -572,7 +620,8 @@ def main():
                 p.paragraph_format.line_spacing = 1.0
             if hang:
                 set_hanging(p, hang)
-                audit.add(blk["idx"], t, "参考文献悬挂缩进", after=f"{hang} 字符")
+                audit.add(blk["idx"], t, "参考文献悬挂缩进", after=f"{hang} 字符",
+                          rule="citation.reference_list.hanging_indent_chars")
             elif rl.get("indent_chars"):
                 # 部分期刊要求首行缩进而非悬挂缩进
                 set_chars_indent(p, rl["indent_chars"])
@@ -582,18 +631,26 @@ def main():
             figure_no += t == "figure_caption"
             size_cap = rules["tables"].get("caption_size_pt", size)
             font_cap = rules["tables"].get("caption_font_cn", "黑体")
-            # 稿件里的表题常用制表符把「表1」和标题撑开，需按目标刊的「一字空」归一
+            # 「表1」与标题之间的间隔由规则集给出（一字空/半字空…），不再写死两空格
+            gap_kind = (rules["tables"].get("caption_gap")
+                        or (rules.get("figures") or {}).get("caption_gap") or "一字空")
+            pad = CAPTION_GAP.get(gap_kind, "  ")
+            gap_rule = ("tables.caption_gap" if "caption_gap" in rules["tables"]
+                        else "figures.caption_gap" if "caption_gap" in (rules.get("figures") or {})
+                        else "tables.caption_gap~")
+            # 稿件里的表题常用制表符把「表1」和标题撑开，需按目标刊体例归一
             m = re.match(r"^(表|图)\s*(\d+)\s*(.*)$", p.text.strip())
             if m:
                 old_cap = p.text
-                new_cap = f"{m.group(1)}{m.group(2)}  {m.group(3)}".rstrip()
+                new_cap = f"{m.group(1)}{m.group(2)}{pad}{m.group(3)}".rstrip()
                 if new_cap != old_cap:
                     if audit.blocked(blk["idx"], "题注归一"):
                         audit.add(blk["idx"], t, "题注归一", old_cap, new_cap,
-                                  "已驳回：保留原题注", rejected=True)
+                                  "已驳回：保留原题注", rejected=True, rule=gap_rule)
                     else:
                         replace_text(p, new_cap)
-                        audit.add(blk["idx"], t, "题注归一", old_cap, new_cap, "制表符改为两空格")
+                        audit.add(blk["idx"], t, "题注归一", old_cap, new_cap,
+                                  f"编号与标题间隔改为「{gap_kind}」，题注文字未动", rule=gap_rule)
             restyle(p, cn=font_cap, latin=latin, size=size_cap, align="center",
                     line_pt=line_pt, bold=False)
             continue
@@ -604,8 +661,17 @@ def main():
             restyle(p, cn=cn, latin=latin, size=note_sz, align="left", line_pt=line_pt)
             continue
 
-        # 正文、公式、伪表格、英文区等一律按正文字体处理
+        # 正文、公式、伪表格、英文区等一律按正文字体处理。
+        # 套版本身属 A 档（不动文字），但仍是「改动」，必须进报告——
+        # 否则报告只记标签、编号这些小事，最显眼的正文重排反倒没有记录。
+        before_fmt = fmt_snapshot(p)
         restyle(p, cn=cn, latin=latin, size=size, align="both", line_pt=line_pt, indent=indent)
+        after_fmt = fmt_snapshot(p)
+        if before_fmt != after_fmt:
+            audit.add(blk["idx"], t, "正文套版",
+                      note=fmt_delta(before_fmt, after_fmt,
+                                     f"{cn} {size:g}pt，行距 {line_pt:g}pt"),
+                      rule="typography.body")
 
     out = Path(a.out)
     reorder_notes(elems, ir, rules, audit)

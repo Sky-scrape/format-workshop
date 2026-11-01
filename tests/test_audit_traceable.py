@@ -8,7 +8,10 @@ import json
 
 import pytest
 
-from conftest import RULES, TARGET_JOURNAL
+from conftest import RULES, TARGET_JOURNAL, render_into, run_sizes
+from rules_ref import resolvable
+
+SHIPPED_JOURNALS = ["cjyj", "tjyj", "gjjryj"]
 
 
 def test_audit_is_always_produced(baseline):
@@ -48,12 +51,58 @@ def test_audit_records_source_and_target(baseline):
     assert baseline.audit.get("target") == rules["journal"]["name_zh"]
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "DESIGN §6/§8 要求每条 B 档改动带「规则 ID」（如 N-03）并可回溯到规则集。"
-    "当前审计项只有中文 action（如「标签归一」），没有机器可读的规则 ID。"
-    "这条差距由本用例记录，修好后会自动转为 XPASS。"))
 def test_b_tier_items_carry_a_rule_id(baseline):
-    """B 档改动要能回溯到规则集里的具体条目，而不只是一个中文动作名。"""
-    missing = [it["id"] for it in baseline.text_editing_items
-               if not (it.get("rule") or it.get("rule_id"))]
-    assert not missing, f"这些改动没有规则 ID：{missing[:5]}"
+    """B 档改动（改文字的）必须带规则集引用，不能只有一个中文动作名。"""
+    missing = [it["id"] for it in baseline.text_editing_items if not it.get("rule")]
+    assert not missing, f"这些改动没有规则引用：{missing[:5]}"
+
+
+def test_every_rule_reference_resolves(baseline):
+    """审计里的引用必须真能落到规则集的一个值上。
+
+    写个好看的名字不算回溯；`rules_ref.resolve` 指不到就抛 KeyError。
+    带 `~` 的引用表示该键在部分期刊可缺省，此时只要求其父路径存在。
+    """
+    rules = json.loads((RULES / f"{TARGET_JOURNAL}.json").read_text(encoding="utf-8"))
+    broken = [(it["action"], it["rule"]) for it in baseline.items
+              if it["rule"] and not resolvable(rules, it["rule"])]
+    assert not broken, f"这些引用在规则集里指不到实处：{broken[:5]}"
+
+
+@pytest.mark.parametrize("target", SHIPPED_JOURNALS)
+def test_rule_refs_resolve_across_shipped_journals(sample_docx, tmp_path, target):
+    """换几本刊跑，所有引用都要能落到各自的规则集里。
+
+    单刊通过不代表全通过——不同规则集的键不一样，缺哪个键只有跑到了才知道。
+    """
+    p = render_into(tmp_path / target, sample_docx, target=target)
+    rules = json.loads((RULES / f"{target}.json").read_text(encoding="utf-8"))
+
+    broken = [(it["action"], it["rule"]) for it in p.items
+              if it["rule"] and not resolvable(rules, it["rule"])]
+    assert not broken, f"{target} 有不落地的引用：{broken[:5]}"
+
+
+def test_body_restyling_is_audited(baseline):
+    """正文字号变了，就必须有「正文套版」条目。
+
+    这是原先的空白：标签、编号这些小事都记了，最显眼的正文重排反倒一条没有。
+    """
+    src = run_sizes(baseline.dir / "manuscript.docx")
+    out = run_sizes(baseline.docx)
+    body = {i for i, t in baseline.block_type.items() if t == "body"}
+    changed = {i for i in body if src.get(i) != out.get(i)}
+    assert changed, "正文没有发生变化，这条用例失去意义——检查夹具选刊"
+
+    audited = {it["idx"] for it in baseline.items if it["action"] == "正文套版"}
+    missing = sorted(changed - audited)
+    assert not missing, f"这些正文段落改了字号却没有审计记录：{missing[:5]}"
+
+
+def test_body_restyling_records_what_changed(baseline):
+    """正文套版的说明要写清改成什么，否则用户没法核对。"""
+    items = [it for it in baseline.items if it["action"] == "正文套版"]
+    assert items, "没有任何正文套版条目"
+    for it in items:
+        assert "pt" in it["note"], f"条目没说清目标字号：{it['note']}"
+        assert it["before"] == "" and it["after"] == "", "正文套版不该携带文字快照"

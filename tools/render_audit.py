@@ -82,7 +82,8 @@ def render(d, job=None):
         f'{"<span class=tag>已驳回</span>" if it.get("rejected") else ""}</td>'
         f'<td class="diff"><span class="old">{clip(it["before"])}</span>'
         f'<span class="arrow">→</span><span class="new">{clip(it["after"])}</span></td>'
-        f'<td class="note">{html.escape(it.get("note", ""))}</td>'
+        f'<td class="note">{html.escape(it.get("note", ""))}'
+        f'{"<code class=ref>" + html.escape(it["rule"]) + "</code>" if it.get("rule") else ""}</td>'
         f'{reject_cell(it)}</tr>'
         for it in text_items
     ) or f'<tr><td colspan="{col}" class="empty">本次没有触及任何字符的改动</td></tr>'
@@ -92,7 +93,8 @@ def render(d, job=None):
         grade = rows[0]["grade"]
         inner = "".join(
             f'<div class="grow"><span class="gpos">{it["idx"] if it["idx"] >= 0 else "页面"}</span>'
-            f'<span class="gnote">{html.escape(it.get("note") or it.get("after") or "—")}</span></div>'
+            f'<span class="gnote">{html.escape(it.get("note") or it.get("after") or "—")}</span>'
+            f'{"<code class=gref>" + html.escape(it["rule"]) + "</code>" if it.get("rule") else ""}</div>'
             for it in rows)
         group_html.append(
             f'<details class="group"{" open" if len(rows) <= 6 else ""}>'
@@ -138,6 +140,8 @@ text-overflow:ellipsis;white-space:nowrap;margin-top:1px}}
 .new{{color:var(--accent)}}
 .arrow{{color:var(--ink3);margin:0 7px}}
 .note{{color:var(--ink2);font-size:12.5px;line-height:1.75}}
+.ref{{display:block;margin-top:4px;font-size:11px;color:var(--ink3);letter-spacing:.2px}}
+.gref{{margin-left:9px;font-size:10.5px;color:var(--ink3)}}
 .empty{{color:var(--ink3);font-size:13px;padding:6px 0}}
 .badge{{display:inline-block;font-size:11px;font-weight:500;padding:2px 8px;
 border-radius:6px;margin-right:9px}}
