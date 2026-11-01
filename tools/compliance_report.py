@@ -41,6 +41,29 @@ LABEL = {
 # 这些不是作者能补的（由编辑部编号或按刊物体例给定），不当成待办派给作者
 NON_ACTIONABLE = {"article_number", "document_code"}
 
+# ---- 必备声明（规则集 statements）----
+# 23 本刊都声明了这一项，但报告里从来没有出现过。作者不会知道
+# 「这本刊要 AI 使用声明」「那本刊投稿即视为签版权转让」。
+STATEMENT_LABELS = {
+    "copyright_transfer": "版权转让协议",
+    "conflict_of_interest": "利益冲突声明",
+    "data_availability": "数据可得性声明",
+    "ai_declaration": "AI 使用声明",
+    "originality": "原创性声明",
+    "confidentiality": "保密审查",
+}
+
+# 只用来判断"稿件里提到过没有"。命中不代表格式合规，未命中也不代表一定缺失——
+# 有些声明是投稿系统里单独勾选的，不在正文里。
+STATEMENT_PATTERNS = {
+    "copyright_transfer": r"版权|著作权|转让协议",
+    "conflict_of_interest": r"利益冲突|作者声明|无利益",
+    "data_availability": r"数据可得|数据可用|数据获取|数据和代码|数据与代码",
+    "ai_declaration": r"AI\s*使用|人工智能使用|生成式|ChatGPT|大模型|AI\s*辅助",
+    "originality": r"原创|未曾发表|未公开发表|一稿多投",
+    "confidentiality": r"保密审查|涉密",
+}
+
 # 前置区在 IR 里统一是 front_matter，没有细分角色；
 # 这里用机构名特征把"作者行"和"单位行"区分开，避免把署名判成缺失。
 ORG = re.compile(r"(大学|学院|研究院|研究所|学校|中心|实验室|集团|公司|银行|医院|系|研究所)")
@@ -203,6 +226,23 @@ def check(ir, rules):
                       if t.strip() and not t.strip().startswith(("——", "—", "-"))]
     anon = {"required": anon_req, "lines": identity_lines[:3], "count": len(identity_lines)}
 
+    # 必备声明：规则集 statements 逐条列出。只判断"稿件里提到过没有"，
+    # 不判断是否合规——版权转让这类常在投稿系统里单独勾选，正文本来就不会有。
+    st_conf = rules.get("statements") or {}
+    all_text = "\n".join(b.get("text") or "" for b in ir["blocks"])
+    statements = []
+    for key, conf in st_conf.items():
+        conf = conf if isinstance(conf, dict) else {}
+        pat = STATEMENT_PATTERNS.get(key)
+        statements.append({
+            "key": key,
+            "label": STATEMENT_LABELS.get(key, key),
+            "required": bool(conf.get("required")),
+            "note": conf.get("note", ""),
+            "found": bool(pat and re.search(pat, all_text)),
+        })
+    statements.sort(key=lambda s: (not s["required"], s["label"]))
+
     # 分节字数：帮作者定位"哪一节最占篇幅"，属定位信息，不是改写建议
     sections = []
     cur = None
@@ -234,6 +274,7 @@ def check(ir, rules):
         "title_limit": title_info,
         "citation": {"actual": style, "want": want, "ok": cite_ok, "n": nrefs},
         "anonymous": anon,
+        "statements": statements,
         "tables": sum(1 for b in ir["blocks"] if b["type"] == "table"),
         "figures": sum(1 for b in ir["blocks"] if b["type"] == "figure"),
         "equations_text": sum(1 for b in ir["blocks"]
@@ -351,6 +392,28 @@ def render(ir, rules, res):
     ti = res.get("title_limit") or {}
     if ti.get("over"):
         manual.append(f"标题 {ti['actual']} 字，超过该刊 {ti['max']} 字的上限，如何精简由作者决定")
+
+    st_rows = res.get("statements") or []
+    for s in st_rows:
+        if s["required"] and not s["found"]:
+            manual.append(f"该刊要求{s['label']}，稿件中未检出相关文字——"
+                          f"若该声明由投稿系统单独收集，可忽略此条")
+    st_html = ""
+    if st_rows:
+        st_html = (
+            '<section><h2>该刊要求的声明</h2><table>'
+            '<tr><td class="k">声明</td><td class="k">要求</td>'
+            '<td class="k">稿件中</td><td class="k">说明</td></tr>'
+            + "".join(
+                f'<tr><td class="k">{html.escape(s["label"])}</td>'
+                f'<td>{"必填" if s["required"] else "可选"}</td>'
+                f'<td>{"已提到" if s["found"] else "<span class=muted>未检出</span>"}</td>'
+                f'<td>{html.escape(s["note"] or "—")}</td></tr>'
+                for s in st_rows)
+            + '</table><p class="meta">「未检出」只表示正文里没有相关文字，'
+              '不代表一定缺失——版权转让、伦理审查这类声明常由投稿系统单独收集，'
+              '正文里本来就不会出现。</p></section>'
+        )
 
     # ---- 判决句：作者只想知道"能不能投" ----
     n_missing = len(missing)
@@ -501,6 +564,8 @@ border:1px solid var(--line);color:var(--ink2)}}
 <tr><td class="k">结论</td><td>{html.escape(cite_text)}
 <span class="tag {'good' if c['ok'] else 'bad'}">{'无需处理' if c['ok'] else '需重排'}</span></td></tr>
 </table></section>
+
+{st_html}
 
 <section><h2>图表</h2><table>
 <tr><td class="k">表格</td><td>{res['tables']} 个（含伪表格形式的公式 {res['equations_text']} 处已剔除）</td></tr>
