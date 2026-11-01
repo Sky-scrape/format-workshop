@@ -1,5 +1,8 @@
 # 格式工坊 · Paper Format Workshop
 
+[![tests](https://github.com/Sky-scrape/format-workshop/actions/workflows/tests.yml/badge.svg)](https://github.com/Sky-scrape/format-workshop/actions/workflows/tests.yml)
+[![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-1D9E75.svg)](LICENSE)
+
 > 把一篇已成稿的经管论文（中英文皆可），**无损重排**到目标期刊的格式要求上，并出具**可审计**的合规报告。
 
 一个跑在本机的工具。上传 `.docx`，选一本期刊，拿到三样东西：格式正确的成品、一份逐条可核的审计报告、一份带修订标记的对照版。
@@ -172,9 +175,32 @@ rules/
 config/
   ai.example.json         AI 配置模板
 docs/screenshots/         README 截图（由合成测试稿生成，不含真实论文）
+tests/                    四条承诺的自动化验证（见「测试」一节）
 ```
 
-`tests/` 还没有——这是当前最该补的东西，见「参与贡献」。
+---
+
+## 测试
+
+四条对外承诺，每条都有对应的用例守着——因为它们全都是**坏了也看不出来**的性质：
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+| 文件 | 守的承诺 |
+|---|---|
+| `test_text_fingerprint.py` | 正文字词零改动：抹掉白名单归一后，改前改后逐字相同 |
+| `test_audit_traceable.py` | 每处文字改动都有审计条目，且 before/after 与文件一致 |
+| `test_idempotent.py` | 同一输入两次渲染结果相同；驳回一条只回退那一条 |
+| `test_ruleset_is_source.py` | 渲染器里没有硬编码格式值；改规则集，成品跟着变 |
+
+测试用的是**合成稿**：由 `tools/render_sample.py` 从规则集渲染，正文是核验文本。不依赖任何真实论文，因此可以在 CI 里跑，也可以公开。
+
+线上状态：[![tests](https://github.com/Sky-scrape/format-workshop/actions/workflows/tests.yml/badge.svg)](https://github.com/Sky-scrape/format-workshop/actions/workflows/tests.yml)
+
+一处已知差距用 `xfail` 记着：DESIGN §6 要求每条 B 档改动带机器可读的**规则 ID**（如 `N-03`）并可回溯到规则集，当前审计项只有中文 `action`（如「标签归一」）。这条用例现在是黄的，修好后会自动转绿。
 
 ---
 

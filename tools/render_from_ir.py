@@ -523,9 +523,13 @@ def main():
                 items = [x for x in re.split(r"[\s,，;；、]+", before_kw[len(want):]) if x]
                 new_kw = want + sep.join(items)
                 if new_kw != before_kw and len(items) >= 2:
-                    replace_text(p, new_kw)
-                    audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, new_kw,
-                              f"改为「{sep}」，关键词数量与文字未动")
+                    if audit.blocked(blk["idx"], "关键词分隔符归一"):
+                        audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, new_kw,
+                                  "已驳回：保留原分隔符", rejected=True)
+                    else:
+                        replace_text(p, new_kw)
+                        audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, new_kw,
+                                  f"改为「{sep}」，关键词数量与文字未动")
             # 摘要与关键词常各自定字体（统计研究：提要宋体、关键词黑体），必须分别取
             key = ("abstract_en" if t == "abstract" else "keywords_en") if blk.get("lang") == "en" \
                 else ("abstract" if t == "abstract" else "keywords")
