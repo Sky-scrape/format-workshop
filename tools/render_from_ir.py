@@ -316,6 +316,65 @@ def style_footnotes(doc, rules):
     return changed, desc
 
 
+def replace_prefix(p, old_len, new_prefix):
+    """只改段落开头的若干字符，其余文字与格式原样保留。
+
+    参考文献条目常带斜体刊名，整段重写会把这些格式一起抹平，所以这里
+    逐个 w:t 节点扣减，不重建段落。
+    """
+    remaining = old_len
+    for r in p.runs:
+        for t in r._r.findall(qn("w:t")):
+            txt = t.text or ""
+            if remaining <= 0:
+                return
+            take = min(remaining, len(txt))
+            if take == len(txt) and remaining - take > 0:
+                t.text = ""
+            elif take > 0 and remaining == old_len:
+                t.text = new_prefix + txt[take:]
+            else:
+                t.text = txt[take:]
+            remaining -= take
+
+
+REF_NUM = re.compile(
+    r"^(?P<open>[\[［〔【(（])?\s*(?P<num>\d{1,3})\s*(?P<close>[\]］〕】)）])?(?P<tail>[.．、]?)")
+
+
+def ref_number_prefix(text):
+    """识别参考文献条目开头的编号前缀，返回 (原文前缀, 序号) 或 (None, None)。
+
+    只认真正像编号的开头：带括号，或数字后跟句点/顿号/空白。否则
+    「2016 年……」这种以年份开头的条目会被当成 201 号文献。
+    """
+    m = REF_NUM.match(text)
+    if not m or not m.group("num"):
+        return None, None
+    bracketed = bool(m.group("open") and m.group("close"))
+    tail = m.group("tail")
+    after = text[m.end():m.end() + 1]
+    if not (bracketed or tail or after.isspace()):
+        return None, None
+    return m.group(0), int(m.group("num"))
+
+
+def format_ref_number(fmt, num, space_after=None):
+    """按模板把序号渲染成目标刊的编号写法，如 [1] / 〔1〕 / 1．"""
+    if not fmt:
+        return None
+    open_ = close = tail = ""
+    m = re.search(r"([\[［〔【(（])\s*1\s*([\]］〕】)）])", fmt)
+    if m:
+        open_, close = m.group(1), m.group(2)
+    elif fmt.strip() in ("1．", "1.", "1、"):
+        tail = fmt.strip()[1:]
+    out = f"{open_}{num}{close}{tail}"
+    if space_after:
+        out += " "
+    return out
+
+
 def apply_table(table, bp, size_pt, cn, latin):
     tbl = table._tbl
     tblPr = tbl.tblPr
@@ -733,6 +792,25 @@ def main():
         if t in ("reference_item",):
             rl = rules["citation"].get("reference_list", {})
             hang = rl.get("hanging_indent_chars")
+
+            # 编号前缀按目标刊改写法（[1] / 〔1〕 / 1．）。只动前缀——条目正文里的
+            # 作者、年份、标点一律不动，那属于改写内容，不归这个产品管。
+            old_prefix, num = ref_number_prefix(p.text)
+            if old_prefix is not None:
+                new_prefix = format_ref_number(rl.get("number_format"), num,
+                                               rl.get("space_after_number"))
+                if new_prefix and new_prefix != old_prefix:
+                    before_txt = p.text
+                    if audit.blocked(blk["idx"], "文献条目编号归一"):
+                        audit.add(blk["idx"], t, "文献条目编号归一", before_txt, before_txt,
+                                  "已驳回：保留原编号写法", rejected=True,
+                                  rule="citation.reference_list.number_format")
+                    else:
+                        replace_prefix(p, len(old_prefix), new_prefix)
+                        audit.add(blk["idx"], t, "文献条目编号归一", before_txt, p.text,
+                                  f"编号写法改为 {new_prefix.strip()}，条目内容未动",
+                                  rule="citation.reference_list.number_format")
+
             ref_tp = rules["typography"].get("references") or {}
             r_size = ref_tp.get("size_pt", size)
             # 参考文献行距逐刊不同（经济研究 14.2、统计研究 12.3），不能沿用正文行距

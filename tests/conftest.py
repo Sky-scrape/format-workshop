@@ -101,17 +101,23 @@ def signature(text, btype):
 
     关键词单独处理：分隔符从全角空格换成「；」属于白名单内的归一
     （`关键词分隔符归一`），所以拆成词条再比，而不是整串比。
+
+    参考文献条目剥掉编号前缀：`[1]`→`〔1]` 这类改写法属 N-07 白名单，
+    但条目正文必须逐字不变，所以只比前缀之后的部分。
     """
     body = content_of(text, btype)
     if btype == "keywords":
         terms = [t for t in re.split(r"[；;、,，\s\u3000]+", body) if t.strip()]
         return tuple(normalize(t) for t in terms)
+    if btype == "reference_item":
+        body = re.sub(r"^\s*[\[［〔【(（]?\s*\d{1,3}\s*[\]］〕】)）]?\s*[.．、]?\s*", "", body)
     return (normalize(body),)
 
 
 # 会真正改写文字的动作。只有这些条目的 before/after 是文字快照，
 # 其余（页面设置、套版、悬挂缩进）存的是格式值。
-TEXT_ACTIONS = {"标签归一", "关键词分隔符归一", "题注归一", "文献表标题归一", "标题重新编号"}
+TEXT_ACTIONS = {"标签归一", "关键词分隔符归一", "题注归一", "文献表标题归一",
+                "标题重新编号", "文献条目编号归一"}
 
 
 @pytest.fixture(scope="session")
