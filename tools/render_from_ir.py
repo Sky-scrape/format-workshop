@@ -20,6 +20,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt
 from docx.table import Table
+from lxml import etree
 from docx.text.paragraph import Paragraph
 
 ALIGN = {
@@ -226,6 +227,93 @@ def replace_text(p, new_text):
     for node in nodes[1:]:
         node.text = ""
     return None
+
+
+def set_run_xml(r, cn=None, latin=None, size=None):
+    """在原始 XML 层给一个 w:r 套字体字号。
+
+    脚注部件不在 python-docx 的对象模型里，拿不到 Run 对象，只能直接改元素。
+    """
+    rpr = r.find(qn("w:rPr"))
+    if rpr is None:
+        rpr = OxmlElement("w:rPr")
+        r.insert(0, rpr)
+    rf = rpr.find(qn("w:rFonts"))
+    if rf is None:
+        rf = OxmlElement("w:rFonts")
+        rpr.insert(0, rf)
+    if cn:
+        rf.set(qn("w:eastAsia"), cn)
+    if latin:
+        rf.set(qn("w:ascii"), latin)
+        rf.set(qn("w:hAnsi"), latin)
+    if size:
+        for tag in ("w:sz", "w:szCs"):
+            el = rpr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                rpr.append(el)
+            el.set(qn("w:val"), str(int(round(size * 2))))
+
+
+def run_style(r):
+    """读一个 w:r 当前的中文/西文字体与字号（半磅），用于判断是否真的需要改。"""
+    rpr = r.find(qn("w:rPr"))
+    if rpr is None:
+        return (None, None, None)
+    rf = rpr.find(qn("w:rFonts"))
+    sz = rpr.find(qn("w:sz"))
+    return (rf.get(qn("w:eastAsia")) if rf is not None else None,
+            rf.get(qn("w:ascii")) if rf is not None else None,
+            int(sz.get(qn("w:val"))) if sz is not None and sz.get(qn("w:val")) else None)
+
+
+def style_footnotes(doc, rules):
+    """按规则集给脚注正文套字体字号，返回 (实际改动的条数, 目标描述)。
+
+    期刊对脚注字号要求差异很大（这本 7.5pt、那本 9pt），而脚注部件独立于正文，
+    正文套版碰不到它。不处理的话，成品正文合规、脚注字号还是稿件原来的——
+    编辑一眼就看出来，报告却写着"已按规则集处理"。
+
+    只统计**真的变了**的脚注：本来就合规的不进报告，否则"改为 7.5pt"这种话
+    会出现在什么都没变的稿子上。
+    """
+    tp = (rules.get("typography") or {}).get("footnote") or {}
+    size, cn = tp.get("size_pt"), tp.get("font_cn")
+    latin = tp.get("font_latin") or "Times New Roman"
+    if not (size or cn):
+        return 0, ""
+
+    changed = 0
+    for rel in list(doc.part.rels.values()):
+        if not rel.reltype.endswith("/footnotes"):
+            continue
+        try:
+            root = etree.fromstring(rel.target_part.blob)
+        except etree.XMLSyntaxError:
+            continue
+
+        touched = False
+        for fn in root.findall(qn("w:footnote")):
+            # id < 1 是分隔符与续行符，没有正文，不必动
+            if int(fn.get(qn("w:id")) or "0") < 1:
+                continue
+
+            before = [run_style(r) for r in fn.iter(qn("w:r"))]
+            for r in fn.iter(qn("w:r")):
+                set_run_xml(r, cn=cn, latin=latin, size=size)
+            after = [run_style(r) for r in fn.iter(qn("w:r"))]
+
+            if before != after:
+                changed += 1
+                touched = True
+
+        if touched:
+            rel.target_part._blob = etree.tostring(
+                root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    desc = f"{cn or ''} {size:g}pt".strip() if size else (cn or "")
+    return changed, desc
 
 
 def apply_table(table, bp, size_pt, cn, latin):
@@ -725,6 +813,13 @@ def main():
 
     out = Path(a.out)
     reorder_notes(elems, ir, rules, audit)
+
+    fn_count, fn_desc = style_footnotes(doc, rules)
+    if fn_count:
+        audit.add(-2, "footnote", "脚注正文套版",
+                  note=f"{fn_count} 条脚注改为 {fn_desc}",
+                  rule="typography.footnote")
+
     doc.save(str(out))
 
     audit_path = out.with_suffix(".audit.json")

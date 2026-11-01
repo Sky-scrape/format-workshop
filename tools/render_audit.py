@@ -26,6 +26,7 @@ KIND = {
     "图片段解除固定行距": "A",
     "公式段行距": "A",
     "公式（伪表格）原样保留": "A",
+    "脚注正文套版": "A",
     "表格重设为三线表": "A",
     "参考文献悬挂缩进": "A",
     "标题重新编号": "B",
@@ -48,6 +49,15 @@ def clip(text, limit=48):
     if len(raw) <= limit:
         return html.escape(raw)
     return (f'<span title="{html.escape(raw)}">{html.escape(raw[:limit])}…</span>')
+
+
+def pos_label(idx):
+    """审计里的位置标记：负数不是段落下标，别显示成段号。"""
+    if idx == -1:
+        return "页面"
+    if idx == -2:
+        return "脚注"
+    return idx
 
 
 def render(d, job=None):
@@ -82,7 +92,7 @@ def render(d, job=None):
     text_rows = "".join(
         f'<tr data-k="{html.escape(it["action"] + " " + it.get("note", ""))}"'
         f'{" class=rejected" if it.get("rejected") else ""}>'
-        f'<td class="pos">{it["idx"] if it["idx"] >= 0 else "页面"}'
+        f'<td class="pos">{pos_label(it["idx"])}'
         f'<span class="sec">{html.escape(it.get("sec") or "")}</span></td>'
         f'<td class="act">{html.escape(it["action"])}'
         f'{"<span class=tag>已驳回</span>" if it.get("rejected") else ""}</td>'
@@ -98,7 +108,7 @@ def render(d, job=None):
     for action, rows in groups.items():
         grade = rows[0]["grade"]
         inner = "".join(
-            f'<div class="grow"><span class="gpos">{it["idx"] if it["idx"] >= 0 else "页面"}</span>'
+            f'<div class="grow"><span class="gpos">{pos_label(it["idx"])}</span>'
             f'<span class="gnote">{html.escape(it.get("note") or it.get("after") or "—")}</span>'
             f'{"<code class=gref>" + html.escape(it["rule"]) + "</code>" if it.get("rule") else ""}</div>'
             for it in rows)
