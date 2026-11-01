@@ -118,8 +118,24 @@ def status():
     print("=" * 46)
     print(f"\n[1] 端口 {PORT}：", "有进程在监听" if port_alive() else "无（服务未运行）")
     print("\n[2] 守护与服务进程：")
-    out = run_ps1("proc_report.ps1").rstrip()
-    print(out if out else "     (none)")
+    # ps1 只输出 pid|role|parent，中文在这里组装，避免 PowerShell 输出编码不一致
+    rows = [ln.strip() for ln in run_ps1("proc_report.ps1").splitlines() if ln.count("|") == 2]
+    if not rows:
+        print("     （无）")
+    for row in rows:
+        pid, role, parent = row.split("|")
+        if role == "keepalive":
+            if parent.lower() == "explorer.exe":
+                note = "父进程 explorer.exe，可长期驻留"
+            elif parent == "-":
+                note = "已脱离启动窗口，独立运行"
+            else:
+                note = f"父进程 {parent}，那个窗口关掉可能一起结束"
+            label = "守护"
+        else:
+            note = f"由守护拉起（父进程 {parent}）"
+            label = "服务"
+        print(f"     pid={pid}  {label}  {note}")
     code = http_ok()
     print("\n[3] HTTP 探测：", f"HTTP {code}  OK" if code else "FAILED - 无法连接")
     print("\n[4] 最近日志：")

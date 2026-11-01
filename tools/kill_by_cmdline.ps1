@@ -1,4 +1,4 @@
-# Kill processes whose command line matches a keyword.
+﻿# Kill processes whose command line matches a keyword.
 # Called by 停止.bat. Kept in a separate file to avoid the classic
 # for /f + PowerShell quoting mess in batch scripts.
 #
