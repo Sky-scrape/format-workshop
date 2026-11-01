@@ -85,21 +85,56 @@ def main():
     # ---- 2. 补录注入的单位/作者简介/基金块 ----
     # 作者、单位、简介、基金四类本身就是身份信息，凡要求匿名一律删除；
     # 致谢是否删除由规则集声明（有的刊允许保留，只要不含致谢人姓名）
+    #
+    # 安全优先：规则集没声明"作者""单位"时也删。漏删是身份泄露（不可挽回），
+    # 多删是基金信息缺失（可从署名稿拿回来，而且署名稿本来就完整保留）。
+    # 但多删这件事必须在报告里说清，不能悄悄多删。
     listed = set(sub.get("anonymize_blocks") or [])
-    drop_types = {"authors", "affiliations", "author_note", "funding_statement",
-                  "corresponding_author"}
-    if "acknowledgement" in listed:
-        drop_types.add("acknowledgement")
+    SAFETY_TYPES = {"authors", "affiliations", "author_note", "funding_statement",
+                    "corresponding_author"}
+    drop_types = SAFETY_TYPES | listed
+
+    # 规则集声明了、工具却不认识的类型：记下来让用户人工检查，
+    # 不能静默跳过——静默跳过等于身份信息留在稿子里
+    unknown = sorted(listed - SAFETY_TYPES - {"acknowledgement"})
+    for t in unknown:
+        removed.append(f"未识别：规则集要求匿名化「{t}」，本工具不认识该类型，请人工检查")
+
+    # 致谢小节：删标题还要删标题下面的正文，否则会留下一段孤立的「感谢……」——
+    # 既泄露了致谢内容，又让成品多出一段没头没尾的文字
+    ack_idx = set()
+    for pos, b in enumerate(ir["blocks"]):
+        head = (b["type"] == "acknowledgement"
+                or ACK_RE.match((b.get("text") or "").strip()))
+        if not head or b["type"] not in drop_types:
+            continue
+        ack_idx.add(b["idx"])
+        for nxt in ir["blocks"][pos + 1:]:
+            if (nxt["type"].startswith("heading")
+                    or nxt["type"] in ("references_heading", "appendix_heading",
+                                       "acknowledgement")):
+                break
+            if nxt["type"] in ("body", "table", "table_note", "table_caption",
+                               "figure", "figure_caption", "equation"):
+                ack_idx.add(nxt["idx"])
+
     for b in ir["blocks"]:
+        el = by_idx.get(b["idx"])
+        if b["idx"] in ack_idx:
+            if isinstance(el, Paragraph):
+                removed.append(f"致谢小节：{el.text.strip()[:30]}")
+                el._p.getparent().remove(el._p)
+            continue
         if b["type"] not in drop_types or b["type"] == "front_matter":
             continue
-        el = by_idx.get(b["idx"])
         if el is None or not isinstance(el, Paragraph):
             continue
         if b["type"] == "acknowledgement" or ACK_RE.match(el.text.strip()):
             removed.append(f"致谢小节：{el.text.strip()[:30]}")
         else:
-            removed.append(f"{b['type']}：{el.text.strip()[:40]}")
+            # 规则集没要求、但为确保匿名一并删的，标注清楚
+            mark = "" if b["type"] in listed else "（规则集未声明，为确保匿名一并移除）"
+            removed.append(f"{b['type']}{mark}：{el.text.strip()[:40]}")
         el._p.getparent().remove(el._p)
 
     # ---- 3. 首页脚注（补录写入的基金 / 作者简介 / 通讯作者） ----
