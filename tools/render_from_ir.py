@@ -353,7 +353,9 @@ def ref_number_prefix(text):
         return None, None
     bracketed = bool(m.group("open") and m.group("close"))
     tail = m.group("tail")
-    after = text[m.end():m.end() + 1]
+    # 看数字紧后面那个字符：空白说明它是「123 张三」这种编号，
+    # 而「2020：」的 202 后面是数字 0，不该被当成编号
+    after = text[m.end("num"):m.end("num") + 1]
     if not (bracketed or tail or after.isspace()):
         return None, None
     return m.group(0), int(m.group("num"))

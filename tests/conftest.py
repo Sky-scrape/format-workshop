@@ -8,6 +8,7 @@
    改动条目；同刊自渲染几乎全是「无变化」，测不出东西。
 """
 
+import functools
 import json
 import re
 import shutil
@@ -156,10 +157,29 @@ class Pipeline:
         return [i for i in self.items if (i.get("before") or i.get("after"))]
 
 
+@functools.lru_cache(maxsize=1)
+def tracked_rulesets():
+    """仓库里真正入库的规则集 id 集合。
+
+    完整 23 本不入库，本机有全部——所以「本机跑得通」证明不了什么。
+    每次用私有刊都会在这里拦下来，而不是等到 CI 上 FileNotFoundError。
+    """
+    r = subprocess.run(["git", "ls-files", "rules/journal"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    return {Path(line).stem for line in r.stdout.splitlines() if line.endswith(".json")}
+
+
 def render_into(workdir, source_docx, target=TARGET_JOURNAL, rejects=None, rules_path=None):
     """在指定目录完整跑一遍流水线，返回 Pipeline。"""
     d = Path(workdir)
     d.mkdir(parents=True, exist_ok=True)
+
+    tracked = tracked_rulesets()
+    if tracked is not None and rules_path is None and target not in tracked:
+        raise AssertionError(
+            f"测试用了未入库的期刊 {target!r}（已入库：{sorted(tracked)}）。"
+            f"本机有全部 23 本所以跑得通，CI 上会直接找不到文件。")
 
     shutil.copy(source_docx, d / "manuscript.docx")
     run_tool("parse_docx.py", d / "manuscript.docx", "-o", d / "manuscript.ir.json")
