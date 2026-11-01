@@ -124,3 +124,46 @@ def test_equation_restyling_is_audited(tmp_path):
     result = render_into(tmp_path / "run3", src, target="tjyj")
     actions = {it["action"] for it in result.items}
     assert "公式段行距" in actions, f"没有记录公式段处理，实际只有：{sorted(actions)}"
+
+
+def test_pure_math_paragraph_is_not_dropped_by_parser(tmp_path):
+    """纯公式段落没有文字，但不能被当成空行丢掉。"""
+    doc = Document()
+    doc.add_paragraph("数字金融与企业融资约束")
+    doc.add_paragraph("内容提要：本文考察数字金融的影响。")
+    eq = doc.add_paragraph()
+    add_math(eq, "σ²=Σ(x-μ)²/n")
+    doc.add_paragraph("上式为企业规模的定义，其中 n 为样本量。" * 3)
+
+    src = tmp_path / "pure_math.docx"
+    doc.save(str(src))
+
+    run_tool("parse_docx.py", src, "-o", tmp_path / "p.ir.json")
+    ir = json.loads((tmp_path / "p.ir.json").read_text(encoding="utf-8"))
+    kinds = [b["type"] for b in ir["blocks"]]
+    assert "equation" in kinds, f"纯公式段落被丢了，实际块类型：{kinds}"
+
+
+def test_pseudo_table_formula_is_reported_as_untouched(tmp_path):
+    """用 1 行表格排版的公式：不改结构，但报告里要说清「没动」。"""
+    doc = Document()
+    doc.add_paragraph("数字金融与企业融资约束")
+    doc.add_paragraph("内容提要：本文考察数字金融的影响。")
+    doc.add_paragraph("估计量为：" * 6)
+
+    table = doc.add_table(rows=1, cols=2)
+    add_math(table.cell(0, 0).paragraphs[0], "β=(X'X)^{-1}X'y")
+    table.cell(0, 1).paragraphs[0].text = "（1）"
+
+    doc.add_paragraph("其中各项含义如上。" * 6)
+    src = tmp_path / "pseudo.docx"
+    doc.save(str(src))
+
+    result = render_into(tmp_path / "run4", src, target="tjyj")
+    actions = {it["action"] for it in result.items}
+    assert "公式（伪表格）原样保留" in actions, f"公式伪表格没有说明，实际：{sorted(actions)}"
+
+    # 表格结构必须原样：1 行 2 列，公式还在
+    kept = [t for t in Document(str(result.docx)).element.body.iter(NS_W + "tbl")]
+    assert len(kept) == 1, "公式表格被改动或删除了"
+    assert count_math(result.docx) >= 1, "公式对象在渲染后丢失"

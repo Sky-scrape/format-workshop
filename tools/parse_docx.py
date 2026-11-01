@@ -301,6 +301,10 @@ def parse(path, ai_cfg=None):
             blocks.append({"type": "figure", "text": "", "idx": idx})
             continue
         if not text:
+            # 纯公式段落没有文字，但它是内容，不能像空行一样丢掉——
+            # 丢了渲染器就不知道这里有个公式，也就不会给它上行距保护。
+            if has_omml(child):
+                blocks.append({"type": "equation", "text": "", "idx": idx, "no_text": True})
             continue
 
         level = conf = None
