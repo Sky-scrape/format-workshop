@@ -1,0 +1,652 @@
+{
+  "schema_version": "0.1",
+  "journal": {
+    "id": "tjyj",
+    "name_zh": "统计研究",
+    "name_en": "Statistical Research",
+    "language": "zh",
+    "sponsor": "中国统计学会",
+    "cn_number": "CN 11-1302/C",
+    "issn": "1002-4565"
+  },
+  "verification": {
+    "status": "verified",
+    "typography_authority": "published",
+    "source_url": "https://tjyj.cbpt.cnki.net/EditorHN/PromptPageInfo.aspx?t=v&c=1",
+    "source_title": "官网《投稿须知》（CNKI 采编系统）",
+    "verified_at": "2026-11-01",
+    "verified_by": "官网投稿须知全文 + 2026 年第 10 期 3 篇研究论文逐行实测（向书坚等、万科等、周伟等）",
+    "notes": "须知只规定结构与字数（8 部分、正文不超过 1.8 万字、内容提要 300–500 字、关键词 3–5 个、双向匿名），并在第四条提到网站另有一份《统计研究》基本版式——该文件在网站上未挂出，本轮未取得。因此版式全部取自实物，typography_authority 记为 published。3 篇 PDF 的页面尺寸、六处字号与行距完全一致，互证成立。",
+    "cross_check": {
+      "status": "verified",
+      "samples": 3,
+      "sample_type": "研究论文（2026 年第 10 期，14～15 页，含内容提要、关键词、DOI、三码行、中英文摘要、回归表、插图、参考文献、作者简介）",
+      "confirmed": [
+        "8 部分结构与实物逐项对上：中英文标题、中英文内容提要、中英文关键词、中图分类号、文献标识码、文章编号、正文、参考文献",
+        "前置区四项编码（DOI、中图分类号、文献标识码、文章编号）连排在同一行，9pt 黑体，只在中文关键词之下出现一次",
+        "英文标题、英文作者、Abstract、Key words 紧随中文摘要之后、同置首页，不在文末",
+        "一级标题「一、」用顿号、14pt 仿宋、居中；二级「（一）」10.5pt 黑体单独成行；三级「1.」随正文接排（3 篇一致）",
+        "表题在表上方、图题在图下方，均为 9pt 黑体居中，题号与题名之间空两格",
+        "参考文献标题左对齐缩进 2 字（不是居中），条目为 [1] 编号列表，中文按拼音、外文按字母，无引注号对应",
+        "作者简介置于参考文献之后，标签「作者简介」9pt 黑体，内容 9pt 宋体"
+      ],
+      "observed_difference": [
+        "开本：实物 210×285mm（大 16 开），版心 161×243mm；规则集按 A4 投稿稿渲染，页边距取实测值（上 22 / 下 20 / 左 25 / 右 24mm）",
+        "一级标题字距：实测每个字占 14.8pt（14pt 字 + 约 0.8pt 字间距），渲染未加字间距，仅在 note 记录",
+        "图注位置：实物把图的长说明移入页脚（如「②图1横坐标中，1-1、1-2代表……」），不是排在图下；投稿稿按图下注处理",
+        "表格边框线宽：实物为矢量描边，未被 PDF 解析为可测线宽，按三线表常规 1.5/0.5/1.5pt 处理"
+      ],
+      "conclusion": "结构类规定（8 部分、四项编码连排、中英文摘要同置首页、三级标题接排）与实物完全吻合；版式类全部取自 3 篇实物实测值。"
+    }
+  },
+  "page": {
+    "size": "A4",
+    "size_mm": {
+      "width": 210,
+      "height": 297
+    },
+    "margin_mm": {
+      "top": 22,
+      "bottom": 20,
+      "left": 25,
+      "right": 24
+    },
+    "columns": 1,
+    "binding_side": "left",
+    "measured_note": "实物开本 210×285mm（大 16 开），版心 161×243mm（x 70.9–527.1pt，y 62.7–750.7pt）；投稿按 A4，页边距直接取实测值，版心宽度与实物一致"
+  },
+  "assumptions": [
+    "纸张与页边距：须知未规定，论文按 A4 处理（页边距直接取实物实测值 上22/下20/左25/右24mm）；实物开本为 210×285mm",
+    "表格边框线宽：实物为矢量描边，PDF 未给出可测线宽，按三线表常规 1.5/0.5/1.5 磅",
+    "副标题字号：3 篇样本均无副标题，按与主标题同号（26pt 小标宋）处理"
+  ],
+  "blocks": [
+    {
+      "type": "title",
+      "lang": "zh",
+      "required": true,
+      "style": "标题",
+      "note": "实测 26pt 小标宋、居中；标题过长时人工断行（实物为两行居中）"
+    },
+    {
+      "type": "subtitle",
+      "lang": "zh",
+      "required": false,
+      "style": "副标题"
+    },
+    {
+      "type": "authors",
+      "lang": "zh",
+      "required": true,
+      "style": "作者",
+      "separator": "　",
+      "note": "姓名之间空一格，14pt 楷体居中；匿名要求下只在投稿系统填写，不得出现在稿件中"
+    },
+    {
+      "type": "abstract",
+      "lang": "zh",
+      "required": true,
+      "style": "内容提要",
+      "label": "内容提要：",
+      "note": "标签「内容提要」后接全角冒号，黑体；正文宋体；300–500 字为宜"
+    },
+    {
+      "type": "keywords",
+      "lang": "zh",
+      "required": true,
+      "style": "关键词",
+      "label": "关键词：",
+      "count_min": 3,
+      "count_max": 5,
+      "separator": "；",
+      "note": "整行黑体；关键词之间用分号"
+    },
+    {
+      "type": "doi",
+      "required": false,
+      "style": "分类号",
+      "label": "DOI: ",
+      "sample_value": "10.19343/j.cnki.11-1302/c.2026.10.007",
+      "note": "紧随关键词之后、与三码行同字号；投稿时由编辑部赋号，作者可留空"
+    },
+    {
+      "type": "classification_code",
+      "scheme": "CLC",
+      "required": true,
+      "style": "分类号",
+      "label": "中图分类号：",
+      "sample_value": "F222",
+      "note": "须知列为必备项第 ④ 条；与文献标识码、文章编号连排同一行"
+    },
+    {
+      "type": "document_code",
+      "scheme": "CLC-DOC",
+      "required": true,
+      "style": "分类号",
+      "label": "文献标识码：",
+      "fixed_value": "A",
+      "sample_value": "A",
+      "note": "须知列为必备项第 ⑤ 条；理论与应用研究论文固定为 A"
+    },
+    {
+      "type": "article_number",
+      "required": true,
+      "style": "分类号",
+      "label": "文章编号：",
+      "sample_value": "1002-4565(2026)10-0090-14",
+      "note": "格式为 ISSN(年)期-起始页-页数；投稿时留空，由编辑部赋号"
+    },
+    {
+      "type": "title",
+      "lang": "en",
+      "required": true,
+      "style": "英文标题",
+      "note": "与中文摘要同置首页，14pt Times New Roman 加粗居中"
+    },
+    {
+      "type": "authors",
+      "lang": "en",
+      "required": true,
+      "style": "英文作者",
+      "note": "汉语拼音，姓名之间空一格；匿名要求下不得出现在稿件中"
+    },
+    {
+      "type": "abstract",
+      "lang": "en",
+      "required": true,
+      "style": "英文摘要",
+      "label": "Abstract: ",
+      "note": "须知：英文内容提要与中文内容提要相对应"
+    },
+    {
+      "type": "keywords",
+      "lang": "en",
+      "required": true,
+      "style": "英文关键词",
+      "label": "Key words: ",
+      "count_min": 3,
+      "count_max": 5,
+      "separator": "; "
+    },
+    {
+      "type": "body",
+      "required": true
+    },
+    {
+      "type": "references",
+      "required": true,
+      "style_id": "TJYJ-NUMBERED-LIST",
+      "style": "参考文献",
+      "label": "参考文献",
+      "note": "标题左对齐缩进 2 字（不居中）；条目 [1] 编号，仅为列表序号，正文不标注"
+    },
+    {
+      "type": "author_note",
+      "required": true,
+      "style": "作者简介",
+      "label": "作者简介",
+      "note": "置于参考文献之后；实名稿保留，匿名稿整节删除"
+    }
+  ],
+  "typography": {
+    "body": {
+      "font_cn": "宋体",
+      "font_latin": "Times New Roman",
+      "size_pt": 10.5,
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 17.0
+      },
+      "first_line_indent_chars": 2,
+      "align": "both",
+      "measured": {
+        "size_pt": 10.5,
+        "line_pt": 17.0,
+        "font_cn": "SimSun",
+        "samples": 3
+      },
+      "note": "3 篇一致：10.5pt（五号）、固定行距 17pt、首行缩进 2 字、两端对齐"
+    },
+    "title": {
+      "font_cn": "小标宋",
+      "size_pt": 26,
+      "align": "center",
+      "measured": true,
+      "note": "实测 26pt 居中、每字占 26.65pt（字间加宽约 0.6pt），PDF 内嵌字体为方正小标宋",
+      "letter_spacing_pt": 0.6
+    },
+    "subtitle": {
+      "font_cn": "小标宋",
+      "size_pt": 26,
+      "align": "center",
+      "measured": false,
+      "note": "样本无副标题实例，按与主标题同号推定"
+    },
+    "authors": {
+      "font_cn": "楷体",
+      "size_pt": 14,
+      "align": "center",
+      "measured": true,
+      "note": "实测 14pt 楷体居中，姓名之间空一格"
+    },
+    "abstract": {
+      "font_cn": "宋体",
+      "font_latin": "Times New Roman",
+      "size_pt": 9,
+      "label_font_cn": "黑体",
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 15
+      },
+      "measured": true,
+      "note": "实测 9pt、行距 15pt；标签「内容提要：」为黑体，正文为宋体"
+    },
+    "keywords": {
+      "font_cn": "黑体",
+      "font_latin": "Times New Roman",
+      "size_pt": 9,
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 15
+      },
+      "measured": true,
+      "note": "整行黑体 9pt（含关键词文字），与摘要行距一致"
+    },
+    "classification": {
+      "font_cn": "黑体",
+      "font_latin": "Times New Roman",
+      "size_pt": 9,
+      "measured": true,
+      "note": "DOI 行与三码行同此样式，行距 15pt"
+    },
+    "title_en": {
+      "font_cn": "Times New Roman",
+      "font_latin": "Times New Roman",
+      "size_pt": 14,
+      "bold": true,
+      "align": "center",
+      "measured": true,
+      "note": "实测英文标题 14pt 加粗居中，行距 23pt"
+    },
+    "authors_en": {
+      "font_cn": "Times New Roman",
+      "font_latin": "Times New Roman",
+      "size_pt": 10.5,
+      "align": "center",
+      "measured": true
+    },
+    "abstract_en": {
+      "font_cn": "Times New Roman",
+      "font_latin": "Times New Roman",
+      "size_pt": 9,
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 15
+      },
+      "measured": true,
+      "note": "标签 Abstract: 加粗，正文常规"
+    },
+    "references": {
+      "font_cn": "仿宋",
+      "font_latin": "Times New Roman",
+      "size_pt": 7.5,
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 12.3
+      },
+      "measured": true,
+      "note": "实测 7.5pt、行距 12.3pt；中文条目为仿宋，外文为 Times New Roman"
+    },
+    "references_heading": {
+      "font_cn": "黑体",
+      "size_pt": 9,
+      "align": "left",
+      "indent_chars": 2,
+      "measured": true,
+      "note": "实测左对齐、起点 x 89.1pt（正文起 70.9pt），即缩进 2 字；不居中"
+    },
+    "author_note": {
+      "font_cn": "宋体",
+      "label_font_cn": "黑体",
+      "size_pt": 9,
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 12.3
+      },
+      "heading_align": "left",
+      "heading_indent_chars": 2,
+      "measured": true,
+      "note": "标签「作者简介」黑体 9pt 左对齐缩进 2 字；内容宋体 9pt，每人一段"
+    },
+    "footnote": {
+      "font_cn": "宋体",
+      "font_latin": "Times New Roman",
+      "size_pt": 7.5,
+      "measured": true,
+      "note": "首页与正文脚注均为 7.5pt；编号 ①②③ 每页重排"
+    }
+  },
+  "headings": {
+    "numbering": "cn-hierarchical",
+    "max_level": 3,
+    "levels": [
+      "一、",
+      "（一）",
+      "1."
+    ],
+    "unnumbered_sections": [],
+    "intro_title_text": "引言",
+    "intro_numbered": true,
+    "level1": {
+      "font_cn": "仿宋",
+      "size_pt": 14,
+      "bold": false,
+      "align": "center",
+      "own_line": true,
+      "space_before_lines": 1.2,
+      "space_after_lines": 0.5,
+      "measured": true,
+      "note": "实测仿宋 14pt 居中、序号用顿号「一、」；段前约 20pt、段后约 8pt；每个字另加约 0.8pt 字距"
+    },
+    "level2": {
+      "font_cn": "黑体",
+      "size_pt": 10.5,
+      "bold": false,
+      "align": "left",
+      "indent_chars": 2,
+      "own_line": true,
+      "space_before_lines": 0.3,
+      "space_after_lines": 0.2,
+      "measured": true,
+      "note": "实测「（一）」黑体 10.5pt、首行缩进 2 字、单独成行"
+    },
+    "level3": {
+      "font_cn": "宋体",
+      "size_pt": 10.5,
+      "bold": false,
+      "align": "left",
+      "indent_chars": 2,
+      "own_line": false,
+      "inline_with_body": true,
+      "measured": true,
+      "note": "实测「1.制造业行业差异。」与正文接排，序号后不加空格、不单独占行"
+    },
+    "rules": "标题后不排标点（接排的三级标题除外，其序号句本身以句号结尾）；全文体例须一致"
+  },
+  "numbering": {
+    "tables": "表1",
+    "figures": "图1",
+    "equations": "（1）",
+    "footnotes": "①②③",
+    "footnotes_scope": "page",
+    "title_note_mark": "*",
+    "rule": "脚注为当页下注、每页重新编号；对标题的说明（基金项目、通讯作者）用星号 *，星号标在标题末字右上角"
+  },
+  "citation": {
+    "system": "author-year",
+    "style_id": "TJYJ-NUMBERED-LIST",
+    "in_text": {
+      "superscript_forbidden": true,
+      "cn_one_author": "作者（2018）或（作者，2018）",
+      "cn_two_authors": "作者1和作者2（2018）或（作者1和作者2，2018）",
+      "cn_three_plus": "第一作者等（2018）",
+      "en_one_author": "Sato（1967）或（Sato，1967）",
+      "en_two_authors": "Author1和Author2（2018）",
+      "en_three_plus": "Klump等（2007）",
+      "multiple_separator": "；",
+      "note": "实测正文为作者—年份制，中英文一律用「和」「等」，不使用 & 与 et al.；多条并列以分号分隔"
+    },
+    "reference_list": {
+      "numbered": true,
+      "number_format": "[1]",
+      "number_role": "list_index_only",
+      "sort": "cn-first-by-pinyin-then-en-by-alphabet",
+      "cn_formats": {
+        "journal": "作者1, 作者2. 文献题名[J]. 期刊名, 年, 卷(期): 起止页码.",
+        "book": "作者. 书名[M]. 出版地: 出版者, 出版年: 起止页码.",
+        "newspaper": "作者. 文章题名[N]. 报纸名, 出版日期(版次)."
+      },
+      "en_formats": {
+        "journal": "Family name Initials, Family name Initials. The Title of the Article[J]. The Name of the Journal, Year, Volume(Issue): Start–End.",
+        "book": "Family name Initials. The Title of the Book[M]. Place: Publisher, Year: Start–End.",
+        "working_paper": "Family name Initials. The Title of the Article[R]. Working Paper Series, Year."
+      },
+      "indent_chars": 0,
+      "hanging_indent_chars": 2.3,
+      "type_marker_required": true,
+      "page_dash": "en-dash（–）",
+      "examples": [
+        "柏培文, 王亚文. 中国细分行业技能资本替代性[J]. 经济研究, 2023, 58(3): 135–153.",
+        "陈秋霖, 许多, 周羿. 人口老龄化背景下人工智能的劳动力替代效应——基于跨国面板数据和中国省级面板数据的分析[J]. 中国人口科学, 2018(6): 30–42, 126–127.",
+        "苏德悦. “人工智能+”加出新型工业化新动能[N]. 人民邮电, 2025-03-12(1).",
+        "Acemoglu D, Restrepo P. The Race between Man and Machines: Implications of Technology for Growth, Factor Shares, and Employment[J]. American Economic Review, 2018, 108(6): 1488–1542."
+      ],
+      "note": "编号 [1] 顶格、条目文字悬挂缩进约 17pt；中文按拼音、外文按字母，两组前后分排；编号与正文引注无对应关系，仅为列表序号",
+      "punctuation_rule": "条目内中文用中文标点、英文用半角标点；文献类型标识（[J]/[M]/[N]/[R]）紧接题名之后；页码之间用连接号 –；作者之间用逗号加空格"
+    }
+  },
+  "tables": {
+    "style": "three-line",
+    "side_walls": false,
+    "border_pt": {
+      "top": 1.5,
+      "header_bottom": 0.5,
+      "bottom": 1.5
+    },
+    "border_pt_source": "推定：实物为矢量描边，PDF 未给出可测线宽",
+    "font_size_pt": 7.5,
+    "font_size_source": "实测：表内中英文与数字均为 7.5pt，表头同号",
+    "caption_position": "above",
+    "caption_align": "center",
+    "caption_font_cn": "黑体",
+    "caption_size_pt": 9,
+    "caption_size_source": "实测：表题黑体 9pt 居中，表号与表名之间空两格",
+    "caption_numbering": "表1",
+    "caption_gap": "空两格",
+    "unit_in_caption": false,
+    "note_layers": [
+      {
+        "kind": "general",
+        "prefix": "注：",
+        "trailing_punct": false,
+        "position": "below",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 7.5,
+        "note": "实测表注 7.5pt 宋体，以「注：」起头，缩进约 1 字；显著性说明与括号含义合并在同一段"
+      }
+    ],
+    "repeat_header_on_break": true,
+    "max_columns": 8
+  },
+  "figures": {
+    "border": false,
+    "shadow": false,
+    "background_color": false,
+    "black_white_only": true,
+    "prefer_vector": true,
+    "font_cn": "宋体",
+    "font_size_pt": 6,
+    "font_size_source": "实测：图内坐标轴刻度与图例约 6pt（矢量图文字）",
+    "caption_position": "below",
+    "caption_align": "center",
+    "caption_font_cn": "黑体",
+    "caption_size_pt": 9,
+    "caption_size_source": "实测：图题黑体 9pt 居中，图号与图名之间空两格",
+    "caption_numbering": "图1",
+    "note_layers": [
+      {
+        "kind": "general",
+        "prefix": "注：",
+        "trailing_punct": false,
+        "position": "below_caption",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 7.5,
+        "note": "实物把图的长说明移入页脚以省版面；投稿稿仍按图下注处理"
+      }
+    ],
+    "axis_label_required": true,
+    "black_white_rule": "正文黑白印刷，图中不同序列须以不同形状的黑白线或填充区分，并标注横纵坐标名称与单位"
+  },
+  "equations": {
+    "align": "center",
+    "numbering": "全文连续编号，序号置于圆括号内、靠右",
+    "letter_italic": true,
+    "operator_upright": true,
+    "operator_rule": "变量与函数为斜体；数学常数、算子与函数名（log、ln、e、π）为正体",
+    "editor_required": [
+      "Word 公式编辑器",
+      "MathType"
+    ],
+    "paste_as_image_forbidden": true
+  },
+  "limits": {
+    "total": {
+      "value": 18000,
+      "metric": "B",
+      "scope": "正文",
+      "strict": true,
+      "note": "须知：文章正文字数不超过 1.8 万字"
+    },
+    "abstract": {
+      "min": 300,
+      "max": 500,
+      "metric": "chars_cn",
+      "strict": false,
+      "note": "须知：中文内容提要 300–500 字为宜，须为完整短文，突出创新点与研究贡献"
+    },
+    "abstract_en": {
+      "metric": "words_en",
+      "strict": false,
+      "note": "须知：英文内容提要与中文内容提要相对应，未给字数上限"
+    },
+    "keywords": {
+      "min": 3,
+      "max": 5
+    }
+  },
+  "submission": {
+    "anonymous": true,
+    "anonymize_blocks": [
+      "authors",
+      "affiliations",
+      "author_note",
+      "funding_statement",
+      "acknowledgement"
+    ],
+    "author_page": {
+      "separate_page": false,
+      "note": "须知第五条：文章署名、作者简介及作者英文译名只在投稿系统中按要求填写，不得出现在上传的电子版稿件中；正文及资助、引文、注释中不得出现作者姓名、工作单位等任何背景信息。故不设作者信息页，匿名稿须删去作者简介与基金项目。"
+    },
+    "file_format": [
+      "DOC",
+      "DOCX"
+    ],
+    "file_format_note": "须知：推荐使用 Word 2003 / 2007 处理文档；图表、公式须保证符号、数字、线条清晰，图示最好以 Excel 格式粘贴在正文中",
+    "copyright_transfer": {
+      "required": true,
+      "note": "投稿时须同意《论文转让协议》，录用后另提交全体作者签字的纸质版权转让协议"
+    },
+    "fee_policy": "不收取审稿费、版面费，刊发后付稿酬"
+  },
+  "personal_fields": [
+    {
+      "id": "paper_title",
+      "label_zh": "文章标题",
+      "scope": "paper",
+      "required": true,
+      "placement": "byline",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "paper_title_en",
+      "label_zh": "英文标题",
+      "scope": "paper",
+      "required": true,
+      "placement": "back_matter",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "english_abstract",
+      "label_zh": "英文内容提要",
+      "scope": "paper",
+      "required": true,
+      "placement": "back_matter",
+      "prefill_from_paper": true,
+      "note": "须与中文内容提要逐句对应，不是另写一段"
+    },
+    {
+      "id": "english_keywords",
+      "label_zh": "英文关键词",
+      "scope": "paper",
+      "required": true,
+      "placement": "back_matter",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "author_name",
+      "label_zh": "作者姓名与顺序",
+      "scope": "author",
+      "required": true,
+      "placement": "byline",
+      "prefill_from_paper": true,
+      "note": "按须知须在投稿系统填写，不出现在稿件中"
+    },
+    {
+      "id": "affiliation",
+      "label_zh": "工作单位",
+      "scope": "author",
+      "required": true,
+      "placement": "byline",
+      "prefill_from_paper": true,
+      "note": "同上，只填系统"
+    },
+    {
+      "id": "email",
+      "label_zh": "电子邮箱",
+      "scope": "author",
+      "required": true,
+      "placement": "system",
+      "prefill_from_paper": false,
+      "sensitive": true
+    },
+    {
+      "id": "author_bio",
+      "label_zh": "作者简介",
+      "scope": "author",
+      "required": true,
+      "placement": "back_matter",
+      "prefill_from_paper": false,
+      "note": "实名稿置于参考文献之后；匿名稿整节删除"
+    },
+    {
+      "id": "funding_info",
+      "label_zh": "资助项目",
+      "scope": "paper",
+      "required": false,
+      "placement": "footnote",
+      "prefill_from_paper": true,
+      "note": "实名稿以首页脚注列出；匿名稿须删除（须知明令资助信息不得出现）"
+    }
+  ],
+  "statements": {
+    "copyright_transfer": {
+      "required": true,
+      "note": "投稿即视为签署论文转让协议（复制权、发行权、信息网络传播权、翻译权、汇编权）"
+    },
+    "conflict_of_interest": {
+      "required": false
+    },
+    "data_availability": {
+      "required": false,
+      "note": "须知未强制要求提交数据与代码"
+    }
+  },
+  "sample": {
+    "author_note": [
+      "张　三（通讯作者），某某大学统计学院教授、博士生导师。研究方向为宏观经济统计。电子邮箱：zhangsan@example.edu.cn。",
+      "李　四，某某大学统计学院博士研究生。研究方向为空间计量与区域经济统计。"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · 格式工坊{% endblock %}
+{% block style %}
+<style>
+.err-shell{padding:80px 24px;max-width:620px;margin:auto;text-align:center}
+.err-code{font-family:Georgia,serif;font-size:64px;line-height:1;color:var(--line);letter-spacing:2px}
+.err-shell h1{font-family:"Songti SC",SimSun,serif;font-size:24px;font-weight:600;margin:14px 0 10px}
+.err-shell p{font-size:13px;color:var(--ink2);line-height:2;margin:0 0 26px}
+.err-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+</style>
+{% endblock %}
+{% block body %}
+<div class="err-shell">
+  <div class="err-code">{{ code }}</div>
+  <h1>{{ title }}</h1>
+  <p>{{ hint }}</p>
+  <div class="err-actions"><a class="btn" href="/workspace">回到工作台</a><a class="btn btn-light" href="/">返回首页</a></div>
+</div>
+{% endblock %}

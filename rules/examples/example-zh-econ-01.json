@@ -1,0 +1,111 @@
+{
+  "schema_version": "0.1",
+  "_warning": "示例结构，用于验证 schema 表达能力。所有数值均为占位，未经核对官方投稿须知，不得直接使用。",
+  "journal": {
+    "id": "example-zh-econ-01",
+    "name_zh": "示例中文经管期刊",
+    "name_en": "Example Chinese Economics Journal",
+    "language": "zh",
+    "verification": {
+      "status": "unverified",
+      "source_url": null,
+      "verified_at": null,
+      "verified_by": null
+    }
+  },
+  "page": {
+    "size": "A4",
+    "margin_mm": { "top": 25, "bottom": 25, "left": 25, "right": 25 },
+    "columns": 1
+  },
+  "blocks": [
+    { "type": "title", "lang": "zh", "required": true, "style": "标题" },
+    { "type": "authors", "required": true, "style": "作者" },
+    { "type": "affiliations", "required": true, "style": "单位" },
+    { "type": "abstract", "lang": "zh", "required": true, "style": "摘要", "max_chars": 300 },
+    { "type": "keywords", "lang": "zh", "required": true, "style": "关键词", "count_min": 3, "count_max": 5, "separator": "；" },
+    { "type": "title", "lang": "en", "required": true, "style": "英文标题" },
+    { "type": "authors", "lang": "en", "required": true, "style": "英文作者" },
+    { "type": "abstract", "lang": "en", "required": true, "style": "英文摘要", "max_words": 250 },
+    { "type": "keywords", "lang": "en", "required": true, "style": "英文关键词", "separator": ";" },
+    { "type": "classification_code", "scheme": "CLC", "required": true, "style": "中图分类号" },
+    { "type": "document_code", "scheme": "GB-T-1992", "required": false, "style": "文献标识码" },
+    { "type": "funding_statement", "placement": "footnote", "required": false, "style": "脚注" },
+    { "type": "author_note", "placement": "footnote", "required": true, "style": "脚注", "fields": ["author_note_birth", "author_note_gender", "author_note_origin", "author_note_title", "author_note_research"] },
+    { "type": "received_date", "placement": "footnote", "required": false, "style": "脚注" },
+    { "type": "body", "required": true },
+    { "type": "references", "required": true, "style_id": "GB-T-7714-2015", "style": "参考文献" },
+    { "type": "appendix", "required": false },
+    { "type": "acknowledgement", "required": false }
+  ],
+  "personal_fields": [
+    { "id": "author_name", "label_zh": "作者姓名", "scope": "author", "required": true, "placement": "byline", "prefill_from_paper": true },
+    { "id": "author_affiliation", "label_zh": "作者单位", "scope": "author", "required": true, "placement": "byline", "prefill_from_paper": true, "hint": "单位全称，具体到二级学院" },
+    { "id": "corresponding_author", "label_zh": "通讯作者", "scope": "paper", "required": true, "placement": "byline", "prefill_from_paper": false },
+    { "id": "corresponding_email", "label_zh": "通讯作者邮箱", "scope": "paper", "required": true, "placement": "footnote", "prefill_from_paper": false },
+    { "id": "author_note_birth", "label_zh": "出生年", "scope": "author", "required": true, "placement": "footnote", "prefill_from_paper": false },
+    { "id": "author_note_gender", "label_zh": "性别", "scope": "author", "required": true, "placement": "footnote", "prefill_from_paper": false },
+    { "id": "author_note_origin", "label_zh": "籍贯", "scope": "author", "required": true, "placement": "footnote", "prefill_from_paper": false, "hint": "省+市，如：江苏南京" },
+    { "id": "author_note_title", "label_zh": "职称", "scope": "author", "required": true, "placement": "footnote", "prefill_from_paper": false },
+    { "id": "author_note_research", "label_zh": "研究方向", "scope": "author", "required": true, "placement": "footnote", "prefill_from_paper": false },
+    { "id": "funding_name", "label_zh": "基金项目名称", "scope": "paper", "required": false, "placement": "footnote", "prefill_from_paper": true },
+    { "id": "funding_number", "label_zh": "基金项目编号", "scope": "paper", "required": false, "placement": "footnote", "prefill_from_paper": false },
+    { "id": "received_date", "label_zh": "收稿日期", "scope": "paper", "required": false, "placement": "footnote", "prefill_from_paper": false, "hint": "留空则由系统填入提交当日日期" }
+  ],
+  "typography": {
+    "body": { "font_cn": "宋体", "font_en": "Times New Roman", "size_pt": 10.5, "line_spacing": { "mode": "multiple", "value": 1.5 }, "first_line_indent_chars": 2 },
+    "abstract": { "font_cn": "楷体", "size_pt": 9 },
+    "footnote": { "font_cn": "宋体", "size_pt": 9 }
+  },
+  "headings": {
+    "numbering": "cn-hierarchical",
+    "levels": ["一、", "（一）", "1.", "（1）"],
+    "unnumbered_sections": ["引言"],
+    "level1": { "font_cn": "黑体", "size_pt": 12, "align": "left" }
+  },
+  "citation": {
+    "system": "numbered",
+    "style_id": "GB-T-7714-2015",
+    "in_text": { "bracket": "[]", "multiple_separator": "，", "include_page": false },
+    "reference_list": { "sort": "by_order", "authors_before_et_al": 3, "language_field_required": true }
+  },
+  "tables": {
+    "style": "three-line",
+    "border_pt": { "top": 1.5, "header_bottom": 0.75, "bottom": 1.5 },
+    "caption_position": "above",
+    "caption_numbering": "表1",
+    "note_layers": [
+      { "kind": "source", "prefix": "资料来源", "trailing_punct": false, "position": "below" },
+      { "kind": "general", "prefix": "注", "trailing_punct": true, "position": "below" },
+      { "kind": "cell", "marker": "①②③", "trailing_punct": true, "position": "below" }
+    ],
+    "repeat_header_on_break": true,
+    "font_size_pt": 9
+  },
+  "figures": {
+    "caption_position": "below",
+    "caption_numbering": "图1",
+    "note_position": "below",
+    "note_prefix": "注：",
+    "resolution_dpi_min": 300
+  },
+  "limits": {
+    "total": { "value": 12000, "metric": "B" },
+    "abstract": { "value": 300, "metric": "chars_cn" },
+    "figures_max": null,
+    "tables_max": null
+  },
+  "submission": {
+    "anonymous": true,
+    "anonymize_blocks": ["title", "authors", "affiliations", "author_note", "funding_statement", "acknowledgement"],
+    "author_page": {
+      "separate_page": true,
+      "position": "before_body",
+      "fields": ["author_name", "author_note_gender", "author_affiliation", "author_note_title", "corresponding_email"]
+    }
+  },
+  "statements": {
+    "data_availability": { "required": false },
+    "conflict_of_interest": { "required": false }
+  }
+}

@@ -1,0 +1,498 @@
+{
+  "schema_version": "0.1",
+  "journal": {
+    "id": "cjyj",
+    "name_zh": "财经研究",
+    "name_en": "Journal of Finance and Economics",
+    "language": "zh",
+    "sponsor": "教育部主管、上海财经大学主办",
+    "cn_number": "CN 31-1012/F",
+    "issn": "1001-9952"
+  },
+  "verification": {
+    "status": "partial",
+    "source_url": "https://qks.sufe.edu.cn/J/CJYJ.html/CN",
+    "source_title": "《财经研究》投稿须知（上海财经大学学术期刊编辑部，2016 年 6 月）",
+    "source_file": "uf170417000005IpL.pdf",
+    "template_url": null,
+    "verified_at": "2026-10-31",
+    "verified_by": "官方投稿须知 PDF 全文（2 页）＋ 三篇已发表论文版式实测",
+    "typography_source": "published_layout",
+    "notes": "规则分两类来源：引用体制、文献格式、字数、脚注、匿名、结构要件取自官方须知（可信）；字体字号、行距、版心取自三篇已发表论文实测（可信，但属出版版式，非投稿要求）。须知本身未规定任何版式。",
+    "typography_authority": "published",
+    "cross_check": {
+      "status": "verified",
+      "samples": 3,
+      "sample_type": "研究论文（14—16 页）",
+      "confirmed": [
+        "标题 20pt 楷体、作者 13.5pt 仿宋、摘要 9.5pt 楷体、一级标题 11.5pt 黑体、正文 10pt 宋体、行距 15.5pt、表题 9pt 黑体、表注 7.5pt（三篇一致）"
+      ],
+      "note": "投稿须知未规定任何版式，版式全部取自实物实测；引用体制、字数、匿名要求取自官方须知。"
+    }
+  },
+  "page": {
+    "size": "A4",
+    "size_mm": {
+      "width": 210,
+      "height": 297
+    },
+    "margin_mm": {
+      "top": 26.7,
+      "bottom": 26.0,
+      "left": 30.0,
+      "right": 29.0
+    },
+    "columns": 1
+  },
+  "assumptions": [
+    "标题编号体系：须知未列，据其援引的《中国高等学校社会科学学报编排规范》推定，并与三篇已发表论文实测一致",
+    "表注层序（注在前、资料来源在后）：三篇论文中仅一篇含表注，样本不足，按常见惯例处理",
+    "中图分类号与文献标识码：须知未提及，但三篇已发表论文均含「中图分类号＋文献标识码＋文章编号」四件套，据此列为必备",
+    "正文字号实测为 9.9pt，疑因 PDF 整体缩放约 1%，规则集按 10pt 记录"
+  ],
+  "blocks": [
+    {
+      "type": "title",
+      "lang": "zh",
+      "required": true,
+      "style": "题目",
+      "max_chars": 20,
+      "allow_subtitle": true
+    },
+    {
+      "type": "abstract",
+      "lang": "zh",
+      "required": true,
+      "style": "摘要",
+      "label": "摘　要：",
+      "max_chars": 500
+    },
+    {
+      "type": "keywords",
+      "lang": "zh",
+      "required": true,
+      "style": "关键词",
+      "label": "关键词：",
+      "count_min": 3,
+      "count_max": 6,
+      "separator": "；"
+    },
+    {
+      "type": "classification_code",
+      "scheme": "CLC",
+      "required": true,
+      "style": "分类号",
+      "label": "中图分类号：",
+      "inline_with": [
+        "document_code",
+        "article_number"
+      ]
+    },
+    {
+      "type": "document_code",
+      "scheme": "CLC-DOC",
+      "required": true,
+      "style": "分类号",
+      "label": "文献标识码：",
+      "fixed_value": "A"
+    },
+    {
+      "type": "article_number",
+      "required": true,
+      "style": "分类号",
+      "label": "文章编号：",
+      "fixed_value": "1001-9952（年份）"
+    },
+    {
+      "type": "doi",
+      "required": false,
+      "style": "分类号",
+      "label": "DOI: ",
+      "note": "单独一行，实测三篇均含"
+    },
+    {
+      "type": "body",
+      "required": true
+    },
+    {
+      "type": "references",
+      "required": true,
+      "style_id": "CJYJ-2016",
+      "style": "参考文献",
+      "label": "参考文献："
+    },
+    {
+      "type": "title",
+      "lang": "en",
+      "required": true,
+      "style": "英文题目"
+    },
+    {
+      "type": "authors",
+      "lang": "en",
+      "required": true,
+      "style": "英文作者",
+      "note": "作者姓名标注汉语拼音"
+    },
+    {
+      "type": "affiliations",
+      "lang": "en",
+      "required": true,
+      "style": "英文单位"
+    },
+    {
+      "type": "abstract",
+      "lang": "en",
+      "required": true,
+      "style": "英文摘要",
+      "label": "Abstract: "
+    },
+    {
+      "type": "keywords",
+      "lang": "en",
+      "required": true,
+      "style": "英文关键词",
+      "label": "Key words: ",
+      "separator": "; "
+    }
+  ],
+  "typography": {
+    "body": {
+      "font_cn": "宋体",
+      "font_latin": "Times New Roman",
+      "size_pt": 10,
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 15.5
+      },
+      "first_line_indent_chars": 2,
+      "align": "both",
+      "measured": {
+        "size_pt": 9.9,
+        "line_pt": [
+          15.2,
+          16.4
+        ],
+        "note": "三篇论文实测区间"
+      }
+    },
+    "title": {
+      "font_cn": "楷体",
+      "size_pt": 20,
+      "align": "center",
+      "bold": false,
+      "measured": true
+    },
+    "authors": {
+      "font_cn": "仿宋",
+      "size_pt": 13.5,
+      "align": "center",
+      "measured": true,
+      "separator": "，"
+    },
+    "affiliations": {
+      "font_cn": "宋体",
+      "size_pt": 8,
+      "align": "center",
+      "measured": true
+    },
+    "title_en": {
+      "font_cn": "黑体",
+      "font_latin": "Times New Roman",
+      "size_pt": 14,
+      "bold": true,
+      "align": "center"
+    },
+    "abstract": {
+      "font_cn": "楷体",
+      "size_pt": 9.5,
+      "label_font_cn": "黑体",
+      "measured": true,
+      "label": "摘　要："
+    },
+    "keywords": {
+      "font_cn": "黑体",
+      "size_pt": 9.5,
+      "measured": true
+    },
+    "classification": {
+      "font_cn": "黑体",
+      "size_pt": 9.5,
+      "measured": true
+    },
+    "footnote": {
+      "font_cn": "宋体",
+      "size_pt": 9
+    }
+  },
+  "headings": {
+    "numbering": "cn-hierarchical",
+    "max_level": 4,
+    "levels": [
+      "一、",
+      "（一）",
+      "1.",
+      "(1)"
+    ],
+    "unnumbered_sections": [],
+    "level1": {
+      "font_cn": "黑体",
+      "size_pt": 11.5,
+      "bold": false,
+      "align": "center",
+      "measured": true
+    },
+    "level2": {
+      "inherit": "body",
+      "align": "left"
+    },
+    "level3": {
+      "inherit": "body",
+      "align": "left"
+    },
+    "level4": {
+      "inherit": "body",
+      "align": "left",
+      "inline_with_body": true
+    },
+    "numbering_source": "推定：依据须知援引的《中国高等学校社会科学学报编排规范》，并与三篇已发表论文实测一致"
+  },
+  "numbering": {
+    "tables": "表1",
+    "figures": "图1",
+    "equations": "(1)",
+    "footnotes": "1",
+    "footnotes_scope": "per_page",
+    "rule": "注释为每页脚注，标序号，每页重新编号"
+  },
+  "citation": {
+    "system": "numbered",
+    "style_id": "CJYJ-2016",
+    "in_text": {
+      "position": "inline",
+      "bracket": "[]",
+      "note": "采用「实引」方式，正文标注与文末列表须一一对应",
+      "must_require_bidirectional_match": true
+    },
+    "reference_list": {
+      "sort": "by_appearance_order",
+      "type_markers": {
+        "book": "M",
+        "compilation": "C",
+        "newspaper": "N",
+        "journal": "J",
+        "thesis": "D",
+        "report": "R",
+        "standard": "S",
+        "patent": "P",
+        "electronic": "EB/OL",
+        "chapter": "A"
+      },
+      "separator_punct": "英文句点分隔各著录项，全角冒号与括号用于出版地与页码",
+      "formats": {
+        "book": "[序号]主要责任者.文献题名[M].版本.出版地：出版者，出版年：起止页码（任选）。",
+        "journal": "[序号]主要责任者.文献题名[J].刊名，年，（期）：起止页码。",
+        "newspaper": "[序号]主要责任者.文献题名[N].报纸名，出版日期（版次）。",
+        "chapter": "[序号]析出文献主要责任者.析出文献题名[A].原文献主要责任者.原文献题名[C].出版地：出版者，出版年。",
+        "translated": "[序号]（国名或地区）主要责任者.文献题名[M].（译者）.出版地：出版者，出版年：起止页码（任选）。",
+        "electronic": "主要责任者.电子文献题名[EB/OL].文献出处或可获得地址，发表或更新日期。"
+      },
+      "examples": [
+        "[1] 张军.中国经济增长的制度基础[M].上海：上海人民出版社，2018：25-40。",
+        "[2] 林毅夫.新结构经济学与中国发展[J].经济研究，2019，（3）：4-16。"
+      ]
+    }
+  },
+  "tables": {
+    "style": "three-line",
+    "side_walls": false,
+    "border_pt": {
+      "top": 1.5,
+      "header_bottom": 0.5,
+      "bottom": 1.5
+    },
+    "border_pt_source": "推定：须知未规定，三篇论文的表格线宽未逐一测量",
+    "font_size_pt": 7.5,
+    "caption_position": "above",
+    "caption_align": "center",
+    "caption_font_cn": "黑体",
+    "caption_size_pt": 9.0,
+    "caption_numbering": "表1",
+    "caption_gap": "表号与表名之间留约两字空",
+    "measured": true,
+    "note_layers": [
+      {
+        "kind": "general",
+        "prefix": "注：",
+        "trailing_punct": true,
+        "position": "below",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 7.5
+      },
+      {
+        "kind": "source",
+        "prefix": "资料来源：",
+        "trailing_punct": true,
+        "position": "below_general",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 7.5
+      }
+    ],
+    "note_order_note": "表注字号实测为 7.5pt（六号）；层序为推定值",
+    "repeat_header_on_break": true
+  },
+  "figures": {
+    "border": false,
+    "caption_position": "below",
+    "caption_align": "center",
+    "caption_font_cn": "黑体",
+    "caption_size_pt": 9.0,
+    "caption_numbering": "图1",
+    "note_layers": [
+      {
+        "kind": "general",
+        "prefix": "注：",
+        "trailing_punct": true,
+        "position": "below_caption",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 7.5
+      },
+      {
+        "kind": "source",
+        "prefix": "资料来源：",
+        "trailing_punct": true,
+        "position": "below_general",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 7.5
+      }
+    ],
+    "prefer_vector": true
+  },
+  "limits": {
+    "total": {
+      "value": 25000,
+      "metric": "B",
+      "scope": "正文",
+      "strict": false,
+      "min": 15000,
+      "note": "须知要求 15000—25000 字，不接受短文与超短文"
+    },
+    "total_min": 15000,
+    "abstract": {
+      "value": 500,
+      "metric": "chars_cn",
+      "strict": true
+    },
+    "keywords": {
+      "min": 3,
+      "max": 6
+    },
+    "title_chars_max": 20
+  },
+  "submission": {
+    "anonymous": true,
+    "anonymize_blocks": [
+      "authors",
+      "affiliations",
+      "acknowledgement",
+      "funding_statement"
+    ],
+    "author_page": {
+      "separate_page": true,
+      "position": "before_body",
+      "note": "实行双向匿名审稿，作者个人信息须全部放在与正文内容相独立的首页",
+      "fields": [
+        "paper_title",
+        "author_name",
+        "affiliation",
+        "phone",
+        "email",
+        "mailing_address",
+        "corresponding_author",
+        "funding_info"
+      ]
+    }
+  },
+  "personal_fields": [
+    {
+      "id": "paper_title",
+      "label_zh": "文章标题",
+      "scope": "paper",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "author_name",
+      "label_zh": "作者姓名（含汉语拼音）",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "affiliation",
+      "label_zh": "作者单位",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "phone",
+      "label_zh": "联系电话",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false,
+      "sensitive": true
+    },
+    {
+      "id": "email",
+      "label_zh": "电子邮箱",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false,
+      "sensitive": true
+    },
+    {
+      "id": "mailing_address",
+      "label_zh": "通讯地址",
+      "scope": "paper",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false,
+      "sensitive": true
+    },
+    {
+      "id": "corresponding_author",
+      "label_zh": "通讯作者",
+      "scope": "paper",
+      "required": false,
+      "placement": "author_page",
+      "prefill_from_paper": false
+    },
+    {
+      "id": "funding_info",
+      "label_zh": "基金项目（含项目主持人）",
+      "scope": "paper",
+      "required": false,
+      "placement": "author_page",
+      "prefill_from_paper": true,
+      "note": "须注明项目名称、项目主持人姓名与项目编号"
+    }
+  ],
+  "statements": {
+    "data_availability": {
+      "required": false
+    },
+    "conflict_of_interest": {
+      "required": false
+    }
+  }
+}

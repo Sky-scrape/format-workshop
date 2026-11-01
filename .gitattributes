@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF，否则某些环境下 cmd 解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制：不做换行符转换，也不参与 diff
+*.docx binary
+*.doc binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.xlsx binary

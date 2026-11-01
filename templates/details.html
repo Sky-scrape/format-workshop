@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}补齐作者信息 · 格式工坊{% endblock %}
+{% block style %}
+<style>
+.fill-shell{padding:26px 34px 60px;max-width:1180px;margin:auto}
+.fill-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;
+margin-bottom:18px}
+.fill-head h1{font-family:"Songti SC",SimSun,serif;font-size:24px;font-weight:600;margin:0 0 6px;letter-spacing:.5px}
+.fill-head p{font-size:12px;color:var(--ink3);margin:0;line-height:1.8}
+.fill-head p b{color:var(--accent);font-weight:500}
+.steps{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--ink3)}
+.steps i{width:17px;height:17px;border-radius:50%;border:1px solid var(--line);display:inline-grid;
+place-items:center;font-style:normal;font-size:9px;margin-right:4px}
+.steps .done i{background:var(--accent-soft);border-color:#bcd6ca;color:var(--accent)}
+.steps .now{color:var(--accent)}.steps .now i{border-color:var(--accent);color:var(--accent)}
+.steps em{width:22px;height:1px;background:var(--line);display:inline-block;font-style:normal}
+.fill-grid{display:grid;grid-template-columns:320px 1fr;gap:14px;margin-bottom:14px;align-items:start}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.card h2{font-size:13px;font-weight:600;margin:0 0 4px}
+.card h2 span{font-weight:400;font-size:10.5px;color:var(--ink3);margin-left:6px}
+.card>.sub{font-size:11px;color:var(--ink3);margin:0 0 14px;line-height:1.8}
+.kv{display:grid;gap:9px;margin:0}
+.kv div{display:grid;grid-template-columns:56px 1fr;gap:10px;font-size:11.5px;line-height:1.7}
+.kv dt{color:var(--ink3);flex:none}
+.kv dd{margin:0;text-align:left;color:var(--ink2);word-break:break-word}
+.field{margin:0 0 13px}
+.field label{display:flex;align-items:baseline;gap:7px;font-size:12px;margin-bottom:5px}
+.field label b{font-weight:500}
+.badge-need{font-size:9.5px;color:var(--danger);background:var(--danger-bg);border-radius:4px;padding:1px 6px}
+.badge-has{font-size:9.5px;color:var(--ink3);background:var(--line2);border-radius:4px;padding:1px 6px}
+.field input,.field textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+font-size:12.5px;color:var(--ink);background:#fff;outline:none;font-family:inherit;line-height:1.7}
+.field input:focus,.field textarea:focus{border-color:#a9c8ba;box-shadow:0 0 0 3px rgba(23,107,87,.08)}
+.field textarea{min-height:96px;resize:vertical}
+.field .hint{font-size:10.5px;color:var(--ink3);margin-top:4px;line-height:1.7}
+.footer-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.checklist{margin:0;padding-left:18px;font-size:11.5px;color:var(--ink2);line-height:2}
+.checklist li{margin:0}
+.actions{display:flex;align-items:center;gap:16px;margin-top:20px;flex-wrap:wrap}
+.actions .note{font-size:11px;color:var(--ink3);line-height:1.8}
+.warn-box{background:var(--danger-bg);border:1px solid #efcfc7;border-radius:10px;padding:12px 14px;
+font-size:11.5px;color:#7d3a30;line-height:1.9;margin:0 0 14px}
+@media(max-width:900px){.fill-grid{grid-template-columns:1fr}.footer-grid{grid-template-columns:1fr}
+.fill-shell{padding:18px 14px 44px}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="fill-shell">
+  <div class="fill-head">
+    <div>
+      <h1>补齐作者信息与缺失要件</h1>
+      <p>{{ meta.original }} → <b>{{ journal }}</b> · 这里填的每一段文字都会按该刊版式放到位，正文一个字都不动</p>
+    </div>
+    <div class="steps">
+      <span class="done"><i>✓</i>上传</span><em></em>
+      <span class="done"><i>✓</i>选刊</span><em></em>
+      <span class="now"><i>3</i>补录</span><em></em>
+      <span><i>4</i>出稿</span>
+    </div>
+  </div>
+
+  {% if n_need %}
+  <div class="warn-box">这份稿子在《{{ journal }}》还缺 {{ n_need }} 项要件。
+    你可以现在就补，也可以跳过——跳过时这些位置不会出现任何占位符，成品保持原样。</div>
+  {% endif %}
+
+  <form method="post">
+    <div class="fill-grid">
+      <section class="card">
+        <h2>已从稿子里识别</h2>
+        <p class="sub">这些不需要你重输；要改请直接在 Word 里改后重新上传。</p>
+        <dl class="kv">
+          <div><dt>标题</dt><dd>{{ title or '—' }}</dd></div>
+          <div><dt>署名</dt><dd>{{ authors or '—' }}</dd></div>
+          <div><dt>中文摘要</dt><dd>{{ abstract_len }} 字</dd></div>
+          <div><dt>关键词</dt><dd>{{ keywords[:40] or '—' }}</dd></div>
+          <div><dt>内容块</dt><dd>{{ stats.get('body', '—') }} 段 · {{ stats.get('tables', '—') }} 表 · {{ stats.get('figures', '—') }} 图</dd></div>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2>缺失要件 <span>只有该刊要求、而稿子里没有的才会出现</span></h2>
+        {% if not fields %}<p class="sub">该刊要求的组成部分都已具备，这里没有要补的。</p>{% endif %}
+        {% for f in fields %}
+        <div class="field">
+          <label><b>{{ f.label }}</b>
+            {% if f.need %}<span class="badge-need">该刊必备 · 缺失</span>{% else %}<span class="badge-has">已有，可改</span>{% endif %}
+          </label>
+          {% if f.key == 'english_abstract' %}
+          <textarea name="{{ f.key }}" placeholder="粘贴你已定稿的英文摘要，工具不会替你翻译或改写">{{ f.value }}</textarea>
+          {% else %}
+          <input type="text" name="{{ f.key }}" value="{{ f.value }}" placeholder="{{ f.hint }}">
+          {% endif %}
+          {% if f.hint and f.key == 'english_abstract' %}<div class="hint">{{ f.hint }}</div>{% endif %}
+        </div>
+        {% endfor %}
+        {% if unknown_missing %}
+        <div class="hint">另外 {{ unknown_missing|join('、') }} 不在网页补录范围内，需要在 Word 里加上，或投稿时由编辑部给定。</div>
+        {% endif %}
+      </section>
+    </div>
+
+    <section class="card" style="margin-bottom:14px">
+      <h2>首页脚注 <span>按该刊常见做法放在首页底部</span></h2>
+      <p class="sub">留空就完全不出现，不会留下"基金项目："这样的空标签。</p>
+      <div class="footer-grid">
+        {% for key, label, hint, value in footer_fields %}
+        <div class="field">
+          <label><b>{{ label }}</b></label>
+          <input type="text" name="{{ key }}" value="{{ value }}" placeholder="{{ hint }}">
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if author_fields %}
+    <section class="card" style="margin-bottom:14px">
+      <h2>作者信息页 <span>该刊要求单独成页，放在正文之前，匿名稿会整页删除</span></h2>
+      <p class="sub">按该刊要求逐项填写；跳过的项不会出现在页面上，也不会留下空标签。</p>
+      <div class="footer-grid">
+        {% for f in author_fields %}
+        <div class="field">
+          <label><b>{{ f.label }}</b></label>
+          <input type="text" name="{{ f.key }}" value="{{ f.value }}" placeholder="{{ f.hint }}">
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="card" style="margin-bottom:14px">
+      <h2>该刊还要求在投稿系统里填 <span>这些不写进稿件</span></h2>
+      <p class="sub">如实现在系统里填，工具不收集、不保存这些信息。</p>
+      <ul class="checklist">
+        {% for p in personal %}
+        <li>{{ p.label_zh }}{% if p.required %}（必填）{% endif %}{% if p.note %} · {{ p.note }}{% endif %}</li>
+        {% else %}
+        <li>该刊规则集没有声明额外的投稿系统字段。</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <div class="actions">
+      <button class="btn" type="submit">开始排版<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10h13M11 5l5 5-5 5"/></svg></button>
+      <span class="note">全部留空也能直接排版——补录是可选的，不是必填门槛。</span>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}转换完成 · 格式工坊{% endblock %}
+{% block body %}
+<div class="result-shell">
+  <section class="result-hero">
+    <div class="success-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
+    <div><h1>排版完成，稿件已就绪。</h1>
+      <p>{{ meta.original }} 已按 <strong>{{ journal.name }}</strong> 的版式完成重排{% if meta.elapsed %} · 耗时 {{ meta.elapsed }} 秒{% endif %}</p>
+      <div class="result-tags"><span class="tag {{ journal.auth_class }}">版式依据：{{ journal.auth_label }}</span><span class="tag {{ 't-ok' if journal.status == 'verified' else 't-part' }}">{{ journal.status_label }}</span>{% if meta.injected %}<span class="tag t-ok">已注入 {{ meta.injected|length }} 项作者信息</span>{% endif %}{% if meta.rejected %}<span class="tag t-part">已驳回 {{ meta.rejected }} 条改动</span>{% endif %}</div>
+    </div>
+    <div class="result-stats">
+      <div class="stat"><strong>{{ meta.blocks or '—' }}</strong><span>内容块</span></div>
+      <div class="stat"><strong>{{ meta.audit_total }}</strong><span>审计记录</span></div>
+      <div class="stat"><strong>{{ 4 if meta.docx_anon else 3 }}</strong><span>交付文件</span></div>
+    </div>
+  </section>
+
+  <section class="panel download-panel">
+    <h2>获取交付文件</h2><p>成品与报告同源生成，报告记录与实际改动一一对应{% if meta.created %} · 生成于 {{ meta.created }}{% endif %}</p>
+    <div class="downloads">
+      {% if meta.docx_anon %}
+      <a class="download-card primary" href="/job/{{ job }}/download/docx-anon" download>
+        <span class="download-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v5h4M9 12h6M9 15.5h4"/></svg></span>
+        <span class="download-text"><strong>匿名稿（投稿用）</strong><span>已删除 {{ meta.anon_removed }} 处身份信息 · {{ meta.stem }}-{{ journal.name }}-匿名稿.docx</span></span>
+        <span class="download-arrow"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v9M6 9.5 10 13.5l4-4M4 16.5h12"/></svg></span>
+      </a>
+      {% endif %}
+      <a class="download-card{% if not meta.docx_anon %} primary{% endif %}" href="/job/{{ job }}/download/docx" download>
+        <span class="download-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v5h4M9 12h6M9 15.5h6"/></svg></span>
+        <span class="download-text"><strong>{% if meta.docx_anon %}署名稿（留档用）{% else %}成品稿件{% endif %}</strong><span>{% if meta.docx_anon %}作者信息完整，供校样与留档{% else %}{{ meta.stem }}-{{ journal.name }}.docx{% endif %}</span></span>
+        <span class="download-arrow"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v9M6 9.5 10 13.5l4-4M4 16.5h12"/></svg></span>
+      </a>
+      <a class="download-card" href="/job/{{ job }}/download/triage" download>
+        <span class="download-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3 4 7v5c0 4.7 3.4 7.7 8 9 4.6-1.3 8-4.3 8-9V7z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg></span>
+        <span class="download-text"><strong>投稿体检</strong><span>结构、字数与引用核对</span></span>
+        <span class="download-arrow"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v9M6 9.5 10 13.5l4-4M4 16.5h12"/></svg></span>
+      </a>
+      <a class="download-card" href="/job/{{ job }}/download/audit" download>
+        <span class="download-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3.5h14v17H5zM8 8h8M8 12h8M8 16h5"/></svg></span>
+        <span class="download-text"><strong>审计报告</strong><span>{{ meta.audit_total }} 条改动可逐条核对</span></span>
+        <span class="download-arrow"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v9M6 9.5 10 13.5l4-4M4 16.5h12"/></svg></span>
+      </a>
+    </div>
+  </section>
+
+  <section class="report-card">
+    <div class="report-head"><div class="report-title"><h2>核对投稿体检与改动记录</h2><a id="openReport" href="/job/{{ job }}/triage.html" target="_blank" rel="noopener">在新窗口打开 ↗</a></div><div class="tabs" role="tablist"><button class="tab on" type="button" role="tab" aria-selected="true" data-pane="triagePane" data-url="/job/{{ job }}/triage.html">投稿体检</button><button class="tab" type="button" role="tab" aria-selected="false" data-pane="auditPane" data-url="/job/{{ job }}/audit.html">审计报告 · {{ meta.audit_total }} 条</button></div></div>
+    <div class="pane on" id="triagePane" role="tabpanel"><iframe src="/job/{{ job }}/triage.html" title="投稿体检报告"></iframe></div><div class="pane" id="auditPane" role="tabpanel" hidden><iframe src="/job/{{ job }}/audit.html" title="格式改动审计报告" loading="lazy"></iframe></div>
+  </section>
+
+  <section class="panel download-panel" style="margin-top:18px">
+    <h2>换刊 / 对比 / 补录</h2><p>同一份稿件不必重新上传：直接按另一本刊的规则再出一版，或先看看两本刊差在哪</p>
+    <form method="post" action="/job/{{ job }}/retry" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <select name="journal" aria-label="选择目标期刊" style="flex:1;min-width:200px;height:42px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;color:var(--ink);background:#fff">
+        {% for j in journals %}<option value="{{ j.id }}" {% if j.id == journal.id %}selected{% endif %}>{{ j.name }}</option>{% endfor %}
+      </select>
+      <button class="btn btn-light" type="submit">按这本刊重排<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 10h13M11 5l5 5-5 5"/></svg></button>
+    </form>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <select id="diffTo" aria-label="选择对比期刊" style="flex:1;min-width:200px;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;color:var(--ink);background:#fff">
+        {% for j in journals %}<option value="{{ j.id }}" {% if j.id == journal.id %}selected{% endif %}>{{ j.name }}</option>{% endfor %}
+      </select>
+      <a class="btn btn-light" id="diffLink" href="/job/{{ job }}/diff?to={{ journal.id }}">只看两刊差异</a>
+      <a class="btn btn-light" href="/job/{{ job }}/details">补充 / 修改作者信息</a>
+    </div>
+  </section>
+
+  <div class="result-bottom"><p>正文与表格文字保持原样。字数超限与信息缺失仅作提示，不会自动删改。结果文件在本机保留 24 小时。</p><a class="btn btn-light" href="/workspace">转换另一份稿件<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 10h13M11 5l5 5-5 5"/></svg></a></div>
+</div>
+{% endblock %}
+{% block script %}
+<script>
+const tabs=[...document.querySelectorAll('.tab')],openReport=document.getElementById('openReport');
+/* 报告与本页同源，直接量高度铺开，避免 iframe 内再套一条滚动条 */
+const fit=f=>{if(!f)return;try{const d=f.contentDocument;if(d&&d.documentElement){const h=Math.max(d.documentElement.scrollHeight,d.body?d.body.scrollHeight:0);if(h>0)f.style.height=(h+6)+'px'}}catch(e){}};
+tabs.forEach(tab=>tab.addEventListener('click',()=>{tabs.forEach(item=>{const active=item===tab;item.classList.toggle('on',active);item.setAttribute('aria-selected',active?'true':'false');const pane=document.getElementById(item.dataset.pane);pane.classList.toggle('on',active);pane.hidden=!active;if(active)fit(pane.querySelector('iframe'))});openReport.href=tab.dataset.url}));
+const allFrames=()=>document.querySelectorAll('.pane iframe');
+allFrames().forEach(f=>{f.addEventListener('load',()=>fit(f));fit(f)});
+window.addEventListener('load',()=>allFrames().forEach(fit));
+setTimeout(()=>allFrames().forEach(fit),700);
+const diffTo=document.getElementById('diffTo'),diffLink=document.getElementById('diffLink');
+if(diffTo)diffTo.addEventListener('change',()=>{diffLink.href='/job/{{ job }}/diff?to='+diffTo.value});
+</script>
+{% endblock %}

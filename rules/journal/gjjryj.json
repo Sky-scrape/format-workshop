@@ -1,0 +1,506 @@
+{
+  "schema_version": "0.1",
+  "journal": {
+    "id": "gjjryj",
+    "name_zh": "国际金融研究",
+    "name_en": "Studies of International Finance",
+    "language": "zh",
+    "sponsor": "中国银行股份有限公司、中国国际金融学会",
+    "cn_number": "CN 11-1132/F",
+    "issn": "1006-1029"
+  },
+  "verification": {
+    "status": "verified",
+    "source_url": "http://www.gjjryj.org.cn/CN/column/column2.shtml",
+    "template_url": "http://www.gjjryj.org.cn/attached/file/20231218/20231218172806_284.doc",
+    "template_date": "2023-12-18",
+    "verified_at": "2026-10-31",
+    "verified_by": "官方稿约全文 + 官方投稿模板 docx 解析",
+    "notes": "同一刊在多个第三方站点上的要求互相矛盾（行距 1.5 倍 vs 20 磅、GB/T 7714-2015 vs 2005）。本规则集只采信官网与官方模板，以模板解析结果为准。",
+    "typography_authority": "template",
+    "cross_check": {
+      "status": "verified",
+      "samples": 3,
+      "sample_type": "研究论文（14—29 页）",
+      "doi_prefix": "10.16475/j.cnki.1006-1029",
+      "confirmed": [
+        "正文字号 10.5pt、一级标题 14pt、表注 9pt、版心宽 163.7mm 与官方模板完全一致"
+      ],
+      "observed_difference": [
+        "行距：官方模板写「行距 20 磅」，实物排版实测 15.8pt（= 10.5pt × 1.5），即出版环节改用 1.5 倍行距",
+        "规则集保留模板的 20 磅固定值——本刊有官方模板，投稿以模板为准；15.8pt 是编辑部排版后的结果"
+      ],
+      "conclusion": "本刊是五本中唯一「正文字号、一级标题、表注、版心」四项全部与实物吻合的，说明官方模板可信度高。唯一差异（行距）属投稿要求与出版排版的正常区别，不修改规则集。"
+    }
+  },
+  "page": {
+    "size": "A4",
+    "size_mm": {
+      "width": 210,
+      "height": 297
+    },
+    "margin_mm": {
+      "top": 25.4,
+      "bottom": 25.4,
+      "left": 22.5,
+      "right": 25.0
+    },
+    "columns": 1
+  },
+  "blocks": [
+    {
+      "type": "title",
+      "lang": "zh",
+      "required": true,
+      "style": "标题"
+    },
+    {
+      "type": "subtitle",
+      "lang": "zh",
+      "required": false,
+      "style": "副标题"
+    },
+    {
+      "type": "abstract",
+      "lang": "zh",
+      "required": true,
+      "style": "内容摘要",
+      "label": "内容摘要：",
+      "max_chars": 350
+    },
+    {
+      "type": "keywords",
+      "lang": "zh",
+      "required": true,
+      "style": "关键词",
+      "label": "关键词：",
+      "count_min": 3,
+      "count_max": 5,
+      "separator": "  "
+    },
+    {
+      "type": "classification_code",
+      "scheme": "CLC",
+      "required": true,
+      "style": "分类号",
+      "label": "中图分类号：",
+      "inline_with": [
+        "document_code"
+      ]
+    },
+    {
+      "type": "document_code",
+      "scheme": "CLC-DOC",
+      "required": true,
+      "style": "分类号",
+      "label": "文献标识码：",
+      "fixed_value": "A"
+    },
+    {
+      "type": "body",
+      "required": true
+    },
+    {
+      "type": "references",
+      "required": true,
+      "style_id": "GB-T-7714-2015",
+      "style": "参考文献",
+      "label": "参考文献："
+    },
+    {
+      "type": "title",
+      "lang": "en",
+      "required": true,
+      "style": "英文标题"
+    },
+    {
+      "type": "abstract",
+      "lang": "en",
+      "required": true,
+      "style": "Abstract",
+      "label": "Abstract：",
+      "section_label_zh": "英文梗概"
+    },
+    {
+      "type": "keywords",
+      "lang": "en",
+      "required": true,
+      "style": "Key words",
+      "label": "Key words：",
+      "count_min": 3,
+      "count_max": 5,
+      "separator": "，"
+    }
+  ],
+  "typography": {
+    "body": {
+      "font_cn": "宋体",
+      "font_latin": "Times New Roman",
+      "size_pt": 10.5,
+      "line_spacing": {
+        "mode": "exact",
+        "value_pt": 20
+      },
+      "first_line_indent_chars": 2,
+      "align": "both"
+    },
+    "title": {
+      "font_cn": "黑体",
+      "size_pt": 22,
+      "bold": false,
+      "align": "center",
+      "line_spacing": {
+        "mode": "multiple",
+        "value": 1.5
+      }
+    },
+    "subtitle": {
+      "font_cn": "黑体",
+      "size_pt": 16,
+      "align": "center"
+    },
+    "abstract": {
+      "font_cn": "宋体",
+      "size_pt": 10.5,
+      "first_line_indent_chars": 2
+    },
+    "title_en": {
+      "font_cn": "黑体",
+      "font_latin": "Times New Roman",
+      "size_pt": 14,
+      "bold": true,
+      "align": "center"
+    },
+    "footnote": {
+      "font_cn": "宋体",
+      "size_pt": 9
+    }
+  },
+  "headings": {
+    "numbering": "cn-hierarchical",
+    "max_level": 3,
+    "levels": [
+      "一、",
+      "（一）",
+      "1."
+    ],
+    "unnumbered_sections": [
+      "引言"
+    ],
+    "intro_title_text": "引  言",
+    "level1": {
+      "font_cn": "黑体",
+      "size_pt": 14,
+      "bold": true,
+      "align": "center",
+      "space_before_lines": 0.5,
+      "space_after_lines": 0.5
+    },
+    "level2": {
+      "inherit": "body",
+      "bold": false,
+      "align": "left"
+    },
+    "level3": {
+      "inherit": "body",
+      "bold": false,
+      "align": "left"
+    }
+  },
+  "numbering": {
+    "tables": "表1",
+    "figures": "图1",
+    "equations": "(1)",
+    "footnotes": "1",
+    "rule": "表格、图、数学公式、脚注必须分别连续编号，编号方式统一"
+  },
+  "citation": {
+    "system": "numbered",
+    "style_id": "GB-T-7714-2015",
+    "in_text": {
+      "one_or_two_authors": "全部体现",
+      "two_authors_conjunction_cn": "和",
+      "two_authors_conjunction_en": "&",
+      "three_plus_authors": "仅体现第一位作者",
+      "three_plus_ellipsis_cn": "等",
+      "three_plus_ellipsis_en": "et al."
+    },
+    "reference_list": {
+      "sort": "cn-first-by-pinyin-then-en-by-alphabet",
+      "number_format": "[1]",
+      "space_after_number": 1,
+      "punctuation_rule": "姓名与文献类型标识后使用英文句点，其余使用中文标点",
+      "type_markers": {
+        "book": "M",
+        "journal": "J",
+        "newspaper": "N",
+        "conference": "C",
+        "compilation": "G",
+        "thesis": "D",
+        "report": "R",
+        "standard": "S",
+        "patent": "P",
+        "database": "DB",
+        "computer_program": "CP",
+        "electronic_bulletin": "EB",
+        "online": "OL"
+      },
+      "book_requires_place": true,
+      "journal_requires_start_page": true,
+      "newspaper_requires_edition_and_date": true,
+      "english_author_name_rule": "姓在前名在后，姓不缩写，名缩写"
+    }
+  },
+  "tables": {
+    "style": "three-line",
+    "side_walls": false,
+    "border_pt": {
+      "top": 1.5,
+      "header_bottom": 0.5,
+      "bottom": 1.5
+    },
+    "font_size_pt": 10.5,
+    "font_size_source": "推定：官方稿约与模板均未明确表内正文字号，暂按正文五号处理，待人工确认",
+    "open_issue": "稿约要求「表格两侧不加墙线」，但官方模板 XML 中表格左右两侧存在 0.5pt 边框。二者矛盾，当前按稿约执行（不加墙线），已记录待编辑部确认。",
+    "caption_position": "above",
+    "caption_align": "center",
+    "caption_font_cn": "黑体",
+    "caption_size_pt": 10.5,
+    "caption_numbering": "表1",
+    "caption_gap": "一字空",
+    "note_layers": [
+      {
+        "kind": "source",
+        "prefix": "资料来源：",
+        "trailing_punct": false,
+        "position": "below",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 9,
+        "first_line_indent_chars": 2
+      },
+      {
+        "kind": "general",
+        "prefix": "注：",
+        "trailing_punct": true,
+        "position": "below",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 9,
+        "first_line_indent_chars": 2
+      },
+      {
+        "kind": "cell",
+        "marker": "①②③",
+        "trailing_punct": true,
+        "position": "below",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 9
+      }
+    ],
+    "note_line_spacing": {
+      "mode": "multiple",
+      "value": 1.0
+    },
+    "repeat_header_on_break": true,
+    "unit_must_be_clear": true
+  },
+  "figures": {
+    "border": false,
+    "caption_position": "below",
+    "caption_align": "center",
+    "caption_font_cn": "黑体",
+    "caption_size_pt": 10.5,
+    "caption_numbering": "图1",
+    "caption_gap": "一字空",
+    "note_layers": [
+      {
+        "kind": "source",
+        "prefix": "资料来源：",
+        "trailing_punct": false,
+        "position": "below_caption",
+        "align": "center",
+        "font_cn": "黑体",
+        "size_pt": 9
+      },
+      {
+        "kind": "general",
+        "prefix": "注：",
+        "trailing_punct": true,
+        "position": "below_source",
+        "align": "left",
+        "font_cn": "宋体",
+        "size_pt": 9
+      }
+    ],
+    "prefer_vector": true,
+    "resolution_dpi_min": 300
+  },
+  "limits": {
+    "total": {
+      "value": 17000,
+      "metric": "B",
+      "scope": "正文",
+      "strict": false,
+      "note": "官方表述为「正文17000字左右」，属建议值，仅提醒不阻断"
+    },
+    "abstract": {
+      "value": 350,
+      "metric": "chars_cn",
+      "strict": true
+    },
+    "keywords": {
+      "min": 3,
+      "max": 5
+    },
+    "title_chars_max": 20
+  },
+  "submission": {
+    "anonymous": true,
+    "anonymize_blocks": [
+      "acknowledgement",
+      "funding_statement"
+    ],
+    "author_page": {
+      "separate_page": true,
+      "position": "before_body",
+      "note": "作者信息页置于正文前，请勿单独提交",
+      "fields": [
+        "paper_title",
+        "author_name",
+        "gender",
+        "id_number",
+        "organization_and_position",
+        "professional_title",
+        "highest_degree",
+        "research_direction",
+        "main_achievements",
+        "mailing_address",
+        "phone",
+        "email",
+        "funding_info"
+      ]
+    }
+  },
+  "personal_fields": [
+    {
+      "id": "paper_title",
+      "label_zh": "文章题目",
+      "scope": "paper",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "author_name",
+      "label_zh": "姓名",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": true,
+      "note": "需注明作者顺序"
+    },
+    {
+      "id": "gender",
+      "label_zh": "性别",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false
+    },
+    {
+      "id": "id_number",
+      "label_zh": "身份证号",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false,
+      "sensitive": true,
+      "note": "敏感信息，禁止写入审计报告与日志"
+    },
+    {
+      "id": "organization_and_position",
+      "label_zh": "工作单位及职务",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": true
+    },
+    {
+      "id": "professional_title",
+      "label_zh": "职称",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false
+    },
+    {
+      "id": "highest_degree",
+      "label_zh": "最高学历",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false
+    },
+    {
+      "id": "research_direction",
+      "label_zh": "研究方向",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false
+    },
+    {
+      "id": "main_achievements",
+      "label_zh": "主要研究成果",
+      "scope": "author",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false
+    },
+    {
+      "id": "mailing_address",
+      "label_zh": "通讯地址（含邮编）",
+      "scope": "paper",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false
+    },
+    {
+      "id": "phone",
+      "label_zh": "联系电话",
+      "scope": "paper",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false,
+      "sensitive": true
+    },
+    {
+      "id": "email",
+      "label_zh": "电子邮箱",
+      "scope": "paper",
+      "required": true,
+      "placement": "author_page",
+      "prefill_from_paper": false,
+      "sensitive": true
+    },
+    {
+      "id": "funding_info",
+      "label_zh": "资助情况",
+      "scope": "paper",
+      "required": false,
+      "placement": "author_page",
+      "prefill_from_paper": true,
+      "note": "项目名称与编号"
+    }
+  ],
+  "statements": {
+    "data_availability": {
+      "required": false
+    },
+    "conflict_of_interest": {
+      "required": false
+    }
+  }
+}

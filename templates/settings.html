@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}AI 设置 · 格式工坊{% endblock %}
+{% block style %}
+<style>
+.set-shell{padding:34px 34px 70px;max-width:920px;margin:auto}
+.set-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.set-head h1{font-family:"Songti SC",SimSun,serif;font-size:26px;font-weight:600;margin:0 0 6px;letter-spacing:.8px}
+.set-head p{font-size:12px;color:var(--ink3);margin:0;line-height:1.9;max-width:560px}
+.state{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink3);border:1px solid var(--line);border-radius:999px;padding:7px 14px;background:#fff}
+.state i{width:8px;height:8px;border-radius:50%;background:#c3cec7}
+.state.on i{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+.state.on{color:var(--accent);border-color:#cfe3d9;background:var(--accent-soft)}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:16px}
+.card h2{font-size:14px;margin:0 0 4px;font-weight:600}
+.card>p.hint{font-size:11.5px;color:var(--ink3);margin:0 0 18px;line-height:1.9}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px}
+.field label small{color:var(--ink3);font-weight:400}
+.field input[type=text],.field input[type=password],.field input[type=number],.field select{width:100%;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;color:var(--ink);background:#fbfcfb;outline:0}
+.field input:focus,.field select:focus{border-color:#a9c3b7;background:#fff}
+.field .note{font-size:10.5px;color:var(--ink3);margin-top:6px;line-height:1.7}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.switch{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--soft);margin-bottom:16px}
+.switch input{width:18px;height:18px;accent-color:var(--accent)}
+.switch strong{font-size:12.5px;display:block;font-weight:500}
+.switch span{font-size:11px;color:var(--ink3)}
+.radios{display:flex;gap:10px;flex-wrap:wrap}
+.radios label{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:12px;cursor:pointer;flex:1;min-width:220px;background:#fbfcfb}
+.radios label:has(input:checked){border-color:var(--accent);background:#f4faf6}
+.radios input{margin-top:2px;accent-color:var(--accent)}
+.radios strong{display:block;font-weight:500;margin-bottom:2px}
+.radios span{font-size:10.5px;color:var(--ink3);line-height:1.6}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px}
+.btn-ghost{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:9px;min-height:42px;padding:0 18px;font-size:12px;cursor:pointer}
+.btn-ghost:hover{border-color:#a9c3b7;color:var(--accent)}
+.flash{font-size:12px;border-radius:9px;padding:10px 14px;margin-bottom:16px;line-height:1.7}
+.flash.bad{background:var(--danger-bg);border:1px solid #efcfc7;color:var(--danger)}
+.flash.good{background:var(--accent-soft);border:1px solid #cfe3d9;color:var(--accent)}
+#testOut{font-size:11.5px;line-height:1.7;margin-top:12px;padding:10px 13px;border-radius:9px;display:none}
+#testOut.ok{display:block;background:var(--accent-soft);color:var(--accent);border:1px solid #cfe3d9}
+#testOut.bad{display:block;background:var(--danger-bg);color:var(--danger);border:1px solid #efcfc7}
+.boundaries{display:grid;gap:10px;margin-top:4px}
+.boundary{display:flex;gap:10px;font-size:11.5px;line-height:1.8;color:var(--ink2)}
+.boundary b{flex:none;width:56px;font-weight:500;font-size:10.5px;text-align:center;border-radius:5px;padding:2px 0;height:22px}
+.boundary b.yes{background:var(--accent-soft);color:var(--accent)}
+.boundary b.no{background:var(--danger-bg);color:var(--danger)}
+@media(max-width:700px){.set-shell{padding:20px 14px 50px}.grid2{grid-template-columns:1fr}.radios label{min-width:0}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="set-shell">
+  <div class="set-head">
+    <div>
+      <h1>AI 设置</h1>
+      <p>AI 只参与「判断这一段是什么」和「从稿约里读格式要求」，不生成也不改写论文里的任何文字。不配置时全站按纯规则运行，功能不受影响。</p>
+    </div>
+    <div class="state {{ 'on' if ai_on else '' }}"><i></i>{{ '已启用' if ai_on else ('已配置但未启用' if ai_enabled else '未启用') }}</div>
+  </div>
+
+  {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
+  {% if success %}<div class="flash good">{{ success }}</div>{% endif %}
+
+  <form method="post" action="/settings" id="aiForm">
+    <div class="card">
+      <h2>服务连接</h2>
+      <p class="hint">任何兼容 OpenAI 接口的服务都可以，模型与厂商不受限制。</p>
+
+      <div class="switch">
+        <input type="checkbox" id="enabled" name="enabled" {{ 'checked' if cfg.enabled }}>
+        <label for="enabled" style="margin:0;cursor:pointer">
+          <strong>启用 AI 辅助</strong>
+          <span>关闭时稿件内容不出本机；启用后下方「发送范围」决定发出去多少。</span>
+        </label>
+      </div>
+
+      <div class="field">
+        <label for="preset">服务商预设 <small>只是帮你填地址和模型名，随时可以手动改</small></label>
+        <select id="preset">
+          <option value="">— 手动填写 —</option>
+          <option value="https://api.deepseek.com/v1|deepseek-chat">DeepSeek</option>
+          <option value="https://dashscope.aliyuncs.com/compatible-mode/v1|qwen-plus">通义千问</option>
+          <option value="https://api.moonshot.cn/v1|moonshot-v1-8k">Kimi（月之暗面）</option>
+          <option value="https://api.openai.com/v1|gpt-4o-mini">OpenAI</option>
+          <option value="http://127.0.0.1:11434/v1|qwen2.5:7b">本地 Ollama（不出网）</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="base_url">接口地址</label>
+        <input type="text" id="base_url" name="base_url" value="{{ cfg.base_url }}"
+               placeholder="https://api.deepseek.com/v1" autocomplete="off">
+        <div class="note">填到 <code>/v1</code> 为止，程序会自己拼 <code>/chat/completions</code>。</div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="model">模型名</label>
+          <input type="text" id="model" name="model" value="{{ cfg.model }}"
+                 placeholder="deepseek-chat" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="api_key">API Key</label>
+          <input type="password" id="api_key" name="api_key" value=""
+                 placeholder="{{ '已保存，留空则不修改' if key_set else '粘贴你的密钥' }}"
+                 autocomplete="new-password">
+          <div class="note">{% if key_set %}已有一份密钥存在本机配置里。{% else %}尚未设置。{% endif %}本地 Ollama 不需要真实密钥，随便填一个即可（例如 <code>ollama</code>）。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>发送范围</h2>
+      <p class="hint">稿件还没发表。发多少出去，由你决定。</p>
+      <div class="radios">
+        <label>
+          <input type="radio" name="send_mode" value="snippet" {{ 'checked' if cfg.send_mode != 'full' }}>
+          <div><strong>只发片段（推荐）</strong><span>每个待判定的段落只发开头 60 字与结尾一小段，足够判断「这是标题还是正文」。</span></div>
+        </label>
+        <label>
+          <input type="radio" name="send_mode" value="full" {{ 'checked' if cfg.send_mode == 'full' }}>
+          <div><strong>发全文</strong><span>判定更准，但整段正文会离开本机。仅在信任该服务时使用。</span></div>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>高级</h2>
+      <div class="grid2">
+        <div class="field">
+          <label for="timeout">超时（秒）</label>
+          <input type="number" id="timeout" name="timeout" value="{{ cfg.timeout }}" min="5" max="300">
+          <div class="note">超时即放弃 AI，按纯规则继续，不会让转换失败。</div>
+        </div>
+        <div class="field">
+          <label for="snippet_chars">片段长度（字）</label>
+          <input type="number" id="snippet_chars" name="snippet_chars" value="{{ cfg.snippet_chars }}" min="20" max="400">
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" type="submit">保存设置</button>
+      <button class="btn-ghost" type="button" id="testBtn">测试连通</button>
+      <span style="font-size:11px;color:var(--ink3)">配置存在本机 <code>{{ config_path }}</code>，密钥为明文，请勿分享该文件。</span>
+    </div>
+    <div id="testOut"></div>
+  </form>
+
+  <div class="card" style="margin-top:16px">
+    <h2>AI 在这里做什么，不做什么</h2>
+    <div class="boundaries">
+      <div class="boundary"><b class="yes">允许</b><div>判断某个段落是标题、表注还是正文；规则已经确定的段落，AI 不得推翻。</div></div>
+      <div class="boundary"><b class="yes">允许</b><div>从稿约 PDF 里读出字号、行距、引用制等要求，生成规则集草稿——每条都要附原文引文。</div></div>
+      <div class="boundary"><b class="no">禁止</b><div>改写、润色、翻译、压缩任何正文文字。转换前后做文本指纹比对，一旦不一致整批作废。</div></div>
+      <div class="boundary"><b class="no">禁止</b><div>决定字号、行距这类版式数值。这些只从规则集查表，查不到就是规则集缺数据。</div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block script %}
+<script>
+document.getElementById('preset').addEventListener('change', e => {
+  const v = e.target.value;
+  if (!v) return;
+  const [url, model] = v.split('|');
+  document.getElementById('base_url').value = url;
+  document.getElementById('model').value = model;
+});
+document.getElementById('testBtn').addEventListener('click', async e => {
+  const btn = e.currentTarget, out = document.getElementById('testOut');
+  btn.disabled = true; btn.textContent = '测试中…';
+  out.className = ''; out.textContent = '';
+  try {
+    const r = await fetch('/settings/test', {method: 'POST', body: new FormData(document.getElementById('aiForm'))});
+    const d = await r.json();
+    out.className = d.ok ? 'ok' : 'bad';
+    out.textContent = d.msg;
+  } catch (err) {
+    out.className = 'bad';
+    out.textContent = '请求没有发出去：' + err;
+  } finally {
+    btn.disabled = false; btn.textContent = '测试连通';
+  }
+});
+</script>
+{% endblock %}

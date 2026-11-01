@@ -1,0 +1,8 @@
+# 运行本应用必需的依赖
+Flask>=3.0
+python-docx>=1.1
+PyMuPDF>=1.24
+
+# 可选：扫描版稿约 PDF 的 OCR。装了才会启用，不装也能跑
+# （文字层 PDF 不受影响，只有纯图片 PDF 需要它）
+# rapidocr-onnxruntime>=1.3

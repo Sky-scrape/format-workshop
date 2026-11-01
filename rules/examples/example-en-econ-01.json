@@ -1,0 +1,96 @@
+{
+  "schema_version": "0.1",
+  "_warning": "示例结构，用于验证与中文期刊规则集共用同一套 schema。所有数值均为占位，未经核对官方作者指南，不得直接使用。",
+  "journal": {
+    "id": "example-en-econ-01",
+    "name_zh": "示例英文金融期刊",
+    "name_en": "Example English Finance Journal",
+    "language": "en",
+    "verification": {
+      "status": "unverified",
+      "source_url": null,
+      "verified_at": null,
+      "verified_by": null
+    }
+  },
+  "page": {
+    "size": "Letter",
+    "margin_mm": { "top": 25, "bottom": 25, "left": 25, "right": 25 },
+    "columns": 1
+  },
+  "blocks": [
+    { "type": "title", "lang": "en", "required": true, "style": "Title" },
+    { "type": "authors", "lang": "en", "required": true, "style": "Author" },
+    { "type": "affiliations", "lang": "en", "required": true, "style": "Affiliation" },
+    { "type": "abstract", "lang": "en", "required": true, "style": "Abstract", "max_words": 150 },
+    { "type": "keywords", "lang": "en", "required": true, "style": "Keywords", "count_min": 3, "count_max": 6, "separator": ";" },
+    { "type": "classification_code", "scheme": "JEL", "required": true, "style": "JEL" },
+    { "type": "body", "required": true },
+    { "type": "acknowledgement", "required": false },
+    { "type": "references", "required": true, "style_id": "APA-7", "style": "References" },
+    { "type": "appendix", "required": false },
+    { "type": "data_availability", "required": true, "style": "Section" },
+    { "type": "conflict_of_interest", "required": true, "style": "Section" }
+  ],
+  "personal_fields": [
+    { "id": "author_name", "label_zh": "作者姓名", "label_en": "Author name", "scope": "author", "required": true, "placement": "byline", "prefill_from_paper": true },
+    { "id": "author_affiliation", "label_zh": "作者单位", "label_en": "Affiliation", "scope": "author", "required": true, "placement": "byline", "prefill_from_paper": true },
+    { "id": "corresponding_email", "label_zh": "通讯作者邮箱", "label_en": "Corresponding email", "scope": "paper", "required": true, "placement": "byline", "prefill_from_paper": false },
+    { "id": "orcid", "label_zh": "ORCID", "label_en": "ORCID", "scope": "author", "required": false, "placement": "byline", "prefill_from_paper": false, "hint": "0000-0000-0000-0000" },
+    { "id": "funding_statement", "label_zh": "资助说明", "label_en": "Funding statement", "scope": "paper", "required": false, "placement": "section", "prefill_from_paper": true },
+    { "id": "declaration_text", "label_zh": "声明正文", "label_en": "Declaration text", "scope": "paper", "required": true, "placement": "section", "prefill_from_paper": false, "hint": "无利益冲突时留空，系统按该刊惯用表述填充" }
+  ],
+  "typography": {
+    "body": { "font_latin": "Times New Roman", "size_pt": 12, "line_spacing": { "mode": "multiple", "value": 2.0 }, "first_line_indent_chars": 0 },
+    "abstract": { "font_latin": "Times New Roman", "size_pt": 11, "italic": true },
+    "footnote": { "font_latin": "Times New Roman", "size_pt": 9 }
+  },
+  "headings": {
+    "numbering": "arabic-decimal",
+    "levels": ["1.", "1.1", "1.1.1"],
+    "level1": { "font_latin": "Times New Roman", "size_pt": 12, "align": "left", "bold": true }
+  },
+  "citation": {
+    "system": "author-year",
+    "style_id": "APA-7",
+    "in_text": { "format": "parenthetical", "multiple_separator": ";", "include_page": false },
+    "reference_list": { "sort": "alphabetical", "authors_before_et_al": 20, "language_field_required": false }
+  },
+  "tables": {
+    "style": "booktabs",
+    "border_pt": { "top": 1.0, "header_bottom": 0.5, "bottom": 1.0 },
+    "caption_position": "above",
+    "caption_numbering": "Table 1",
+    "note_layers": [
+      { "kind": "general", "prefix": "Notes:", "trailing_punct": true, "position": "below" }
+    ],
+    "repeat_header_on_break": true,
+    "font_size_pt": 10
+  },
+  "figures": {
+    "caption_position": "below",
+    "caption_numbering": "Figure 1",
+    "note_position": "below",
+    "note_prefix": "Notes:",
+    "resolution_dpi_min": 300
+  },
+  "limits": {
+    "total": { "value": null, "metric": null },
+    "abstract": { "value": 150, "metric": "words_en" },
+    "figures_max": null,
+    "tables_max": null
+  },
+  "submission": {
+    "anonymous": true,
+    "anonymize_blocks": ["title", "authors", "affiliations", "acknowledgement", "funding_statement"],
+    "author_page": {
+      "separate_page": true,
+      "position": "before_body",
+      "fields": ["author_name", "author_affiliation", "corresponding_email", "orcid"]
+    }
+  },
+  "statements": {
+    "data_availability": { "required": true },
+    "conflict_of_interest": { "required": true }
+  }
+}

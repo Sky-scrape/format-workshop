@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}草稿复核 · {{ journal.name_zh or jid }} · 格式工坊{% endblock %}
+{% block style %}
+<style>
+.dr-shell{padding:34px 34px 80px;max-width:1100px;margin:auto}
+.dr-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.dr-head h1{font-family:"Songti SC",SimSun,serif;font-size:26px;font-weight:600;margin:0 0 6px;letter-spacing:.8px}
+.dr-head p{font-size:12px;color:var(--ink3);margin:0;line-height:1.9}
+.kpis{display:flex;gap:0;margin:18px 0 20px;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
+.kpi{flex:1;padding:14px 18px;border-left:1px solid var(--line2)}
+.kpi:first-child{border:0}
+.kpi strong{display:block;font-family:Georgia,serif;font-size:23px;font-weight:400;color:var(--dark)}
+.kpi span{font-size:10.5px;color:var(--ink3)}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:16px}
+.card h2{font-size:13.5px;margin:0 0 4px}
+.card p.hint{font-size:11.5px;color:var(--ink3);margin:0 0 14px;line-height:1.8}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;font-weight:500;color:var(--ink3);font-size:11px;padding:8px 10px;border-bottom:1px solid var(--line);background:var(--soft)}
+td{padding:9px 10px;border-bottom:1px solid var(--line2);vertical-align:top;line-height:1.7}
+tr:last-child td{border-bottom:0}
+td.k{color:var(--ink2);white-space:nowrap;width:150px}
+td.v{font-weight:500;width:150px}
+td.q{color:var(--ink3);font-size:11.5px}
+td.q em{color:#8a6626;font-style:normal;background:var(--gold-bg);padding:1px 4px;border-radius:3px}
+.flash{font-size:12px;border-radius:9px;padding:11px 14px;margin-bottom:16px;line-height:1.8}
+.flash.bad{background:var(--danger-bg);border:1px solid #efcfc7;color:var(--danger)}
+.flash.warn{background:var(--gold-bg);border:1px solid #e3d4b6;color:var(--gold)}
+.flash.good{background:var(--accent-soft);border:1px solid #cfe3d9;color:var(--accent)}
+ul.plain{margin:0;padding-left:18px;font-size:11.5px;line-height:1.9;color:var(--ink2)}
+details summary{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:10px}
+.publish{display:flex;gap:12px;align-items:flex-start;font-size:12px;line-height:1.8;margin-bottom:14px}
+.publish input{margin-top:3px;accent-color:var(--accent);width:16px;height:16px}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.btn-ghost{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:9px;min-height:42px;padding:0 18px;font-size:12px;cursor:pointer}
+.meta{font-size:11px;color:var(--ink3);line-height:1.9}
+.meta code{background:var(--soft);padding:1px 5px;border-radius:4px}
+@media(max-width:760px){.dr-shell{padding:20px 14px 50px}.kpis{flex-wrap:wrap}.kpi{min-width:50%}td.q{display:none}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="dr-shell">
+  <div class="dr-head">
+    <div>
+      <h1>{{ journal.name_zh or jid }}</h1>
+      <p>AI 从 <code>{{ ext.source_file }}</code> 抽取的规则集草稿。共 {{ ext.pages or '?' }} 页，模型 {{ ext.ai_model or '未记录' }}。
+        {% if ext.text_method == 'ocr' %}全文由 <strong>OCR 识别</strong>（{{ ext.ocr_engine }}）。
+        {% elif ext.text_method == 'mixed' %}第 {{ ext.ocr_pages|join('、') }} 页无文字层，其余取自文字层。
+        {% else %}文字取自 PDF 原生文字层，逐字精确。{% endif %}</p>
+    </div>
+    <a class="btn-light btn" href="/journals" style="text-decoration:none">返回规则库</a>
+  </div>
+
+  {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
+
+  <div class="kpis">
+    <div class="kpi"><strong>{{ report.stats.extracted or 0 }}</strong><span>有原文依据</span></div>
+    <div class="kpi"><strong>{{ report.stats.inherited or 0 }}</strong><span>沿用基线，需核对</span></div>
+    <div class="kpi"><strong>{{ report.stats.dropped or 0 }}</strong><span>引文核验失败被丢弃</span></div>
+    <div class="kpi"><strong>{{ report.errors|length }}</strong><span>阻断性错误</span></div>
+  </div>
+
+  {% if ext.text_method in ('ocr', 'mixed') %}
+  <div class="flash warn"><strong>这份稿约是扫描件，文字由 OCR 识别。</strong>
+    数字、字号、上下标最容易被读错（例如「小五」读成「小五号」、下标丢失）。
+    下面每条的引文都是从 OCR 文本里取的，能对上原文，但<strong>对得上不等于读对了</strong>——请对着 PDF 原件核一遍数值。
+    {% if ext.truncated %}<br>另外稿约超过字数上限，已截断，后半部分未参与抽取。{% endif %}
+  </div>
+  {% elif ext.truncated %}
+  <div class="flash warn">稿约超过字数上限，已截断，后半部分未参与抽取。</div>
+  {% endif %}
+
+  {% if report.errors %}
+  <div class="flash bad"><strong>以下问题会阻断发布：</strong>
+    <ul class="plain" style="margin-top:6px">{% for e in report.errors %}<li>{{ e.msg }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  {% if dropped %}
+  <div class="flash warn"><strong>{{ dropped|length }} 项被丢弃。</strong>模型给了值，但它提供的原文引文在 PDF 里找不到——按约定视为编造。
+    <ul class="plain" style="margin-top:6px">{% for d in dropped %}<li>{{ d.label }}：{{ d.why }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>从稿约里读到的</h2>
+    <p class="hint">每条右侧是 PDF 原文片段，你可以直接拿去比对。值不对就说明模型读错了这一句。</p>
+    {% if evidence %}
+    <table>
+      <thead><tr><th>字段</th><th>抽取值</th><th>原文依据</th></tr></thead>
+      <tbody>
+      {% for key, it in evidence.items() %}
+        <tr>
+          <td class="k">{{ it.label }}</td>
+          <td class="v">{{ it.value }}</td>
+          <td class="q"><em>{{ it.evidence }}</em></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="hint" style="margin:0">一项都没抽到。可能是稿约写得比较笼统，或 PDF 是扫描件。</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <details {{ 'open' if inherited|length < 12 }}>
+      <summary>{{ inherited|length }} 项未从稿约抽到，沿用结构基线</summary>
+      <p class="hint">这些值来自《国际金融研究》的规则集，只保证结构完整，不代表本刊。发布前请逐条对着稿约核一遍。</p>
+      <table>
+        <thead><tr><th>字段</th><th>当前值</th></tr></thead>
+        <tbody>
+        {% for it in inherited %}
+          <tr><td class="k">{{ it.label }}</td><td>{{ it.value if it.value is not none else '—' }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>发布为正式规则集</h2>
+    <p class="hint">发布后会写入 <code>rules/journal/{{ jid }}.json</code>，并立即重建样板 docx 与规格页。三件产物同源。</p>
+    <form method="post" action="/journals/draft/{{ jid }}/publish">
+      <label class="publish">
+        <input type="checkbox" name="confirm" value="on" required>
+        <div>我已逐项核对过：标注「沿用基线」的字段确实适用于本刊，或已按稿约修正。</div>
+      </label>
+      {% if ext.baseline %}
+      <label class="publish">
+        <input type="checkbox" name="overwrite" value="on">
+        <div>如果 <code>{{ jid }}.json</code> 已存在，覆盖它（旧文件会备份到草稿目录）。</div>
+      </label>
+      {% endif %}
+      <div class="actions">
+        <button class="btn" type="submit" {{ 'disabled' if not report.ok_to_publish }}>发布并生成样板</button>
+        <span class="meta">发布后 <code>verification.status</code> 仍为 <code>unverified</code>，直到你在 json 里手工改成 <code>verified</code>。</span>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>放弃这份草稿</h2>
+    <form method="post" action="/journals/draft/{{ jid }}/discard" onsubmit="return confirm('删除草稿？原 PDF 与抽取结果都会一起删掉。')">
+      <div class="actions"><button class="btn-ghost" type="submit">删除草稿</button>
+      <span class="meta">不影响已有的 {{ jid }}.json（如果有）。</span></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

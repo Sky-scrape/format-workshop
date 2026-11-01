@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ err.title }} · 格式工坊{% endblock %}
+{% block style %}
+<style>
+.fail-shell{padding:44px 34px 60px;max-width:760px;margin:auto}
+.fail-card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:30px 32px}
+.fail-mark{width:46px;height:46px;border-radius:50%;background:var(--danger-bg);color:var(--danger);display:grid;place-items:center;margin-bottom:18px}
+.fail-mark svg{width:22px;height:22px}
+.fail-card h1{font-family:"Songti SC",SimSun,serif;font-size:24px;font-weight:600;margin:0 0 10px;letter-spacing:.5px}
+.fail-card>.hint{font-size:13.5px;color:var(--ink2);line-height:2;margin:0 0 22px}
+.keep{display:flex;align-items:center;gap:10px;background:var(--soft);border:1px solid var(--line2);border-radius:10px;padding:12px 14px;font-size:12px;color:var(--ink2);margin-bottom:22px}
+.keep b{font-weight:500;color:var(--ink)}
+.keep svg{width:16px;height:16px;color:var(--accent);flex:none}
+.retry-form{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.retry-form select{flex:1;min-width:210px;height:42px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;color:var(--ink);background:#fff}
+.fail-note{font-size:11px;color:var(--ink3);line-height:1.9;margin:0}
+details.tech{margin-top:22px;border-top:1px solid var(--line2);padding-top:16px}
+details.tech summary{font-size:12px;color:var(--ink3);cursor:pointer;list-style:none}
+details.tech summary::-webkit-details-marker{display:none}
+details.tech summary:before{content:"▸";margin-right:7px;font-size:10px}
+details.tech[open] summary:before{content:"▾"}
+details.tech pre{margin:12px 0 0;padding:14px;background:#f7f9f6;border:1px solid var(--line2);border-radius:9px;font-size:11.5px;line-height:1.8;color:var(--ink2);overflow:auto;max-height:280px;white-space:pre-wrap;word-break:break-all}
+.fail-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}
+</style>
+{% endblock %}
+{% block body %}
+<div class="fail-shell">
+  <div class="fail-card">
+    <div class="fail-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg></div>
+    <h1>{{ err.title }}</h1>
+    <p class="hint">{{ err.hint }}</p>
+
+    {% if meta.original %}
+    <div class="keep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v5h4"/></svg>
+      <span>稿件 <b>{{ meta.original }}</b> 已保留在本机，<b>不需要重新上传</b>，换一本刊或直接重试即可。</span></div>
+    {% endif %}
+
+    <form class="retry-form" method="post" action="/job/{{ job }}/retry">
+      <select name="journal" aria-label="选择目标期刊">
+        {% for j in journals %}<option value="{{ j.id }}" {% if j.id == selected %}selected{% endif %}>{{ j.name }}</option>{% endfor %}
+      </select>
+      <button class="btn" type="submit">再试一次<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
+    </form>
+    <p class="fail-note">如果换刊后仍然失败，多半是稿件结构问题而不是期刊规则问题，可把下方技术细节一并发给开发者。</p>
+
+    {% if err.detail %}
+    <details class="tech"><summary>技术细节（给开发者看）</summary><pre>{{ err.detail }}</pre></details>
+    {% endif %}
+
+    <div class="fail-actions">
+      <a class="btn btn-light" href="/workspace">回到工作台</a>
+      <button class="btn btn-light" type="button" data-dialog="helpDialog">查看使用说明</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
