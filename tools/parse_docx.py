@@ -304,9 +304,7 @@ def parse(path, ai_cfg=None):
             continue
 
         level = conf = None
-        if has_omml(child) and len(text) < 120:
-            btype = "equation"
-        elif PAT["abstract"].match(text):
+        if PAT["abstract"].match(text):
             btype = "abstract"
         elif PAT["keywords"].match(text):
             btype = "keywords"
@@ -337,6 +335,11 @@ def parse(path, ai_cfg=None):
                 else:
                     btype = f"heading{level}"
                     seen_level.add(level)
+            elif has_omml(child) and len(text) < 120:
+                # 公式检测必须排在这里：标题、摘要这些结构一旦被认成 equation，
+                # 后面整篇的标题编号与正文套版都会失准——带公式的标题很常见
+                # （「二、模型：y=α+βx」），它不是公式段落。
+                btype = "equation"
             elif not seen_level and len(text) < 250 and ascii_ratio(text) > 0.7:
                 btype = "english_title"
             elif len(blocks) <= 3 and len(text) < 80:

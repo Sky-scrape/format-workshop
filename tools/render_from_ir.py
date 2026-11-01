@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt
@@ -182,12 +182,16 @@ def head_line_pt(lv, size, body_line):
 
 
 def restyle(p, *, cn, latin, size, align, line_pt, indent=None, bold=None,
-            before_pt=None, after_pt=None, letter_spacing=None):
+            before_pt=None, after_pt=None, letter_spacing=None, line_rule="exact"):
     clear_para_formatting(p)
     if align:
         p.alignment = ALIGN[align]
     if line_pt:
         p.paragraph_format.line_spacing = Pt(line_pt)
+        if line_rule == "at_least":
+            # 「固定值」会裁掉超出行高的内容（分式、积分、上下标、内嵌图），
+            # 「最小值」只保底不封顶，视觉上一样，但不会被裁
+            p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.AT_LEAST
     # 前置区的段间距：标题、作者、摘要之间靠它撑开，否则 26pt 标题会与下一行贴死
     if before_pt is not None:
         p.paragraph_format.space_before = Pt(before_pt)
@@ -200,12 +204,28 @@ def restyle(p, *, cn, latin, size, align, line_pt, indent=None, bold=None,
                 letter_spacing=letter_spacing)
 
 
+XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+
+
 def replace_text(p, new_text):
-    """整体替换段落文字。仅用于标题编号这类不含脚注引用的段落。"""
-    for r in list(p.runs):
-        r._element.getparent().remove(r._element)
-    run = p.add_run(new_text)
-    return run
+    """替换段落文字，但保留公式、脚注引用这类非文字对象。
+
+    不能用「删光 run 再塞一个新 run」的做法：段落里若有 OMML 公式或脚注引用，
+    会被连对象一起删掉，而且删得悄无声息——文字看着对，公式没了。
+    这里只改 w:t 文字节点，其余节点原样留着。
+
+    范围取 p.runs，与 p.text 的口径一致：调用方看到什么文字，就改什么文字。
+    """
+    nodes = [t for r in p.runs for t in r._r.findall(qn("w:t"))]
+    if not nodes:
+        return p.add_run(new_text)
+
+    nodes[0].text = new_text
+    if new_text[:1].isspace() or new_text[-1:].isspace():
+        nodes[0].set(XML_SPACE, "preserve")
+    for node in nodes[1:]:
+        node.text = ""
+    return None
 
 
 def apply_table(table, bp, size_pt, cn, latin):
@@ -672,6 +692,18 @@ def main():
             _nl = rules["tables"].get("note_layers") or [{}]
             note_sz = _nl[0].get("size_pt", 9)
             restyle(p, cn=cn, latin=latin, size=note_sz, align="left", line_pt=line_pt)
+            continue
+
+        # 独立公式段落：行距用「最小值」，不能用「固定值」。固定值会把分式、
+        # 积分、上下标这类向上向下伸展的公式裁掉——和图片被裁是同一类事故。
+        # 对齐方式保持原样，不强制居中：短段落里含行内公式时，解析器也会判为
+        # equation，强行居中会把普通正文段落挪位置。
+        if t == "equation":
+            restyle(p, cn=cn, latin=latin, size=size, align=None, line_pt=line_pt,
+                    line_rule="at_least")
+            audit.add(blk["idx"], t, "公式段行距",
+                      note=f"行距改为「最小值 {line_pt:g}pt」：固定值会裁掉分式与上下标",
+                      rule="typography.body")
             continue
 
         # 正文、公式、伪表格、英文区等一律按正文字体处理。
