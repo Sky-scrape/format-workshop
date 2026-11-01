@@ -6,8 +6,28 @@
 
 import ast
 import json
+import subprocess
 
-from conftest import RULES, TARGET_JOURNAL, TOOLS, render_into, run_sizes
+import pytest
+
+from conftest import (RULES, SOURCE_JOURNAL, TARGET_JOURNAL, TOOLS, render_into,
+                      run_sizes)
+
+
+def test_fixtures_use_shipped_journals():
+    """夹具只能用仓库里真实存在的规则集。
+
+    完整规则库不入库（见 `.gitignore`），如果哪天夹具换成了私有刊，本机照样
+    跑得通、CI 必挂——这个坑踩过一次，用用例钉住。
+    """
+    tracked = subprocess.run(["git", "ls-files", "rules/journal"],
+                             capture_output=True, text=True)
+    if tracked.returncode != 0:
+        pytest.skip("不在 git 工作区内，无法判断规则集是否已入库")
+
+    for jid in (SOURCE_JOURNAL, TARGET_JOURNAL):
+        assert f"rules/journal/{jid}.json" in tracked.stdout, (
+            f"{jid}.json 没有入库：夹具用了私有规则集，CI 会失败")
 
 
 def test_no_hardcoded_format_values_in_renderers():

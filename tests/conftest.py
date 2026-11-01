@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,10 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 RULES = ROOT / "rules" / "journal"
 
-SOURCE_JOURNAL = "ej"      # 经济研究：编号体系、题注、标签写法都与其他刊不同
+# 只能用仓库自带的期刊。完整 23 本规则库不入库，夹具若用了私有刊，
+# 本机跑得通、CI 必挂（`test_fixtures_use_shipped_journals` 守着这一条）。
+# gjjryj→tjyj 在开源的三本里改动最多（12 条审计、6 处文字改动）。
+SOURCE_JOURNAL = "gjjryj"  # 国际金融研究
 TARGET_JOURNAL = "tjyj"    # 统计研究
 
 
@@ -163,6 +167,22 @@ def render_into(workdir, source_docx, target=TARGET_JOURNAL, rejects=None, rules
 
 
 NS_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def note_reorder_blocks(p):
+    """只换了位置、没换文字的题注/表注块。
+
+    目标刊要求「注」在「资料来源」之前时，渲染器会交换这两段的内容（`表注／图注
+    层序调整`）。逐块比对必然误判成「改了字」，所以先把这类纯换位识别出来：
+    这些块的文字整体守恒（多重集合相同），只是换了承载的段落。
+    """
+    note_types = {"table_note", "figure_caption", "table_caption"}
+    notes = {i for i in p.changed_idx if p.block_type.get(i) in note_types}
+    if not notes:
+        return set()
+    before = Counter(p.source_texts[i] for i in notes)
+    after = Counter(p.output_texts[i] for i in notes)
+    return notes if before == after else set()
 
 
 def run_sizes(docx_path):
