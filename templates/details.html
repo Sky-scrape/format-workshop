@@ -36,6 +36,12 @@ font-size:12.5px;color:var(--ink);background:#fff;outline:none;font-family:inher
 .footer-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .checklist{margin:0;padding-left:18px;font-size:11.5px;color:var(--ink2);line-height:2}
 .checklist li{margin:0}
+.cite-opt{display:flex;align-items:flex-start;gap:9px;margin-top:12px;padding:11px 13px;
+border:1px solid var(--line);border-radius:9px;background:#faf9f6;cursor:pointer}
+.cite-opt:hover{border-color:#cfc9bd}
+.cite-opt input{margin:3px 0 0;flex:0 0 auto;width:15px;height:15px;accent-color:var(--accent)}
+.cite-opt span{font-size:12px;color:var(--ink);line-height:1.7}
+.cite-opt code{background:#eceae4;padding:1px 5px;border-radius:4px;font-size:11.5px}
 .actions{display:flex;align-items:center;gap:16px;margin-top:20px;flex-wrap:wrap}
 .actions .note{font-size:11px;color:var(--ink3);line-height:1.8}
 .warn-box{background:var(--danger-bg);border:1px solid #efcfc7;border-radius:10px;padding:12px 14px;
@@ -64,7 +70,7 @@ font-size:11.5px;color:#7d3a30;line-height:1.9;margin:0 0 14px}
     你可以现在就补，也可以跳过——跳过时这些位置不会出现任何占位符，成品保持原样。</div>
   {% endif %}
 
-  <form method="post">
+  <form method="post" id="fillForm">
     <div class="fill-grid">
       <section class="card">
         <h2>已从稿子里识别</h2>
@@ -140,10 +146,41 @@ font-size:11.5px;color:#7d3a30;line-height:1.9;margin:0 0 14px}
       </ul>
     </section>
 
+    {% if citation_offered %}
+    <section class="card" style="margin-bottom:14px">
+      <h2>引用体系 <span>默认不改</span></h2>
+      <p class="sub">
+        稿子里用的是编号引用（<code>[2]</code> 或上标）。《{{ journal }}》要求
+        {{ citation_label or '另一种写法' }}。勾选后，正文引用与文献条目会一起改写；
+        这是本工具唯一会动到文字的地方，所以默认关闭，每一条改动都会进审计。
+      </p>
+      <label class="cite-opt">
+        <input type="checkbox" name="citation" {% if citation_on %}checked{% endif %}>
+        <span>按该刊体例重排引用体系（会改写正文引用与文献条目）</span>
+      </label>
+      <p class="sub" style="margin:8px 0 0">
+        不做的情况：正文里若有一处引用对不上文献表，整批不转，审计里写明哪一条对不上——
+        引错文献比不转更麻烦。
+      </p>
+    </section>
+    {% endif %}
+
     <div class="actions">
       <button class="btn" type="submit">开始排版<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10h13M11 5l5 5-5 5"/></svg></button>
       <span class="note">全部留空也能直接排版——补录是可选的，不是必填门槛。</span>
     </div>
   </form>
 </div>
+<div class="processing-overlay" id="renderOverlay" hidden role="status" aria-live="polite">
+  <div class="processing-card"><div class="spinner"></div><h2>正在按目标刊排版</h2><p>注入补录内容、生成审计报告，请稍候</p><div class="processing-note">排版期间请保持此页面打开，正文内容不会被改写</div></div>
+</div>
+{% endblock %}
+{% block script %}
+<script>
+/* 防重复提交：双击第二个请求会被后端的任务锁挡回「正在处理」页，前端
+   先把按钮禁掉、盖遮罩，让用户根本没机会发第二次（F11）。 */
+const fillForm=document.getElementById('fillForm');
+if(fillForm)fillForm.addEventListener('submit',()=>{const b=fillForm.querySelector('button[type="submit"]');if(b.disabled)return;b.disabled=true;document.getElementById('renderOverlay').hidden=false});
+window.addEventListener('pageshow',event=>{if(event.persisted){const b=fillForm&&fillForm.querySelector('button[type="submit"]');if(b)b.disabled=false;const o=document.getElementById('renderOverlay');if(o)o.hidden=true}});
+</script>
 {% endblock %}

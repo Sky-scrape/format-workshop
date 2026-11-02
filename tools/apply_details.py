@@ -24,6 +24,11 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
+from docx.text.paragraph import Paragraph
+
+from docx_meta import sanitize_docx
+
+XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 
 # 展示顺序即插入顺序。字段 → (块类型, 语言, 锚点候选)
 # 锚点写成 (类型, 语言)，因为同一类型可能同时存在中英两套（如分类号）
@@ -104,6 +109,71 @@ def add_paragraph_after(doc, anchor_el, text):
 
 AUTHOR_PAGE_STYLE = "作者信息页"
 
+# 「作者：张三　　单位：××大学」——模板首页常把两个字段塞在同一行
+AUTHOR_SPLIT = re.compile(
+    r"^作\s*者\s*[:：]?\s*(?P<name>.*?)"
+    r"(?:(?:\u3000|\s{2,})+\s*单\s*位\s*[:：]\s*(?P<aff>.*))?$")
+
+# 前置区模板里的占位符：「单位：[单位全称，城市，邮编]」
+PLACEHOLDER = {
+    "affiliation": re.compile(r"(单\s*位\s*[:：]\s*)[\[【［][^\]】］]*[\]】］]"),
+    "author_name": re.compile(r"(作\s*者\s*[:：]\s*)[\[【［][^\]】］]*[\]】］]"),
+}
+
+
+def split_author_line(text):
+    """把「作者：张三　　单位：××大学」拆成 (姓名, 单位)。
+
+    整行塞进「作者姓名：」会变成双标签的「作者姓名：作者：张三……」，
+    首页第一眼就露馅。
+    """
+    t = (text or "").strip()
+    m = AUTHOR_SPLIT.match(t)
+    if not m:
+        return t, ""
+    return (m.group("name") or "").strip(), (m.group("aff") or "").strip()
+
+
+def fill_placeholders(doc, blocks, block_el, details):
+    """把前置区模板里的占位符就地换成补录值，返回替换成功的字段名。
+
+    不换的话，成品会一边留着「单位：[单位全称，城市，邮编]」、一边在下一行
+    印上真单位——同一条信息出现两次，比完全不填更糟。
+    只替换用户明确填过的字段，没填的占位符原样保留，不擅自删字。
+    """
+    vals = {
+        "affiliation": (details.get("affiliation_zh") or details.get("affiliation") or "").strip(),
+        "author_name": (details.get("author_name") or "").strip(),
+    }
+    if not any(vals.values()):
+        return []
+
+    done = set()
+    for b in blocks:
+        if b["type"] != "front_matter":
+            continue
+        el = block_el.get(id(b))
+        if el is None:
+            continue
+        p = Paragraph(el, doc)
+        txt = p.text
+        new = txt
+        for key, val in vals.items():
+            if val:
+                new, n = PLACEHOLDER[key].subn(lambda m, v=val: m.group(1) + v, new)
+                if n:
+                    done.add(key)
+        if new == txt:
+            continue
+        nodes = [t for r in p.runs for t in r._r.findall(qn("w:t"))]
+        if nodes:
+            nodes[0].text = new
+            nodes[0].set(XML_SPACE, "preserve")
+            for node in nodes[1:]:
+                node.text = ""
+        b["text"] = new
+    return done
+
 
 def build_author_page(doc, ir, rules, details):
     """按规则集要求的 8 类要素生成「作者信息页」，插在正文之前并分页。
@@ -117,17 +187,18 @@ def build_author_page(doc, ir, rules, details):
 
     fm = [b.get("text", "").strip() for b in ir["blocks"] if b["type"] == "front_matter"]
     title = fm[0] if fm else ""
-    authors = next((t for t in fm[1:] if not t.startswith(("——", "—", "-"))), "")
+    author_line = next((t for t in fm[1:] if not t.startswith(("——", "—", "-"))), "")
+    author_name, author_aff = split_author_line(author_line)
     abstract = next((b.get("text", "").strip() for b in ir["blocks"] if b["type"] == "abstract"), "")
     keywords = next((b.get("text", "").strip() for b in ir["blocks"] if b["type"] == "keywords"), "")
 
     values = {
         "paper_title": title,
         "paper_title_en": (details.get("english_title") or "").strip(),
-        "author_name": authors,
-        "authors": authors,
-        "affiliation": (details.get("affiliation_zh") or "").strip(),
-        "affiliations": (details.get("affiliation_zh") or "").strip(),
+        "author_name": author_name,
+        "authors": author_name,
+        "affiliation": (details.get("affiliation_zh") or author_aff or "").strip(),
+        "affiliations": (details.get("affiliation_zh") or author_aff or "").strip(),
         "abstract": abstract,
         "keywords": keywords,
         "author_note": (details.get("author_bio") or "").strip(),
@@ -215,6 +286,13 @@ def main():
     existing = {(b["type"], blang(b)) for b in blocks}
     inserted = []
     tail = {}  # 同一锚点连续插入时，后一个接在前一个之后，保持字段顺序
+
+    # 前置区模板占位符能就地填的，就不再另起一行重复注入
+    filled = fill_placeholders(doc, blocks, block_el, details)
+    if "affiliation" in filled:
+        existing.add(("affiliations", "zh"))
+    if "author_name" in filled:
+        existing.add(("authors", "zh"))
 
     # 英文区排在正文之后（经济研究、世界经济）时，注入点应落在参考文献之后，
     # 而不是紧跟中文关键词——否则成品布局就与该刊不符。位置由规则集决定，不靠猜。
@@ -315,6 +393,9 @@ def main():
         para.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     doc.save(a.docx_out)
+    # 中间快照也会被后续工序打开和另存；先把原稿的 Word/WPS 属性清掉，
+    # 避免它们一路带到交付文件里。
+    sanitize_docx(a.docx_out)
 
     # ---- 重排 IR：idx 是 body 子元素序号，插入后必须整体重算 ----
     children1 = list(doc.element.body)

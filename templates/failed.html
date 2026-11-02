@@ -30,6 +30,7 @@ details.tech pre{margin:12px 0 0;padding:14px;background:#f7f9f6;border:1px soli
     <h1>{{ err.title }}</h1>
     <p class="hint">{{ err.hint }}</p>
 
+    {% if can_retry %}
     {% if meta.original %}
     <div class="keep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v5h4"/></svg>
       <span>稿件 <b>{{ meta.original }}</b> 已保留在本机，<b>不需要重新上传</b>，换一本刊或直接重试即可。</span></div>
@@ -42,6 +43,16 @@ details.tech pre{margin:12px 0 0;padding:14px;background:#f7f9f6;border:1px soli
       <button class="btn" type="submit">再试一次<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
     </form>
     <p class="fail-note">如果换刊后仍然失败，多半是稿件结构问题而不是期刊规则问题，可把下方技术细节一并发给开发者。</p>
+    {% else %}
+    {# 解析阶段就没成功（IR 不存在）：坏文件换任何刊都不会有用，出路只有重新上传（F12） #}
+    {% if meta.original %}
+    <div class="keep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5M5 14v5h14v-5"/></svg>
+      <span>稿件 <b>{{ meta.original }}</b> 在解析阶段就没读出内容，<b>换一本刊或重试都不会成功</b>。请回到工作台<b>重新上传</b>一份新的 .docx——可在 Word 里「另存为」一次再传。</span></div>
+    {% else %}
+    <div class="keep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5M5 14v5h14v-5"/></svg>
+      <span>这份文件没能解析出内容，换一本刊或重试都不会成功。请回到工作台<b>重新上传</b>一份新的 .docx。</span></div>
+    {% endif %}
+    {% endif %}
 
     {% if err.detail %}
     <details class="tech"><summary>技术细节（给开发者看）</summary><pre>{{ err.detail }}</pre></details>

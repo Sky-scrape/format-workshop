@@ -2,6 +2,7 @@
 
 > 口径：**已覆盖**＝有 `rules/journal/{id}.json` 且三件产物齐全（样板 docx / PDF / 规格页）。
 > 状态分三种：`template`（官方模板）＞ `guide`（官方明文版式）＞ `published`（实测实物）。
+> 全量体检记录见 `rules/audit-2026-11-01.md`：字号刻度、官方与实物冲突、缺口清单与逐本结论。
 > 最后更新：2026-11-01（第六批：管理科学学报凭官方指南 + 3 篇实物补入，23 本；管理学运筹方向到位）。
 
 ## 一、已覆盖（23 本：中文 17 + 英文 6）
@@ -11,7 +12,7 @@
 | 1 | 国际金融研究 | gjjryj | 中 | 官方投稿模板 | verified | 作者信息页字段全靠补录表单 |
 | 2 | 金融研究 | jryj | 中 | 实物实测 | verified | 页边距为推定 |
 | 3 | 财经研究 | cjyj | 中 | 实物实测 | partial | 部分构件靠推定 |
-| 4 | 中国工业经济 | ciejournal | 中 | 实物实测 | verified | — |
+| 4 | 中国工业经济 | ciejournal | 中 | 官方指南（2016）+ 实物交叉核对 | verified | 指南与现行排版字号冲突，已按官方取值 |
 | 5 | 管理世界 | mwm | 中 | 实物实测 | verified | — |
 | 6 | 数量经济技术经济研究 | jqte | 中 | 官方体例 | verified | 总字数不设上限 |
 | 7 | 财贸经济 | cmjj | 中 | 官方体例 | verified | — |
@@ -21,7 +22,7 @@
 | 11 | 南开管理评论 | nkglpl | 中 | 官方投稿指南（2025/2021 两版） | partial | 仅正文/图表字号有明文，标题与行距为推定 |
 | 12 | China Economic Review | cer | 英 | Elsevier 官方指南 | partial | 版式全部为推定（官方不规定） |
 | 13 | 外国经济与管理 | wjgl | 中 | 官方投稿指南（撰稿要求） | partial | 正文字号、行距为推定 |
-| 14 | 上海财经大学学报 | cdxb | 中 | 官方投稿须知 | partial | 版式全部推定 |
+| 14 | 上海财经大学学报 | cdxb | 中 | 官方投稿须知 + 官网格式模板 .doc | verified | — |
 | 15 | Journal of Development Economics | jde | 英 | Elsevier 官方指南 | partial | 单盲，不出匿名稿；版式推定 |
 | 16 | Economic Modelling | ecmo | 英 | Elsevier 官方指南 | partial | 指南未提 JEL；版式推定 |
 | 17 | Journal of Asian Economics | jae | 英 | Elsevier 官方指南 | partial | 单盲；Highlights 条数未取到 |

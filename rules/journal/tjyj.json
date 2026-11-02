@@ -37,7 +37,8 @@
         "表格边框线宽：实物为矢量描边，未被 PDF 解析为可测线宽，按三线表常规 1.5/0.5/1.5pt 处理"
       ],
       "conclusion": "结构类规定（8 部分、四项编码连排、中英文摘要同置首页、三级标题接排）与实物完全吻合；版式类全部取自 3 篇实物实测值。"
-    }
+    },
+    "size_normalization": "字号一律落在 0.5 磅刻度上（Word 字号的真实精度）；实物实测值先按 0.98 反算排版缩放再取刻度，原始读数保留在 typography.*.size_pt_raw 或 measured 中"
   },
   "page": {
     "size": "A4",
@@ -292,7 +293,8 @@
       "size_pt": 7.5,
       "line_spacing": {
         "mode": "exact",
-        "value_pt": 12.3
+        "value_pt": 12.5,
+        "size_pt_raw": 12.3
       },
       "measured": true,
       "note": "实测 7.5pt、行距 12.3pt；中文条目为仿宋，外文为 Times New Roman"
@@ -311,7 +313,8 @@
       "size_pt": 9,
       "line_spacing": {
         "mode": "exact",
-        "value_pt": 12.3
+        "value_pt": 12.5,
+        "size_pt_raw": 12.3
       },
       "heading_align": "left",
       "heading_indent_chars": 2,
@@ -401,16 +404,15 @@
       "number_format": "[1]",
       "number_role": "list_index_only",
       "sort": "cn-first-by-pinyin-then-en-by-alphabet",
-      "cn_formats": {
-        "journal": "作者1, 作者2. 文献题名[J]. 期刊名, 年, 卷(期): 起止页码.",
-        "book": "作者. 书名[M]. 出版地: 出版者, 出版年: 起止页码.",
-        "newspaper": "作者. 文章题名[N]. 报纸名, 出版日期(版次)."
+      "templates": {
+        "cn_journal": "作者1, 作者2. 文献题名[J]. 期刊名, 年, 卷(期): 起止页码.",
+        "cn_book": "作者. 书名[M]. 出版地: 出版者, 出版年: 起止页码.",
+        "cn_newspaper": "作者. 文章题名[N]. 报纸名, 出版日期(版次).",
+        "en_journal": "Family name Initials, Family name Initials. The Title of the Article[J]. The Name of the Journal, Year, Volume(Issue): Start–End.",
+        "en_book": "Family name Initials. The Title of the Book[M]. Place: Publisher, Year: Start–End.",
+        "en_working_paper": "Family name Initials. The Title of the Article[R]. Working Paper Series, Year."
       },
-      "en_formats": {
-        "journal": "Family name Initials, Family name Initials. The Title of the Article[J]. The Name of the Journal, Year, Volume(Issue): Start–End.",
-        "book": "Family name Initials. The Title of the Book[M]. Place: Publisher, Year: Start–End.",
-        "working_paper": "Family name Initials. The Title of the Article[R]. Working Paper Series, Year."
-      },
+      "templates_source": "键名迁移（2026-11-02）：原 cn_formats / en_formats 按引用代码的 {语言}_{类型} 结构并入 templates，格式串逐字未动；两类著录写法为官方稿约样例归纳，非占位符模板",
       "indent_chars": 0,
       "hanging_indent_chars": 2.3,
       "type_marker_required": true,

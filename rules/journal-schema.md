@@ -80,6 +80,7 @@
   },
   "reference_list": {
     "sort": "by_order" | "alphabetical",
+    "templates": { "cn_journal": "{authors}：《{title}》…", "en_book": "…" },
     "authors_before_et_al": 3,
     "language_field_required": true
   }
@@ -87,6 +88,8 @@
 ```
 
 `style_id` 指向**独立的引用格式化器插件**，不写在渲染器里。新增一种引用体系 = 新增一个格式化器，不改渲染器。
+
+`reference_list.templates` 是引用体系重排（§1.4）消费的条目模板，键为 `{语言}_{类型}`（`cn_journal` / `en_book`…，与 `citation_ref.KIND` 的 slot 对应），值必须带 `{authors}` 这类**占位符**——渲染器只认带占位符的模板；纯描述式的著录写法说明（如 GB/T 7714 的「[序号]主要责任者.文献题名[M]…」）不是模板，放进来也不会被拿去改写条目。
 
 ---
 

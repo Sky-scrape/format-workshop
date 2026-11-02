@@ -38,11 +38,20 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    send_file, send_from_directory, url_for)
 
 # pythonw.exe 下没有控制台，sys.stdout/stderr 是 None，print() 会直接抛错；
-# 后台启动正是走 pythonw，所以进来先兜住这两个流。
+# 后台启动正是走 pythonw，所以进来先兜住这两个流：换成一个不打开任何文件
+# 的空设备写入器（等价于写到 NUL，但没有文件句柄）。
+class _DevNull:
+    def write(self, s):
+        return len(s)
+
+    def flush(self):
+        pass
+
+
 if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    sys.stdout = _DevNull()
 if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    sys.stderr = _DevNull()
 
 ROOT = Path(__file__).resolve().parent
 PY = sys.executable
@@ -56,12 +65,50 @@ STEP_TIMEOUT = 300
 
 sys.path.insert(0, str(ROOT / "tools"))
 import ai_assist        # noqa: E402  AI 配置与调用
+import docx_meta        # noqa: E402  DOCX 元数据隐私闸门
 import extract_journal  # noqa: E402  稿约 PDF → 规则集草稿
 import ocr              # noqa: E402  PDF 取文（文字层优先，缺则 OCR）
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 app.config["TEMPLATES_AUTO_RELOAD"] = True
+
+# 服务只绑 127.0.0.1，但绑定挡不住两件事：用户浏览器里第三方页面对本机的跨站
+# 表单 POST（简单请求无预检），以及 DNS rebinding 把攻击者域名解析到回环地址。
+# 这两条都在进入任何路由之前拦下（F07）。
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _is_local_host(host_header):
+    """取 Host 头里的主机名（去端口、去 IPv6 方括号）判断是否本机。"""
+    h = (host_header or "").strip().lower()
+    if h.startswith("["):
+        h = h[1:].split("]", 1)[0]
+    elif ":" in h:
+        h = h.rsplit(":", 1)[0]
+    return h in LOCAL_HOSTS
+
+
+@app.before_request
+def _reject_remote_and_cross_site():
+    """只接受本机自发、本站发起的请求。
+
+    ① Host 必须是回环地址：Host 是别的域名只可能是 rebinding，一律 403。
+    ② 写操作（POST 等）带了 Sec-Fetch-Site 且不是 same-origin 就 403——
+       现代浏览器跨站表单必带 cross-site；curl / 本机脚本不带这个头，不受影响。
+       GET 不拦：地址栏、书签打开页面时该头是 none，拦了就没法正常进入。
+    """
+    if not _is_local_host(request.host):
+        app.logger.warning("拒绝非本机 Host 的请求：%s %s", request.method, request.path)
+        return "拒绝访问：本服务只在本机（127.0.0.1）开放。", 403
+    if request.method in MUTATING_METHODS:
+        site = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if site and site != "same-origin":
+            app.logger.warning("拒绝跨站写请求：%s %s（Sec-Fetch-Site: %s）",
+                               request.method, request.path, site)
+            return "拒绝访问：不接受来自其他网站的提交。", 403
+    return None
 
 AUTH_LABEL = {"template": "官方模板", "guide": "官方规定", "published": "实物实测"}
 AUTH_CLASS = {"template": "a-tpl", "guide": "a-guide", "published": "a-pub"}
@@ -88,8 +135,8 @@ DETAIL_FIELDS = [
 
 FOOTER_FIELDS = [
     ("funding", "基金项目", "写在首页脚注，例：国家自然科学基金青年项目（72003012）"),
-    ("author_bio", "作者简介", "写在首页脚注，例：杨思楷，男，经济学博士，研究方向……"),
-    ("corresponding", "通讯作者", "如需在首页注明，例：杨思楷，邮箱 xxx@example.com"),
+    ("author_bio", "作者简介", "写在首页脚注，例：作者姓名，男，经济学博士，研究方向……"),
+    ("corresponding", "通讯作者", "如需在首页注明，例：作者姓名，邮箱 xxx@example.com"),
 ]
 
 
@@ -233,6 +280,8 @@ def sweep(now=None):
         try:
             if d.is_dir() and now - d.stat().st_mtime > JOB_TTL:
                 shutil.rmtree(d, ignore_errors=True)
+                with _JOB_LOCKS_GUARD:      # 任务没了，锁也一并回收（F11）
+                    _JOB_LOCKS.pop(d.name, None)
         except OSError:
             continue
 
@@ -246,13 +295,56 @@ def job_dir(job):
     return d
 
 
+def read_json_safe(path):
+    """读 JSON 文件，坏文件（截断 / 编码错 / 读失败）返回 None，绝不抛异常。
+
+    faulthandler 都装上了，说明「进程被硬杀」是预期场景，半截 JSON 会留下。
+    """
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def read_meta(d):
+    """读任务 meta。进程硬杀会留下截断的 JSON，一条坏 meta 不许把 history
+    和任务页整页拖成 500（F34）：把它当作缺失，从现场文件推断最低限度的状态。
+
+    推断只回答「这个任务走到了哪一步、还剩什么可用」，能救回多少救多少，
+    救不回的字段留空，由各页面按缺失兜底（fail_page 会把推断结果写回，
+    相当于就地自愈，不再等 24 小时 TTL 整目录删除）。
+    """
     p = d / "meta.json"
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    if p.exists():
+        m = read_json_safe(p)
+        if isinstance(m, dict):
+            return m
+    m = {}
+    if (d / "error.json").is_file():
+        m["stage"] = "failed"          # 最后一次落笔是失败页 → 停在失败态
+    ir = read_json_safe(d / "manuscript.ir.json")
+    if isinstance(ir, dict) and ir.get("source"):
+        # 解析成功时 IR 里记录了用户上传的原始文件名，可以由此救回
+        m["original"] = ir["source"]
+        m["stem"] = Path(ir["source"]).stem or "稿件"
+    delivered = [q for q in sorted(d.glob("manuscript.*.docx"))
+                 if not q.name.endswith(".anon.docx")]
+    if delivered:                      # 成品文件名 manuscript.<刊id>.docx 反推目标刊
+        m["docx"] = delivered[0].name
+        m["journal"] = delivered[0].name[len("manuscript."):-len(".docx")]
+    return m
 
 
 def write_meta(d, meta):
-    (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    """meta.json 原子写：先落临时名再 os.replace，硬杀也只会留下完整的旧值或
+    完整的新值，不会留下半个 JSON（F34；同款姿势见 docx_meta.save）。"""
+    p = d / "meta.json"
+    tmp = d / "meta.json.tmp"
+    try:
+        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, p)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def read_json(path, default=None):
@@ -268,16 +360,54 @@ class ConvertError(Exception):
         self.title, self.hint, self.detail = title, hint, detail
 
 
+class RenderBusy(ConvertError):
+    """同任务的上一次渲染还没结束：这个请求被挡在门外（F11）。
+
+    做成 ConvertError 的子类，路由的 except 链照常能接住；但必须排在
+    ConvertError 之前处理——忙碌态的处置是「直接响应、绝不落笔」，因为
+    此刻另一轮渲染正在写现场文件（见 busy_page）。
+    """
+
+    def __init__(self, job):
+        super().__init__("正在处理中",
+                         "这个任务上一次排版还没有结束，请稍候片刻后刷新页面，"
+                         "不要重复提交。")
+
+
+_JOB_LOCKS = {}
+_JOB_LOCKS_GUARD = threading.Lock()
+
+
+def job_lock(job):
+    """每个任务一把渲染锁。服务 threaded=True，双击提交会让两个请求同时
+    进入 stage_render 互删互写同一批成品，产出与审计可能来自不同轮（F11）。"""
+    with _JOB_LOCKS_GUARD:
+        return _JOB_LOCKS.setdefault(job, threading.Lock())
+
+
+def busy_page(err):
+    """「正在处理」页。与 fail_page 的关键差别：不写 error.json / meta——
+    此刻另一轮渲染正在写这些文件，任何落笔都会把两轮的现场搅在一起（F11）。"""
+    return render_template("error.html", code="…", title=err.title, hint=err.hint), 200
+
+
+_TIMEOUT_MSG = ("转换超时",
+                "这份稿件可能体积过大或图片特别多。请确认文件小于 80 MB，"
+                "或删掉冗余的嵌入图片后重试。")
+
+
 def explain(raw):
+    # 超时必须先于正则：run() 直接把 TimeoutExpired 实例传进来，re.search
+    # 对非字符串必抛 TypeError，超时友好页就永远出不来（F33）
+    if isinstance(raw, subprocess.TimeoutExpired):
+        return _TIMEOUT_MSG
     t = raw or ""
     if re.search(r"BadZipFile|not a zip|PackageNotFound|zipfile", t):
         return ("这份文件打不开",
                 "它可能不是真正的 DOCX（例如把 .doc 后缀直接改成了 .docx），或者文件已损坏。"
                 "用 Word 打开后「另存为」一份新的 .docx，通常就能解决。")
-    if isinstance(raw, subprocess.TimeoutExpired) or "TimeoutExpired" in t or "timed out" in t:
-        return ("转换超时",
-                "这份稿件可能体积过大或图片特别多。请确认文件小于 80 MB，"
-                "或删掉冗余的嵌入图片后重试。")
+    if "TimeoutExpired" in t or "timed out" in t:
+        return _TIMEOUT_MSG
     if re.search(r"KeyError|IndexError|TypeError|AttributeError", t):
         return ("稿件结构超出当前识别范围",
                 "可能是封面、文本框或多级列表的结构比较特殊。可以先把可疑的封面页简化后重试，"
@@ -338,16 +468,45 @@ def stage_parse(d, jid, original):
     return ir_data
 
 
+def _check_meta(path, strict_people=False):
+    """交付前的硬闸门：元数据没清干净就不让文件出门。"""
+    try:
+        return docx_meta.assert_clean(path, strict_people=strict_people)
+    except docx_meta.MetaLeakError as e:
+        raise ConvertError(
+            "成品未通过隐私检查",
+            "文档属性里仍残留作者、公司或 WPS 账号信息。已停止交付，请重试；"
+            "若反复出现，把下方技术细节发给开发者。",
+            str(e)) from e
+
+
 def stage_render(d, jid, original):
-    """补录内容注入 → 排版 → 审计。产出成品、审计页与 meta。"""
+    """补录内容注入 → 排版 → 审计的入口：同任务一次只放一轮进来（F11）。
+
+    先抢本任务的渲染锁，抢不到说明上一轮还没结束，立刻以 RenderBusy
+    把第二个并发请求挡回去，绝不与新一轮互删互写。抢到后的流程见
+    _stage_render：所有产物先写 .staging 临时名，全部成功后才原子落位
+    （os.replace），中途任何一步失败，上一轮已交付的成品、审计与 meta
+    都原封不动——否则一次失败的换刊/驳回就会毁掉已经交付的结果页（F36）。
+    """
+    lock = job_lock(d.name)
+    if not lock.acquire(blocking=False):
+        raise RenderBusy(d.name)
+    try:
+        return _stage_render(d, jid, original)
+    finally:
+        lock.release()
+
+
+def _stage_render(d, jid, original):
+    """排版与审计的主体。调用方必须已持有本任务的渲染锁。"""
     src, ir = d / "manuscript.docx", d / "manuscript.ir.json"
     rules = RULES_DIR / f"{jid}.json"
     outdocx = d / f"manuscript.{jid}.docx"
+    tmp_docx = d / f".staging.{jid}.docx"
+    tmp_docx.unlink(missing_ok=True)      # 上次中断可能留下的半成品
 
     t0 = time.time()
-    for old in list(d.glob("manuscript.*.docx")) + list(d.glob("manuscript.*.audit.json")):
-        if old.name != "manuscript.docx":
-            old.unlink(missing_ok=True)
 
     details = read_json(d / "details.json", {}) or {}
     filled_docx, filled_ir = d / "filled.docx", d / "filled.ir.json"
@@ -366,23 +525,38 @@ def stage_render(d, jid, original):
 
     rules_data = read_json(rules, {}) or {}
     reject_file = d / "reject.json"
-    cmd = ["tools/render_from_ir.py", render_ir, rules, "-o", outdocx]
+    meta = read_meta(d)
+    cmd = ["tools/render_from_ir.py", render_ir, rules, "-o", tmp_docx]
     if reject_file.is_file():
         cmd += ["--reject", reject_file]
+    if meta.get("citation"):
+        cmd.append("--citation")
     run(cmd)
+    _check_meta(tmp_docx)
     # 体检报告按"注入之后"的稿子重跑，否则填完英文摘要仍会显示"缺 6 项"
-    run(["tools/compliance_report.py", render_ir, rules, "-o", d / "triage.html"])
+    tmp_triage = d / ".staging.triage.html"
+    run(["tools/compliance_report.py", render_ir, rules, "-o", tmp_triage])
 
-    audit_json = outdocx.with_suffix(".audit.json")
+    audit_json = tmp_docx.with_suffix(".audit.json")
     # 匿名稿：该刊要求正文匿名时另出一份，只删身份信息（§11.4 双版本交付）
     anon_docx = None
+    anon_tmp = None
     if (rules_data.get("submission") or {}).get("anonymous"):
         anon_docx = d / f"manuscript.{jid}.anon.docx"
+        anon_tmp = d / f".staging.{jid}.anon.docx"
+        anon_tmp.unlink(missing_ok=True)
         try:
-            out = run(["tools/anonymize.py", outdocx, render_ir, rules, "-o", anon_docx])
+            out = run(["tools/anonymize.py", tmp_docx, render_ir, rules, "-o", anon_tmp])
             info = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
-        except (ConvertError, ValueError):
-            anon_docx, info = None, {}
+            _check_meta(anon_tmp, strict_people=True)
+        except (ConvertError, ValueError) as e:
+            # 该刊要求匿名时，匿名稿是交付要件；生成失败或隐私检查不过，
+            # 不能再把署名稿当成品交付，否则用户会以为已经匿名。
+            raise ConvertError(
+                "匿名稿未通过隐私检查",
+                "这份稿子要求匿名，但匿名稿没有生成成功，或元数据里仍有作者信息。"
+                "已停止交付，请重试；若反复出现，把下方技术细节发给开发者。",
+                str(e)) from e
         if info.get("removed"):
             data = read_json(audit_json, {"items": []}) or {"items": []}
             data["anonymize"] = {"removed": info["removed"],
@@ -390,9 +564,10 @@ def stage_render(d, jid, original):
             audit_json.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                                   encoding="utf-8")
 
-    run(["tools/render_audit.py", audit_json, "-o", d / "audit.html", "--job", d.name])
+    tmp_audit_html = d / ".staging.audit.html"
+    run(["tools/render_audit.py", audit_json, "-o", tmp_audit_html, "--job", d.name])
 
-    audit = read_json(outdocx.with_suffix(".audit.json"), {"items": []})
+    audit = read_json(audit_json, {"items": []})
     ir_data = read_json(render_ir) or {}
     j = journal_by_id(jid) or {"id": jid, "name": jid}
 
@@ -415,6 +590,25 @@ def stage_render(d, jid, original):
         "stage": "rendered",
     })
     write_meta(d, meta)
+
+    # ---- 全部成功，此刻才落位：成品/匿名稿/审计原子替换旧文件，体检页与
+    # 审计页随后换新，再清掉旧刊遗留的成品与审计。顺序保证 meta 指向的
+    # 文件在每个时点都是完整的；失败路径根本走不到这里（F36）。
+    final_audit = outdocx.with_suffix(".audit.json")
+    tmp_audit = tmp_docx.with_suffix(".audit.json")
+    keep = {outdocx.name, final_audit.name}
+    if anon_docx:
+        keep.add(anon_docx.name)
+        os.replace(anon_tmp, anon_docx)
+    os.replace(tmp_docx, outdocx)
+    os.replace(tmp_audit, final_audit)
+    os.replace(tmp_triage, d / "triage.html")
+    os.replace(tmp_audit_html, d / "audit.html")
+    for old in (list(d.glob("manuscript.*.docx")) + list(d.glob("manuscript.*.audit.json"))
+                + list(d.glob(".staging.*"))):
+        if old.name == "manuscript.docx" or old.name in keep:
+            continue
+        old.unlink(missing_ok=True)
     (d / "error.json").unlink(missing_ok=True)
     return meta
 
@@ -427,7 +621,10 @@ def fail_page(d, err, journals=None):
     write_meta(d, meta)
     return render_template("failed.html", job=d.name, err=err, meta=meta,
                            journals=journals if journals is not None else load_journals(),
-                           selected=meta.get("journal")), 200
+                           selected=meta.get("journal"),
+                           # IR 不存在 = 解析就没成功过：换刊重试不可能有用，
+                           # 页面要给「重新上传」的出路而不是诱导再试（F12）
+                           can_retry=(d / "manuscript.ir.json").is_file()), 200
 
 
 # ---------------------------------------------------------------- 补录页数据
@@ -516,8 +713,20 @@ def details_context(d, meta):
 
     personal = [p for p in (rules.get("personal_fields") or [])
                 if p.get("placement") != "author_page"]
+
+    # 引用体系重排只在「规则集给了条目模板 + 稿子确实用编号引用」时才提供
+    cite_cfg = rules.get("citation") or {}
+    cite_rl = cite_cfg.get("reference_list") or {}
+    has_cite = any("[" in (b.get("text") or "") and "]" in (b.get("text") or "")
+                   for b in ir.get("blocks", []) if b["type"] == "body")
+    cite_label = {"author-year": "作者-年份制（张三，2020）",
+                  "numbered": "顺序编码制（[1]）"}.get(cite_cfg.get("system"), "")
+    citation_offered = bool(cite_rl.get("templates")) and has_cite
     return {
         "rules": rules,
+        "citation_offered": citation_offered,
+        "citation_label": cite_label,
+        "citation_on": bool(meta.get("citation")),
         "journal": meta.get("journal_name", jid),
         "title": fm[0] if fm else "",
         "authors": authors,
@@ -541,13 +750,24 @@ def index():
     return render_template("index.html", journal_count=len(load_journals()))
 
 
+def render_workspace(error=None, preselect=""):
+    """工作台只有这一个入口：报错页也必须带全期刊列表。
+
+    曾经 @app.route("/workspace") 与 /convert 的报错分支各写一遍 render_template，
+    报错分支漏了 groups 和 default_id —— 页面能出来，但「选择期刊」里一本都没有，
+    一个单选也勾不上，用户就卡在死页上再也提交不了。
+    """
+    items = load_journals()
+    known = {j["id"] for j in items}
+    default_id = preselect if preselect in known else (items[0]["id"] if items else "")
+    return render_template("workspace.html", journals=items, groups=journal_groups(items),
+                           error=error, default_id=default_id, preselect=preselect)
+
+
 @app.route("/workspace")
 def workspace():
     jid = request.args.get("journal") or ""
-    items = load_journals()
-    return render_template("workspace.html", journals=items, groups=journal_groups(items),
-                           error=None, default_id=items[0]["id"] if items else "",
-                           preselect=jid if (RULES_DIR / f"{jid}.json").exists() else "")
+    return render_workspace(preselect=jid if (RULES_DIR / f"{jid}.json").exists() else "")
 
 
 @app.route("/journals")
@@ -766,18 +986,23 @@ def history():
     for d in WORK.iterdir() if WORK.exists() else []:
         if not d.is_dir() or not JOB_RE.match(d.name):
             continue
-        m = read_meta(d)
-        if not m.get("original"):
+        # 逐条兜底：目录在遍历途中被清理、meta 读出意外结构，都只跳过这一行，
+        # 不让一条坏数据把整个 history 页拖成 500（F34）
+        try:
+            m = read_meta(d)
+            if not m.get("original"):
+                continue
+            rows.append({
+                "job": d.name,
+                "original": m.get("original"),
+                "journal": m.get("journal_name") or m.get("journal", ""),
+                "created": m.get("created", ""),
+                "stage": m.get("stage") or ("rendered" if m.get("docx") else "details"),
+                "audit": m.get("audit_total"),
+                "mtime": d.stat().st_mtime,
+            })
+        except OSError:
             continue
-        rows.append({
-            "job": d.name,
-            "original": m.get("original"),
-            "journal": m.get("journal_name") or m.get("journal", ""),
-            "created": m.get("created", ""),
-            "stage": m.get("stage") or ("rendered" if m.get("docx") else "details"),
-            "audit": m.get("audit_total"),
-            "mtime": d.stat().st_mtime,
-        })
     rows.sort(key=lambda r: r["mtime"], reverse=True)
     return render_template("history.html", rows=rows[:30])
 
@@ -785,21 +1010,19 @@ def history():
 @app.route("/convert", methods=["POST"])
 def convert():
     f = request.files.get("file")
-    jid = request.form.get("journal")
+    jid = request.form.get("journal") or ""
+    keep = jid if (RULES_DIR / f"{jid}.json").exists() else ""
     if not f or not f.filename:
-        return render_template("workspace.html", journals=load_journals(),
-                               error="请选择一份 DOCX 稿件", preselect=jid or ""), 400
+        return render_workspace("请选择一份 DOCX 稿件", keep), 400
     name = Path(f.filename).name
     if not name.lower().endswith((".docx", ".doc")):
-        return render_template("workspace.html", journals=load_journals(),
-                               error="成品只能从 .docx / .doc 生成：排版是在你的原文件上改的，"
-                                     "图片、公式、脚注都靠原对象原样保留。PDF 里这些已是画面，"
-                                     "取不回可编辑对象，硬转出来的稿子交给编辑部反而更危险。"
-                                     "手头只有 PDF 的话，请向作者要源文件。",
-                               preselect=jid or ""), 400
-    if not (RULES_DIR / f"{jid}.json").exists():
-        return render_template("workspace.html", journals=load_journals(),
-                               error="请选择一本目标期刊后再开始转换", preselect=""), 400
+        return render_workspace(
+            "成品只能从 .docx / .doc 生成：排版是在你的原文件上改的，"
+            "图片、公式、脚注都靠原对象原样保留。PDF 里这些已是画面，"
+            "取不回可编辑对象，硬转出来的稿子交给编辑部反而更危险。"
+            "手头只有 PDF 的话，请向作者要源文件。", keep), 400
+    if not keep:
+        return render_workspace("请选择一本目标期刊后再开始转换", ""), 400
 
     sweep()
     job = uuid.uuid4().hex[:12]
@@ -846,8 +1069,13 @@ def details(job):
             data[f["key"]] = (request.form.get(f["key"]) or "").strip()
         (d / "details.json").write_text(json.dumps(data, ensure_ascii=False, indent=2),
                                         encoding="utf-8")
+        # 引用体系重排是唯一会改写正文/条目文字的开关，默认关，由用户显式勾选
+        meta["citation"] = request.form.get("citation") == "on"
+        write_meta(d, meta)
         try:
             stage_render(d, meta["journal"], meta.get("original", "稿件.docx"))
+        except RenderBusy as e:      # 忙碌态先于 ConvertError：不能落笔写现场（F11）
+            return busy_page(e)
         except ConvertError as e:
             return fail_page(d, e)
         except Exception:  # noqa: BLE001
@@ -885,6 +1113,8 @@ def reject_edits(job):
                                    encoding="utf-8")
     try:
         stage_render(d, meta["journal"], meta.get("original", "稿件.docx"))
+    except RenderBusy as e:      # 忙碌态先于 ConvertError：不能落笔写现场（F11）
+        return busy_page(e)
     except ConvertError as e:
         return fail_page(d, e)
     except Exception:  # noqa: BLE001
@@ -901,15 +1131,35 @@ def retry(job):
         abort(400)
     if not (d / "manuscript.docx").exists():
         abort(404)
-    meta["journal"] = jid
-    meta["journal_name"] = (journal_by_id(jid) or {}).get("name", jid)
-    write_meta(d, meta)
     if not meta.get("docx"):
+        # 还没有成品：换刊只是改后续渲染的目标，改完回补录页
+        meta["journal"] = jid
+        meta["journal_name"] = (journal_by_id(jid) or {}).get("name", jid)
+        if not (d / "manuscript.ir.json").is_file():
+            # 解析阶段就没成功（IR 不存在）：去补录页再渲染只会把死循环走下去，
+            # 坏文件换任何刊都不可能成功（F12）。先按新刊重跑解析；再失败会落到
+            # failed 页的「重新上传」出路（failed.html 按 can_retry 区分文案）。
+            try:
+                stage_parse(d, jid, meta.get("original", "稿件.docx"))
+            except ConvertError as e:
+                return fail_page(d, e)
+            except Exception:  # noqa: BLE001
+                return fail_page(d, ConvertError(*explain(""),
+                                                 detail=traceback.format_exc()[-1500:]))
+            meta["stage"] = "details"
+        write_meta(d, meta)
         return redirect(url_for("details", job=job))
     try:
+        # 换刊字段由 stage_render 成功后随 meta 一起改写；提前写入的话，
+        # 一次失败的换刊会让 meta 指向新刊、成品还是旧刊（F36）
         stage_render(d, jid, meta.get("original", "稿件.docx"))
+    except RenderBusy as e:      # 忙碌态先于 ConvertError：不能落笔写现场（F11）
+        return busy_page(e)
     except ConvertError as e:
         return fail_page(d, e)
+    except Exception:  # noqa: BLE001  与 details / reject 同款兜底：非 ConvertError
+        return fail_page(d, ConvertError(*explain(""),   # 也不许裸 500、不写现场（F35）
+                                         detail=traceback.format_exc()[-1500:]))
     return redirect(url_for("result", job=job))
 
 
@@ -999,7 +1249,7 @@ def failed(job):
     p = d / "error.json"
     if not p.exists():
         return redirect(url_for("workspace"))
-    e = read_json(p, {})
+    e = read_json_safe(p) or {}
     return fail_page(d, ConvertError(e.get("title", "转换没有完成"),
                                      e.get("hint", ""), e.get("detail", "")))
 
@@ -1084,9 +1334,9 @@ def server_error(e):
 
 def setup_logging():
     """请求与异常同时写一份到 outputs/server.log：后台窗口被关掉也能回溯。"""
-    log = ROOT / "outputs" / "server.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(log, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    path = ROOT / "outputs" / "server.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     handler.setLevel(logging.INFO)
     app.logger.addHandler(handler)
@@ -1095,7 +1345,9 @@ def setup_logging():
     wz = logging.getLogger("werkzeug")
     wz.addHandler(handler)
     wz.setLevel(logging.INFO)
-    return log
+    # 返回 logger 本身：调用方拿它去记心跳与退出事件。返回路径会让
+    # 「log.info(...)」报 AttributeError，心跳线程直接死掉且不显眼。
+    return app.logger
 
 
 def launch_detached(port, no_browser):
@@ -1213,9 +1465,10 @@ if __name__ == "__main__":
     sweep()
     log = setup_logging()
     install_lifecycle_hooks(log)
-    app.logger.info(f"服务启动 {url} pid={os.getpid()} 日志={log.name}")
+    log_path = ROOT / "outputs" / "server.log"
+    app.logger.info(f"服务启动 {url} pid={os.getpid()} 日志={log_path.name}")
     print("格式工坊 · 本地服务已启动 → " + url)
-    print(f"日志文件：{log.relative_to(ROOT)}（超过 1 MB 自动轮转）")
+    print(f"日志文件：{log_path.relative_to(ROOT)}（超过 1 MB 自动轮转）")
     print("关闭这个窗口即可停止服务；或在浏览器里按 Ctrl+C。")
     if not args.no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()

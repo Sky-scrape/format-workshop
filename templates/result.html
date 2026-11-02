@@ -50,7 +50,7 @@
 
   <section class="panel download-panel" style="margin-top:18px">
     <h2>换刊 / 对比 / 补录</h2><p>同一份稿件不必重新上传：直接按另一本刊的规则再出一版，或先看看两本刊差在哪</p>
-    <form method="post" action="/job/{{ job }}/retry" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <form method="post" action="/job/{{ job }}/retry" id="retryForm" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <select name="journal" aria-label="选择目标期刊" style="flex:1;min-width:200px;height:42px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;color:var(--ink);background:#fff">
         {% for j in journals %}<option value="{{ j.id }}" {% if j.id == journal.id %}selected{% endif %}>{{ j.name }}</option>{% endfor %}
       </select>
@@ -67,6 +67,9 @@
 
   <div class="result-bottom"><p>正文与表格文字保持原样。字数超限与信息缺失仅作提示，不会自动删改。结果文件在本机保留 24 小时。</p><a class="btn btn-light" href="/workspace">转换另一份稿件<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 10h13M11 5l5 5-5 5"/></svg></a></div>
 </div>
+<div class="processing-overlay" id="renderOverlay" hidden role="status" aria-live="polite">
+  <div class="processing-card"><div class="spinner"></div><h2>正在按新期刊重排</h2><p>同一份稿件正在按目标刊的版式重新生成审计与成品</p><div class="processing-note">请稍候，完成后会自动跳转</div></div>
+</div>
 {% endblock %}
 {% block script %}
 <script>
@@ -80,5 +83,10 @@ window.addEventListener('load',()=>allFrames().forEach(fit));
 setTimeout(()=>allFrames().forEach(fit),700);
 const diffTo=document.getElementById('diffTo'),diffLink=document.getElementById('diffLink');
 if(diffTo)diffTo.addEventListener('change',()=>{diffLink.href='/job/{{ job }}/diff?to='+diffTo.value});
+/* 防重复提交：换刊重排是慢操作，双击的第二个请求会被后端任务锁挡回
+   「正在处理」页；前端先把按钮禁掉并盖遮罩（F11） */
+const retryForm=document.getElementById('retryForm');
+if(retryForm)retryForm.addEventListener('submit',()=>{const b=retryForm.querySelector('button[type="submit"]');if(b.disabled)return;b.disabled=true;document.getElementById('renderOverlay').hidden=false});
+window.addEventListener('pageshow',event=>{if(event.persisted){const b=retryForm&&retryForm.querySelector('button[type="submit"]');if(b)b.disabled=false;const o=document.getElementById('renderOverlay');if(o)o.hidden=true}});
 </script>
 {% endblock %}

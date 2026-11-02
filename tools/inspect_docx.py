@@ -7,6 +7,8 @@ import sys
 import zipfile
 from xml.etree import ElementTree as ET
 
+import xmlsafe
+
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
@@ -149,8 +151,8 @@ def main():
     if "--max-para" in sys.argv:
         max_para = int(sys.argv[sys.argv.index("--max-para") + 1])
     z = zipfile.ZipFile(path)
-    doc = ET.fromstring(z.read("word/document.xml"))
-    sty = ET.fromstring(z.read("word/styles.xml"))
+    doc = xmlsafe.fromstring(z.read("word/document.xml"))
+    sty = xmlsafe.fromstring(z.read("word/styles.xml"))
     dump_sect(doc)
     print()
     dump_styles(sty)

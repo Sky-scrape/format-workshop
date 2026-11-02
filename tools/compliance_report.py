@@ -38,6 +38,12 @@ LABEL = {
     "highlights": "Highlights",
 }
 
+# 规则集 limits.total.scope 是各刊投稿须知的原话（「正文」「全文」「全文（含图表）」）。
+# 已认识的写法映射到统计过滤：声明「正文」就只数正文块，全文类数全部块；
+# 没认出的写法一律保守按全文计，由 check() 在报告里注明回退——
+# 绝不把全文数字偷偷对到正文上限上（那会出假超限判决）。
+SCOPE_FILTER = {"正文": "body", "全文": "all", "全文（含图表）": "all"}
+
 # 这些不是作者能补的（由编辑部编号或按刊物体例给定），不当成待办派给作者
 NON_ACTIONABLE = {"article_number", "document_code"}
 
@@ -81,10 +87,19 @@ NEED_MAP_EN = {
 
 
 def count_words(blocks, scope="all"):
+    """按 scope 统计三种口径。'body' 只数正文块，其余数全部有文字的块，
+    表格块本身没有 text 键，表内文字在 parse_docx 存的 cells 里——声明
+    「全文（含图表）」的刊必须把表格内文字算进去，否则标注与计算自相矛盾；
+    取值来自规则集 limits.total.scope 经 SCOPE_FILTER 归一后的结果。"""
     if scope == "body":
         texts = [b.get("text", "") for b in blocks if b["type"] == "body"]
     else:
-        texts = [b.get("text", "") for b in blocks if b.get("text")]
+        texts = []
+        for b in blocks:
+            if b.get("text"):
+                texts.append(b["text"])
+            elif b.get("cells"):
+                texts.append("".join(b["cells"]))
     joined = "".join(texts)
     no_space = re.sub(r"\s", "", joined)
     cn_chars = len(re.findall(r"[\u4e00-\u9fff]", joined))
@@ -160,10 +175,19 @@ def check(ir, rules):
         # 原始行供 Web 端生成补录表单：网页需要知道类型与语言，而不只是中文标签
         rows_raw.append((t, lang, name, ok, blk.get("required", False)))
 
-    words = count_words(ir["blocks"])
     limits = rules.get("limits", {})
     total = limits.get("total", {})
     metric = total.get("metric")
+    # 总字数按规则集声明的 scope 过滤后再对上限：声明「正文」只数正文块，
+    # 声明「全文」数全部块；写法未识别或未声明时保守按全文计，并在报告注明。
+    # 标注的统计范围必须与实际参与统计的块一致，否则计数与口径自相矛盾。
+    raw_scope = (total.get("scope") or "").strip()
+    eff_scope = SCOPE_FILTER.get(raw_scope, "all")
+    scope_note = ""
+    if raw_scope not in SCOPE_FILTER:
+        scope_note = (f"规则集声明为「{raw_scope}」，写法未识别，按全文口径统计"
+                      if raw_scope else "规则集未声明统计范围，按全文口径统计")
+    words = count_words(ir["blocks"], scope=eff_scope)
     w_res = []
     for key, label in (("A", "字符数（不计空格）"), ("B", "中文字符 + 英文单词"), ("C", "字符数（计空格）")):
         val = words[key]
@@ -177,7 +201,9 @@ def check(ir, rules):
     if metric and total.get("value"):
         actual = words.get(metric, 0)
         total_info = {"metric": metric, "value": total["value"], "actual": actual,
-                      "over": actual - total["value"], "scope": total.get("scope", "正文"),
+                      "over": actual - total["value"], "scope": raw_scope,
+                      "scope_label": "正文" if eff_scope == "body" else "全文",
+                      "scope_note": scope_note,
                       "note": total.get("note", ""), "strict": total.get("strict", False)}
 
     lim_abs = limits.get("abstract") or {}
@@ -267,6 +293,11 @@ def check(ir, rules):
         "rows": rows,
         "rows_raw": rows_raw,
         "words": w_res,
+        # 本次统计实际用的口径与规则集原话：「统计范围」一格必须照实展示，
+        # 没声明总字数上限时数字照常统计，标注也不能与计算相反
+        "words_scope": eff_scope,
+        "words_scope_declared": raw_scope,
+        "words_scope_note": scope_note,
         "sections": sections,
         "total_limit": total_info,
         "abstract_limit": abstract_info,
@@ -336,6 +367,27 @@ def render(ir, rules, res):
 
     metric_name = {"A": "字符数（不计空格）", "B": "中文字符 + 英文单词",
                    "C": "字符数（计空格）"}.get((tl or {}).get("metric"), "待确认")
+
+    # 「统计范围」一格必须如实写明本次统计用的范围：规则集声明了且认识，
+    # 就原样照抄；没声明或写法未识别而回退全文的，必须注明回退——
+    # 不能标签写「正文」、数字却是全文口径（F18 的自相矛盾就在这）。
+    # 没声明总字数上限（tl 为空）时 A/B/C 数字照常按实际口径统计，标注
+    # 同样跟随计算，不再写与计算相反的默认文案。
+    scope_cell = '<span class="muted">规则集未声明统计范围，按全文口径统计</span>'
+    if tl:
+        if tl.get("scope"):
+            scope_cell = html.escape(tl["scope"])
+            if tl.get("scope_note"):
+                scope_cell += f'<span class="muted">（{html.escape(tl["scope_note"])}）</span>'
+        else:
+            scope_cell = '<span class="muted">规则集未声明统计范围，按全文口径统计</span>'
+    else:
+        declared = res.get("words_scope_declared", "")
+        if declared in SCOPE_FILTER:
+            scope_cell = html.escape(declared)
+        elif declared:
+            scope_cell = (html.escape(declared)
+                          + '<span class="muted">（写法未识别，按全文口径统计）</span>')
 
     kw = res.get("keywords_limit") or {}
     if not kw:
@@ -423,10 +475,11 @@ def render(ir, rules, res):
 
     bits = [f"还差 {n_missing} 项必备要件" if n_missing else "必备要件齐全"]
     if tl:
+        scope_label = tl.get("scope_label", "正文")
         if over_total > 0:
-            bits.append(f"正文超{'上限' if tl.get('strict') else '建议值'} {over_total:,} 字")
+            bits.append(f"{scope_label}超{'上限' if tl.get('strict') else '建议值'} {over_total:,} 字")
         else:
-            bits.append("正文字数在范围内")
+            bits.append(f"{scope_label}字数在范围内")
     if al and al.get("found"):
         bits.append(f"摘要超 {over_abs} 字" if over_abs > 0 else "摘要字数合规")
     if cite_bad:
@@ -450,7 +503,7 @@ def render(ir, rules, res):
     if anon.get("required") and anon.get("count"):
         todos.append(f"删除前置区 {anon['count']} 处作者信息（该刊要求匿名）")
     if over_total > 0:
-        todos.append(f"正文缩减 {over_total:,} 字（口径：{metric_name}）")
+        todos.append(f"{(tl or {}).get('scope_label', '正文')}缩减 {over_total:,} 字（口径：{metric_name}）")
     if over_abs > 0:
         todos.append(f"摘要压缩 {over_abs} 字")
     if res["equations_text"]:
@@ -471,7 +524,7 @@ def render(ir, rules, res):
     kpi = f"""
 <div class="kpi">
   <div class="{'hl-bad' if missing else 'hl-ok'}"><b>{len(missing)}</b><span>缺失必备项</span></div>
-  <div><b>{limit_cell(tl) if tl else '—'}</b><span>正文口径字数 {('· ' + metric_name) if tl else ''}</span></div>
+  <div><b>{limit_cell(tl) if tl else '—'}</b><span>{(tl or {}).get('scope_label', '正文')}口径字数 {('· ' + metric_name) if tl else ''}</span></div>
   <div><b>{limit_cell(al, ' 字') if al else '—'}</b><span>中文摘要字数</span></div>
   <div class="{'hl-bad' if c['ok'] is False else 'hl-ok'}"><b>{'需重排' if c['ok'] is False else '一致'}</b><span>引用体系</span></div>
 </div>"""
@@ -547,7 +600,7 @@ border:1px solid var(--line);color:var(--ink2)}}
 <section><h2>字数（三种口径同时给出，仅统计不修改）</h2><table>
 {words_html}
 <tr><td class="k">本刊采用口径</td><td>{metric_name}{'（见规则集 limits.total.metric）' if tl else '（规则集未声明，待确认）'}</td></tr>
-<tr><td class="k">统计范围</td><td>{html.escape((tl or {}).get('scope') or '全部正文段落（不含表格内文字）')}</td></tr>
+<tr><td class="k">统计范围</td><td>{scope_cell}</td></tr>
 <tr><td class="k">摘要</td><td>{limit_cell(al, ' 字') if al else '<span class="muted">该刊未声明摘要字数</span>'}</td></tr>
 <tr><td class="k">关键词</td><td>{kw_cell}</td></tr>
 <tr><td class="k">标题字数</td><td>{title_cell}</td></tr>

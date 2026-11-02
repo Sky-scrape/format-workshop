@@ -19,6 +19,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt
 
+from docx_meta import sanitize_docx
+
 ALIGN = {
     "left": WD_ALIGN_PARAGRAPH.LEFT,
     "center": WD_ALIGN_PARAGRAPH.CENTER,
@@ -88,7 +90,10 @@ def add_para(doc, text, *, cn=None, latin=None, size=None, bold=None,
     if align:
         p.alignment = ALIGN[align]
     if line:
-        p.paragraph_format.line_spacing = Pt(line) if isinstance(line, (int, float)) else line
+        if isinstance(line, dict):
+            p.paragraph_format.line_spacing = line["mult"]      # 倍数 → lineRule=auto
+        else:
+            p.paragraph_format.line_spacing = Pt(line)
     if indent_chars:
         set_chars_indent(p, indent_chars)
     if before_lines or after_lines:
@@ -161,8 +166,16 @@ def build(rules, out_path):
     tb = rules["tables"]
     fig = rules["figures"]
     body = tp["body"]
-    # 倍数行距（mode=multiple）由规则集给出折算后的固定值，代码不猜系数
-    line_pt = body["line_spacing"].get("value_pt") or body["line_spacing"].get("equivalent_exact_pt")
+    # 倍数行距（mode=multiple）要真的按倍数写进 docx（lineRule=auto）。
+    # 折成固定磅值的话，作者在 Word 里看到的是「固定值 18.9 磅」，与规范页写的「1.5 倍」对不上。
+    ls = body["line_spacing"]
+    line_mult = ls.get("value") if ls.get("mode") == "multiple" else None
+    line_pt = ls.get("value_pt") or ls.get("equivalent_exact_pt")
+    if line_pt is None:
+        line_pt = round(body["size_pt"] * 1.2 * (line_mult or 1), 1)
+    # LINE 给正文用（倍数或固定值），line_pt 只用于算标题／行首这类需要数值的地方
+    LINE = {"pt": line_pt, "mult": line_mult} if line_mult else line_pt
+    line_desc = f"{line_mult} 倍" if line_mult else f"{line_pt} 磅固定值"
     indent = body["first_line_indent_chars"]
 
     doc = Document()
@@ -187,15 +200,15 @@ def build(rules, out_path):
         add_para(doc, smp.get("author_page_title") or (j["name_zh"] + " 投稿样板（作者信息页）"),
                  cn=title_tp["font_cn"],
                  size=title_tp["size_pt"], align="center", line=20)
-        add_para(doc, "", line=line_pt)
+        add_para(doc, "", line=LINE)
         for fid in rules["submission"]["author_page"]["fields"]:
             label = next((f["label_zh"] for f in rules["personal_fields"] if f["id"] == fid), fid)
             add_para(doc, f"{label}：", cn=body["font_cn"], latin=body["font_latin"],
-                     size=body["size_pt"], line=line_pt)
-        add_para(doc, "", line=line_pt)
+                     size=body["size_pt"], line=LINE)
+        add_para(doc, "", line=LINE)
         add_para(doc, smp.get("author_page_note") or
                  "※ 本页独立成页，置于正文之前，请勿单独提交；正文部分须为匿名形式。",
-                 cn=body["font_cn"], size=9, line=line_pt)
+                 cn=body["font_cn"], size=9, line=LINE)
 
         doc.add_page_break()
 
@@ -207,7 +220,7 @@ def build(rules, out_path):
         add_para(doc, smp.get("column_name") or col_blk.get("sample_value")
                  or col_blk.get("label") or "·构建新发展格局·",
                  cn=ctp.get("font_cn", "黑体"), size=ctp.get("size_pt", body["size_pt"]),
-                 align=ctp.get("align", "left"), line=line_pt,
+                 align=ctp.get("align", "left"), line=LINE,
                  indent_chars=ctp.get("indent_chars") or None, after_lines=0.3)
 
     # ---------- 正文标题 ----------
@@ -240,17 +253,17 @@ def build(rules, out_path):
     abs_text = smp.get("abstract") or (
         "本文以美联储及金砖五国宏观月度数据为样本，考察美国宽松货币政策对金砖国家的溢出效应。"
         f"此处文字仅用于核验版式：{ab_tp['font_cn']} {ab_tp['size_pt']}pt、"
-        f"行距 {line_pt} 磅固定值、首行缩进 {indent} 字符。")
+        f"行距 {line_desc}、首行缩进 {indent} 字符。")
     add_para(doc, f"{abs_block.get('label') or ''}{abs_text}",
              cn=ab_tp["font_cn"], latin=ab_tp.get("font_latin", body["font_latin"]),
-             size=ab_tp["size_pt"], align="both", line=line_pt, indent_chars=indent)
+             size=ab_tp["size_pt"], align="both", line=LINE, indent_chars=indent)
 
     kw_block = next((b for b in rules["blocks"] if b["type"] == "keywords" and b.get("lang") == "zh"),
                     next(b for b in rules["blocks"] if b["type"] == "keywords"))
     kw_items = smp.get("keywords") or ["宽松货币政策", "美联储", "金砖国家", "溢出效应"]
     add_para(doc, (kw_block.get("label") or "") + kw_block.get("separator", "  ").join(kw_items),
              cn=ab_tp["font_cn"], latin=ab_tp.get("font_latin", body["font_latin"]),
-             size=ab_tp["size_pt"], align="both", line=line_pt, indent_chars=indent)
+             size=ab_tp["size_pt"], align="both", line=LINE, indent_chars=indent)
 
     # 号段（DOI、中图分类号、文献标识码、文章编号）在多数刊里是小字号、黑体，
     # 与正文不同。此前样板统一按正文样式画，凡规则集写了 typography.classification
@@ -293,7 +306,7 @@ def build(rules, out_path):
     def en_cls_line(blk):
         add_para(doc, (blk.get("label") or "JEL: ") + ", ".join(smp.get("jel") or ["F13", "F14"]),
                  cn=body["font_cn"], latin=body["font_latin"], size=body["size_pt"],
-                 align="both", line=line_pt, indent_chars=indent)
+                 align="both", line=LINE, indent_chars=indent)
 
     for i, blk in enumerate(rules["blocks"]):
         if blk["type"] == "classification_code" and blk.get("lang") == "en" and i < body_pos:
@@ -316,7 +329,7 @@ def build(rules, out_path):
                  "The Spillover Effects of US Monetary Policy on BRICS Countries",
                  cn=en_title.get("font_cn"), latin=en_title.get("font_latin", body.get("font_latin")),
                  size=en_title.get("size_pt"), bold=en_title.get("bold", False),
-                 align=en_title.get("align", "center"), line=en_title_ls or line_pt)
+                 align=en_title.get("align", "center"), line=en_title_ls or LINE)
         # 英文作者：只有规则集声明了英文作者块才渲染，避免给不需要的期刊凭空加行
         if any(b["type"] == "authors" and b.get("lang") == "en" for b in rules["blocks"]):
             en_au = tp.get("authors_en") or tp.get("authors") or body
@@ -333,13 +346,13 @@ def build(rules, out_path):
                      cn=aff_tp.get("font_cn", body["font_cn"]),
                      latin=aff_tp.get("font_latin", body["font_latin"]),
                      size=aff_tp.get("size_pt", body["size_pt"]),
-                     align=aff_tp.get("align", "center"), line=line_pt)
+                     align=aff_tp.get("align", "center"), line=LINE)
         en_abs = next((b for b in rules["blocks"]
                        if b["type"] == "abstract" and b.get("lang") == "en"), {})
         en_kw = next((b for b in rules["blocks"]
                       if b["type"] == "keywords" and b.get("lang") == "en"), {})
         abs_tp = tp.get("abstract_en") or body
-        abs_ls = (abs_tp.get("line_spacing") or {}).get("value_pt") or line_pt
+        abs_ls = (abs_tp.get("line_spacing") or {}).get("value_pt") or LINE
         add_para(doc, (en_abs.get("label") or "Abstract: ") +
                       (smp.get("abstract_en") or
                        "This sample is generated for layout verification. "
@@ -412,9 +425,9 @@ def build(rules, out_path):
     add_para(doc, smp.get("body") or
              (f"次贷危机爆发之后，美国经济陷入严重衰退。此段用于核验正文版式："
               f"{body['font_cn']} {body['size_pt']} pt，英文与数字为 {body.get('font_latin','Times New Roman')}，"
-              f"行距 {line_pt} 磅固定值，首行缩进 {indent} 字符，两端对齐。"),
+              f"行距 {line_desc}，首行缩进 {indent} 字符，两端对齐。"),
              cn=body["font_cn"], latin=body["font_latin"], size=body["size_pt"],
-             align="both", line=line_pt, indent_chars=indent or None)
+             align="both", line=LINE, indent_chars=indent or None)
 
     # ---------- 一级标题 ----------
     sec_no += 1
@@ -423,7 +436,7 @@ def build(rules, out_path):
                    f"一级标题：{lv1.get('font_cn', '')} {lv1.get('size_pt', '')}pt，"
                    f"{'加粗' if lv1.get('bold') else '不加粗'}，"
                    f"{'居中' if lv1['align'] == 'center' else '左对齐'}，单独占行。"),
-             cn=body["font_cn"], size=body["size_pt"], align="both", line=line_pt, indent_chars=indent or None)
+             cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
 
     # ---------- 二级标题 ----------
     lv2 = hd.get("level2", {})
@@ -432,7 +445,7 @@ def build(rules, out_path):
                    f"二级标题：{hd['levels'][1]} 式编号，"
                    f"{lv2.get('font_cn', body['font_cn'])} {lv2.get('size_pt', body['size_pt'])}pt，"
                    f"缩进 {lv2.get('indent_chars', 2)} 字，单独占行。"),
-             cn=body["font_cn"], size=body["size_pt"], align="both", line=line_pt, indent_chars=indent or None)
+             cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
 
     # ---------- 三级标题 ----------
     lv3 = hd.get("level3", {})
@@ -448,11 +461,11 @@ def build(rules, out_path):
         add_para(doc, f"{l3_num}{l3_text}。{l3_note}",
                  cn=lv3.get("font_cn") or body["font_cn"],
                  size=lv3.get("size_pt") or body["size_pt"],
-                 align="both", line=line_pt, indent_chars=indent or None)
+                 align="both", line=LINE, indent_chars=indent or None)
     else:
         heading(3, sec_no, l3_text)
         add_para(doc, l3_note,
-                 cn=body["font_cn"], size=body["size_pt"], align="both", line=line_pt, indent_chars=indent or None)
+                 cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
 
     # ---------- 表格 ----------
     t_cap = smp.get("table_caption") or "表1  主要变量描述性统计"
@@ -460,7 +473,7 @@ def build(rules, out_path):
     t_rows = smp.get("table_rows") or [["M2", "60", "8.421①", "0.317", "7.902", "9.115"],
                                        ["GDP", "60", "12.884", "0.642", "11.933", "14.012"]]
     add_para(doc, t_cap, cn=tb["caption_font_cn"], size=tb["caption_size_pt"],
-             align=tb["caption_align"], line=line_pt, keep=True)
+             align=tb["caption_align"], line=LINE, keep=True)
     bp = tb.get("border_pt") or {"top": 1.5, "header_bottom": 0.5, "bottom": 1.5}
     three_line_table(
         doc,
@@ -483,24 +496,24 @@ def build(rules, out_path):
 
     # ---------- 图 ----------
     add_para(doc, smp.get("figure_placeholder") or "［插图位置：矢量图，无边框］", cn=None,
-             size=body["size_pt"], align="center", line=line_pt)
+             size=body["size_pt"], align="center", line=LINE)
     add_para(doc, smp.get("figure_caption") or "图1  美联储资产负债表规模变化",
              cn=fig["caption_font_cn"], size=fig["caption_size_pt"],
-             align=fig["caption_align"], line=line_pt, keep=True)
+             align=fig["caption_align"], line=LINE, keep=True)
     fig_samples = (smp.get("figure_notes") or {}) or {"general": "曲线为 HP 滤波后的趋势项。",
                    "source": "Wind数据库", "data_source": "国家统计局年度数据。", "cell": ""}
     for layer in fig["note_layers"]:
         prefix = layer.get("prefix") or ""
         add_para(doc, prefix + fig_samples.get(layer["kind"], ""),
                  cn=layer.get("font_cn"), size=layer.get("size_pt"),
-                 align=layer.get("align"), line=line_pt)
+                 align=layer.get("align"), line=LINE)
 
     # ---------- 参考文献 ----------
     ref = next(b for b in rules["blocks"] if b["type"] == "references")
     rh = tp.get("references_heading") or {}
     add_para(doc, ref.get("label", "参考文献："), cn=rh.get("font_cn", "黑体"),
              size=rh.get("size_pt", body["size_pt"]),
-             align=rh.get("align", "left"), line=line_pt,
+             align=rh.get("align", "left"), line=LINE,
              indent_chars=rh.get("indent_chars") or None, keep=True)
     # 规则集给了示例就用示例——文献格式逐刊不同，不该由代码兜底
     examples = rules["citation"].get("reference_list", {}).get("examples")
@@ -586,10 +599,11 @@ def build(rules, out_path):
             en_cls_line(blk)
 
     # ---------- 生成说明 ----------
-    add_para(doc, "", line=line_pt)
+    add_para(doc, "", line=LINE)
     if smp.get("sample_note"):
-        add_para(doc, smp["sample_note"], cn=body["font_cn"], size=9, line=line_pt)
+        add_para(doc, smp["sample_note"], cn=body["font_cn"], size=9, line=LINE)
         doc.save(out_path)
+        sanitize_docx(out_path)
         return out_path
     src_parts = [f"本样板由规则集 {j['id']}.json 自动生成，依据 {rules['verification']['source_url']}"]
     if rules["verification"].get("template_url"):
@@ -597,9 +611,10 @@ def build(rules, out_path):
     if rules.get("assumptions"):
         src_parts.append("标注「推定」的项为官方未规定、由本工具假定的值，不属于期刊要求")
     src_parts.append("文字内容为版式核验用途，非真实论文")
-    add_para(doc, "；".join(src_parts) + "。", cn=body["font_cn"], size=9, line=line_pt)
+    add_para(doc, "；".join(src_parts) + "。", cn=body["font_cn"], size=9, line=LINE)
 
     doc.save(out_path)
+    sanitize_docx(out_path)
     return out_path
 
 

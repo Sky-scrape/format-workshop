@@ -23,6 +23,16 @@ KIND = {
     "副标题套版": "A",
     "作者署名套版": "A",
     "正文套版": "A",
+    "标题套版": "A",
+    "摘要套版": "A",
+    "关键词套版": "A",
+    "题注套版": "A",
+    "表注套版": "A",
+    "文献表标题套版": "A",
+    "作者简介套版": "A",
+    "参考文献条目套版": "A",
+    "参考文献缩进": "A",
+    "补录块套版": "A",
     "图片段解除固定行距": "A",
     "公式段行距": "A",
     "公式（伪表格）原样保留": "A",
@@ -36,12 +46,32 @@ KIND = {
     "文献表标题归一": "B",
     "文献条目编号归一": "B",
     "表注／图注层序调整": "B",
+    "段首缩进空格删除": "B",
+    # 引用转换（--citation 才会产生，按是否触及字符定档）
+    "正文引用改作者-年份": "B",
+    "条目按目标刊体例重排": "B",
+    "文献表排序": "A",
+    # 说明条目（N 档）：渲染器只写了 note，before/after 为空，什么都没改
+    "引用体系转换（已跳过）": "N",
+    "编号样文本未转换": "N",
 }
 
 GRADE_DESC = {
     "A": "纯版式，不触及任何字符",
     "B": "触及字符，但不动字词",
+    "N": "说明条目，本项未改动任何内容",
 }
+
+# 可驳回的只有 B 档（触及字符）：A 档是纯版式，驳回后成品就不合规了。
+# 集合精确覆盖「渲染器有 audit.blocked 分支」的 B 档动作（DESIGN §4.1：
+# 现行落地的字符归一逐条进审计、可驳回）；驳回后保留原文，配套的
+# 版式设置仍写入（版式归版式）。引用转换的两个 B 档动作暂不在此列：
+# 渲染器只有 --citation 整批开关、没有逐条 blocked 分支，给勾选框
+# 就是无效承诺（tests/test_fix_audit_kinds.py 守着这条边界）。
+# tests/test_fix_audit_kinds.py 断言本集合 == B 档 ∩ 渲染器 blocked 分支。
+REJECTABLE = {"标题重新编号", "题注归一", "标签归一", "文献表标题归一",
+              "关键词分隔符归一", "文献条目编号归一",
+              "表注／图注层序调整", "段首缩进空格删除"}
 
 
 def clip(text, limit=48):
@@ -66,13 +96,19 @@ def render(d, job=None):
     for it in items:
         it["grade"] = KIND.get(it["action"], "A")
 
+    # N 档是说明条目（转换跳过的原因、可疑编号样文本的提示）：什么都没改，
+    # 不计入「共 N 处调整」与 A/B 档 KPI——把「跳过」算成一处调整，
+    # 等于虚报改动数；但必须单独立节显示，藏起来等于当没发生过。
+    note_items = [it for it in items if it["grade"] == "N"]
     text_items = [it for it in items
-                  if it.get("before") and it.get("after") and it["before"] != it["after"]]
-    layout_items = [it for it in items if it not in text_items]
+                  if it["grade"] != "N"
+                  and it.get("before") and it.get("after") and it["before"] != it["after"]]
+    layout_items = [it for it in items
+                    if it["grade"] != "N"
+                    and not (it.get("before") and it.get("after")
+                             and it["before"] != it["after"])]
 
     n_rejected = sum(1 for it in items if it.get("rejected"))
-    # 可驳回的只有 B 档（触及字符）与表注层序：A 档是纯版式，驳回后成品就不合规了
-    REJECTABLE = {"标题重新编号", "题注归一", "标签归一", "文献表标题归一", "表注／图注层序调整"}
     col = (5 if job else 4)
 
     def reject_cell(it):
@@ -121,6 +157,17 @@ def render(d, job=None):
             f'<div class="glist">{inner}</div></details>'
         )
     layout_html = "".join(group_html) or '<p class="empty">本次没有纯版式操作</p>'
+
+    note_html = ""
+    if note_items:
+        rows = "".join(
+            f'<div class="grow"><span class="gpos">{pos_label(it["idx"])}</span>'
+            f'<span class="gname">{html.escape(it["action"])}</span>'
+            f'<span class="gnote">{html.escape(it.get("note") or "—")}</span>'
+            f'{"<code class=gref>" + html.escape(it["rule"]) + "</code>" if it.get("rule") else ""}</div>'
+            for it in note_items)
+        note_html = (f'<section id="noteSection"><h2>说明（未计入改动）</h2>'
+                     f'<div class="glist">{rows}</div></section>')
 
     summary = " · ".join(f"{k} {len(v)}" for k, v in sorted(groups.items(),
                                                            key=lambda x: -len(x[1])))
@@ -226,7 +273,7 @@ tr.rejected .new{{color:var(--ink3);text-decoration:line-through}}
 <header>
   <h1>审计报告</h1>
   <p class="sub">{html.escape(d['source'].replace('.docx', ''))} → <strong>{html.escape(d['target'])}</strong></p>
-  <p class="meta">共 {len(items)} 处调整 · {html.escape(summary) if summary else '无'}{f' · 已驳回 {n_rejected} 条' if n_rejected else ''}</p>
+  <p class="meta">共 {len(items) - len(note_items)} 处调整 · {html.escape(summary) if summary else '无'}{f' · 已驳回 {n_rejected} 条' if n_rejected else ''}</p>
 </header>
 
 <div class="kpi">
@@ -265,11 +312,13 @@ tr.rejected .new{{color:var(--ink3);text-decoration:line-through}}
   {layout_html}
 </section>
 
+{note_html}
+
 {anon_html}
 
 {assume_html}
 
-<p class="meta" style="margin-top:20px">A 档＝纯版式，不触及文字；B 档＝触及字符但不动字词，全部可回溯。
+<p class="meta" style="margin-top:20px">A 档＝纯版式，不触及文字；B 档＝触及字符但不动字词，全部可回溯；N 档＝说明条目（跳过原因、可疑样文本），未改动也不计入改动数。
 正文与表格内文字零改动，本报告可直接用于投稿说明或导师核对。</p>
 </div>
 <script>

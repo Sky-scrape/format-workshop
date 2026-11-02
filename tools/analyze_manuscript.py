@@ -10,6 +10,8 @@ import zipfile
 from collections import Counter
 from xml.etree import ElementTree as ET
 
+import xmlsafe
+
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 M = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -41,7 +43,7 @@ def run_info(rpr):
 def analyze(path):
     z = zipfile.ZipFile(path)
     names = z.namelist()
-    doc = ET.fromstring(z.read("word/document.xml"))
+    doc = xmlsafe.fromstring(z.read("word/document.xml"))
     body = doc.find(q("body"))
 
     paras = list(body.iter(q("p")))
@@ -49,7 +51,7 @@ def analyze(path):
 
     style_of = {}
     try:
-        sty = ET.fromstring(z.read("word/styles.xml"))
+        sty = xmlsafe.fromstring(z.read("word/styles.xml"))
         for s in sty.findall(q("style")):
             sid = s.get(q("styleId"))
             nm = s.find(q("name"))
@@ -164,7 +166,7 @@ def analyze(path):
     # 脚注尾注
     for f in ("word/footnotes.xml", "word/endnotes.xml"):
         if f in names:
-            root = ET.fromstring(z.read(f))
+            root = xmlsafe.fromstring(z.read(f))
             items = [x for x in root if x.tag in (q("footnote"), q("endnote"))]
             real = [x for x in items if x.get(q("type")) in (None, "normal")]
             print(f"\n-- {f}: 共 {len(real)} 条")

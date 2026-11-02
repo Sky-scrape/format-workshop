@@ -78,8 +78,13 @@ def read_footnote_sizes(docx_path):
         if "word/footnotes.xml" not in z.namelist():
             return []
         xml = z.read("word/footnotes.xml").decode("utf-8")
+    import xmlsafe
     from lxml import etree
-    root = etree.fromstring(xml.encode("utf-8"))
+
+    raw = xml.encode("utf-8")
+    xmlsafe.reject_dtd(raw)
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    root = etree.fromstring(raw, parser)
     sizes = []
     for fn in root.findall(qn("w:footnote")):
         if int(fn.get(qn("w:id")) or "0") < 1:
@@ -183,3 +188,91 @@ def _patch_footnote_font(docx_path, cn, latin):
     with zipfile.ZipFile(docx_path, "w", zipfile.ZIP_DEFLATED) as out:
         for n, blob in items.items():
             out.writestr(n, blob)
+
+
+def build_wps_footnotes(path, size_pt=12):
+    """拼一份 WPS 存出来的脚注布局。
+
+    与 Word 的常见写法不同：分隔符是 id=4/5 且带 `w:type`，正文脚注反而是
+    id=0/1。渲染器原先按「id<1 就是分隔符」排除，正好把 id=0 的作者脚注
+    整条跳过，反手把两条分隔符改了字号——成品里首条脚注字号不对，
+    报告却写着「脚注正文套版」。
+    """
+    doc = Document()
+    doc.add_paragraph("数字金融与企业融资约束")
+    p = doc.add_paragraph("作者单位见脚注，数据来源见脚注二，正文其余内容保持不变。" * 2)
+    p.add_run()._r.append(parse_xml(f'<w:footnoteReference {nsdecls("w")} w:id="0"/>'))
+    p2 = doc.add_paragraph("正文继续，用于确认脚注引用不会中断段落。")
+    p2.add_run()._r.append(parse_xml(f'<w:footnoteReference {nsdecls("w")} w:id="1"/>'))
+
+    entry = path.with_suffix(".tmp.docx")
+    doc.save(str(entry))
+    half = int(round(size_pt * 2))
+    footnotes = (
+        f'<w:footnotes {nsdecls("w")}>'
+        f'<w:footnote w:type="separator" w:id="4"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
+        f'<w:footnote w:type="continuationSeparator" w:id="5">'
+        f'<w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>'
+        f'<w:footnote w:id="0"><w:p><w:r><w:rPr><w:sz w:val="{half}"/></w:rPr>'
+        f'<w:t>作者单位：某某大学商学院。</w:t></w:r></w:p></w:footnote>'
+        f'<w:footnote w:id="1"><w:p><w:r><w:rPr><w:sz w:val="{half}"/></w:rPr>'
+        f'<w:t>本文数据来自 Wind 数据库。</w:t></w:r></w:p></w:footnote>'
+        f'</w:footnotes>'
+    )
+
+    with zipfile.ZipFile(entry) as src:
+        items = {n: src.read(n) for n in src.namelist()}
+    ct = items["[Content_Types].xml"].decode("utf-8").replace(
+        "</Types>",
+        f'<Override PartName="/word/footnotes.xml" ContentType="{FOOTNOTES_CT}"/></Types>')
+    items["[Content_Types].xml"] = ct.encode("utf-8")
+    rels = items["word/_rels/document.xml.rels"].decode("utf-8").replace(
+        "</Relationships>",
+        f'<Relationship Id="rIdFnW" Type="{FOOTNOTES_REL}" '
+        f'Target="footnotes.xml"/></Relationships>')
+    items["word/_rels/document.xml.rels"] = rels.encode("utf-8")
+    items["word/footnotes.xml"] = footnotes.encode("utf-8")
+
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as out:
+        for n, blob in items.items():
+            out.writestr(n, blob)
+    entry.unlink(missing_ok=True)
+    return path
+
+
+def footnote_sizes_by_type(docx_path):
+    """按「是不是分隔符」归类脚注字号，不看 id。"""
+    import xmlsafe
+    from lxml import etree
+    with zipfile.ZipFile(docx_path) as z:
+        raw = z.read("word/footnotes.xml")
+        xmlsafe.reject_dtd(raw)
+        parser = etree.XMLParser(resolve_entities=False, no_network=True)
+        root = etree.fromstring(raw, parser)
+    real, sep = {}, {}
+    for fn in root.findall(qn("w:footnote")):
+        fid = fn.get(qn("w:id"))
+        sizes = [int(el.get(qn("w:val"))) for el in fn.iter(qn("w:sz"))]
+        if fn.get(qn("w:type")) or fn.find(".//" + qn("w:separator")) is not None \
+                or fn.find(".//" + qn("w:continuationSeparator")) is not None:
+            sep[fid] = sizes
+        else:
+            real[fid] = sizes
+    return real, sep
+
+
+def test_footnote_id_zero_is_styled_when_it_holds_text(tmp_path):
+    """WPS 稿里 id=0 是真脚注，必须套版，不能当成分隔符跳过。"""
+    target = json.loads((RULES / f"{TARGET_JOURNAL}.json").read_text(encoding="utf-8")
+                        )["typography"]["footnote"]["size_pt"]
+    src = build_wps_footnotes(tmp_path / "wps.docx", size_pt=12)
+    real, _ = footnote_sizes_by_type(src)
+    assert real == {"0": [24], "1": [24]}, f"夹具本身不对：{real}"
+
+    result = render_into(tmp_path / "run_wps", src, target="tjyj")
+    real, sep = footnote_sizes_by_type(result.docx)
+    want = int(round(target * 2))
+    assert real == {"0": [want], "1": [want]}, (
+        f"id=0 的作者脚注没跟着规则集变：{real}，期望 {target}pt")
+    assert all(not v for v in sep.values()), (
+        f"分隔符被当正文改了字号：{sep}")

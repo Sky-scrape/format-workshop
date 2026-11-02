@@ -24,6 +24,7 @@ from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ai_assist  # noqa: E402  同目录模块，AI 不可用时内部自行降级
+import xmlsafe  # noqa: E402  同目录模块
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 M = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
@@ -48,6 +49,13 @@ PAT = {
     "h2": re.compile(r"^[（(][一二三四五六七八九十]{1,3}[）)]"),
     "h3": re.compile(r"^\d{1,2}\s*[.．](?!\d)\s*\S"),
     "h4": re.compile(r"^[（(]\d{1,2}[）)]"),
+    # 阿拉伯数字分级、编号后不加点号：「1 引言」「2.1 研究方法」。
+    # 这是 Word 默认多级列表的另一种写法，与上面的「1. 引言」并存，
+    # 中文期刊稿件里非常常见，漏判会让整篇标题退化成正文。
+    # 否定量词的断言是防「3 个案例」这种正文短句冒充一级标题。
+    "h1_num": re.compile(r"^\d{1,2}\s+(?![\d.．个项种类条位名年月日次篇本])"),
+    "h2_num": re.compile(r"^\d{1,2}[.．]\d{1,2}\s+\S"),
+    "h3_num": re.compile(r"^\d{1,2}[.．]\d{1,2}[.．]\d{1,2}\s+\S"),
     "ref_item_num": re.compile(r"^\[\d+\]"),
     "appendix": re.compile(r"^(在线)?附\s*录"),
     "en_abstract": re.compile(r"^Abstract\s*[:：]", re.I),
@@ -56,6 +64,10 @@ PAT = {
 }
 
 YEAR = re.compile(r"(19|20)\d{2}")
+
+# 标题不用句读标点。数字编号标题全靠这一条与正文短句区分（如「3 个案例」）。
+# 冒号不算在内——「3 分析框架：科研自主性分级」是正常标题写法。
+HEADING_PUNCT = re.compile(r"[。；，！？]")
 
 
 def looks_like_ref(text):
@@ -89,18 +101,77 @@ def ascii_ratio(s):
     return sum(ord(c) < 128 for c in s) / len(s)
 
 
+STYLE_LEVEL = {
+    "title": 1, "标题": 1,
+    "heading1": 1, "heading2": 2, "heading3": 3, "heading4": 4,
+    "标题1": 1, "标题2": 2, "标题3": 3, "标题4": 4,
+}
+
+
+def style_level(p):
+    """读段落的 Word 样式级别（Heading 1 / 标题 2…），没套样式返回 None。
+
+    真实稿件大多靠直接格式，但**用了**样式时这是最可靠的信号，比任何文本
+    正则都强。此前 HEADING_STYLES 定义了却没人调用，等于把这条线索丢掉了。
+    """
+    ppr = p.find(W + "pPr")
+    if ppr is None:
+        return None
+    st = ppr.find(W + "pStyle")
+    if st is None:
+        return None
+    val = (st.get(W + "val") or "").strip().lower().replace(" ", "")
+    return STYLE_LEVEL.get(val)
+
+
+def style_offset(body):
+    """标题样式的级别偏移。
+
+    不少作者把「文档标题」直接套成 Heading 1，正文一级标题顺延成 Heading 2。
+    照朴素映射会整体高一级：文档标题被当成「一级标题」，真正的节标题被当成
+    二级。判据是——全文第一个非空段落用了 Heading 1，且之后再没有 Heading 1，
+    说明这个 1 被文档标题占用了。
+    """
+    seq = []
+    for child in body:
+        if child.tag != W + "p":
+            continue
+        txt = para_text(child)
+        if not txt.strip():
+            continue
+        seq.append(style_level(child))
+    if not seq or seq[0] != 1:
+        return 0
+    return 1 if 1 not in seq[1:] else 0
+
+
 def classify_heading(text):
     """返回 (level, 置信度)。长度与数字占比是关键的排除条件。"""
     if not text or len(text) > MAX_HEADING_LEN:
         return None
     if text.endswith(("。", "；", "，", "：")) and not PAT["table_caption"].match(text):
         return None
-    if digit_ratio(text) > 0.3:
-        return None
+
+    # 数字编号标题要排在数字占比检查之前：短标题里数字的占比天然偏高
+    # （「1 引言」1/4，「2 节名」更高），用正文的 0.3 阈值判会把它们误杀。
+    # 它们靠「短 + 不带句读标点」区分于正文句子，不靠数字占比。
+    if PAT["h3_num"].match(text):
+        return (3, "high")
+    if PAT["h2_num"].match(text):
+        return (2, "high")
+    if PAT["h1_num"].match(text) and len(text) <= 30 and not HEADING_PUNCT.search(text):
+        return (1, "high")
+
+    # 中文序号前缀与阿拉伯序号同属强信号，同样要排在数字占比之前。
+    # 「十、第10章」的占比是 2/6=0.33，按正文的 0.3 阈值会被判成正文——
+    # 这一条掉进正文，后面所有章节号就整体错位一格。
     if PAT["h1"].match(text):
         return (1, "high")
     if PAT["h2"].match(text):
         return (2, "high")
+
+    if digit_ratio(text) > 0.3:
+        return None
     if PAT["h4"].match(text):
         return (4, "high")
     if PAT["h3"].match(text):
@@ -270,18 +341,25 @@ def apply_ai(blocks, cfg, log=None):
 
 def parse(path, ai_cfg=None):
     z = zipfile.ZipFile(path)
-    doc = ET.fromstring(z.read("word/document.xml"))
+    doc = xmlsafe.fromstring(z.read("word/document.xml"))
     body = doc.find(W + "body")
 
     blocks = []
     seen_level = set()
     in_references = False
     idx = -1
+    # 标题样式级别整体偏移（文档标题占用了 Heading 1 时）；规则识别的兜底仍走文本
+    offset = style_offset(body)
 
     for child in body:
+        # idx 对 body 全部子元素统一编号（dense）：bookmarkStart、sdt 等异类
+        # 子元素也占一个号。消费端（render_from_ir / anonymize / apply_details）
+        # 一律按 body 子元素位置定位，生产端只数 w:p/w:tbl 的话，body 里一旦
+        # 出现位于块元素之前的书签等元素，双方就整体错位——套版错段、改错正文、
+        # 匿名路径漏删（F08）。
+        idx += 1
         if child.tag not in (W + "tbl", W + "p"):
             continue
-        idx += 1
         if child.tag == W + "tbl":
             text = "".join(t.text or "" for t in child.iter(W + "t")).strip()
             rows = child.findall(W + "tr")
@@ -295,6 +373,10 @@ def parse(path, ai_cfg=None):
                 "type": "table", "idx": idx, "n_rows": len(rows), "n_cols": cols,
                 "borders": table_borders(child),
                 "header": [para_text(tc) for tc in rows[0].findall(W + "tc")] if rows else [],
+                # 表内文字按行平铺进 cells（表格块本身没有 text 键）：声明
+                # 「全文（含图表）」口径的刊统计时要数表格内文字，缺了它
+                # 标注与计算就自相矛盾。图内文字在图片对象里，文本层没有，天然不计
+                "cells": [para_text(tc) for tr in rows for tc in tr.findall(W + "tc")],
             })
             continue
 
@@ -334,7 +416,14 @@ def parse(path, ai_cfg=None):
         else:
             if in_references:
                 in_references = False
-            h = classify_heading(text)
+            # 作者套了标题样式就以样式为准（含偏移校正），这是作者自己声明的
+            # 层级；没套样式才退回文本模式识别
+            h = None
+            slv = style_level(child)
+            if slv is not None and slv - offset >= 1:
+                h = (slv - offset, "style")
+            if h is None:
+                h = classify_heading(text)
             if h:
                 level, conf = h
                 if level == 3 and 2 not in seen_level:

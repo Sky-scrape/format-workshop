@@ -29,15 +29,19 @@
 本地 Ollama 的 /v1）。默认 `enabled: false`——不配就不联网。
 """
 
+import ipaddress
 import json
 import os
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "ai.json"
+# 环境变量统一前缀：PAPER_AI_<SUFFIX>
+_ENV_PREFIX = "PAPER_AI_"
 
 DEFAULTS = {
     "enabled": False,
@@ -102,13 +106,13 @@ def load_config():
             # 配置坏了就当没配，绝不让格式转换因为读不到配置而失败
             pass
     env_map = {
-        "enabled": "PAPER_AI_ENABLED",
-        "base_url": "PAPER_AI_BASE_URL",
-        "api_key": "PAPER_AI_API_KEY",
-        "model": "PAPER_AI_MODEL",
+        "enabled": "ENABLED",
+        "base_url": "BASE_URL",
+        "api_key": "API_KEY",
+        "model": "MODEL",
     }
-    for k, env in env_map.items():
-        v = os.environ.get(env)
+    for k, suffix in env_map.items():
+        v = os.environ.get(_ENV_PREFIX + suffix)
         if v is None or v == "":
             continue
         cfg[k] = (v.strip().lower() not in ("0", "false", "no", "off")
@@ -216,8 +220,38 @@ def text_unchanged(before, after):
 
 # ---------------------------------------------------------------- 请求
 
+def _validate_endpoint(cfg, url):
+    """端点只允许 http(s)；环回地址放行，其余私网 IP 需显式 opt-in。
+
+    127.0.0.1/localhost 是本机自身，指向它只可能打到本机服务——这是设计文档
+    明确支持的零外发选项（DESIGN §14.3 的本地 Ollama）。其余私网段可能是
+    内网第三方服务，默认不发；确有内网模型服务时在 config/ai.json 设
+    "allow_lan_endpoint": true。
+    """
+    if not url.lower().startswith(("http://", "https://")):
+        # urllib 对 file:// 等协议照发不误；端点只该是 http(s)。
+        raise ValueError(f"AI 端点只允许 http/https：{url}")
+    host = (urlparse(url).hostname or "").strip().lower()
+    if not host:
+        raise ValueError(f"AI 端点缺主机名：{url}")
+    if host == "localhost" or host.endswith(".localhost"):
+        return
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return  # 常规域名，边界交给 http(s) scheme
+    if ip.is_loopback:
+        return
+    if not ip.is_global and cfg.get("allow_lan_endpoint") is not True:
+        raise ValueError(
+            f"AI 端点指向私网地址 {host}。若模型服务确在内网，"
+            '请在 config/ai.json 设置 "allow_lan_endpoint": true'
+        )
+
+
 def _post(cfg, payload, timeout):
     url = str(cfg["base_url"]).rstrip("/") + "/chat/completions"
+    _validate_endpoint(cfg, url)
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST", headers={
         "Content-Type": "application/json",

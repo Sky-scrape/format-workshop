@@ -110,13 +110,28 @@ def build(rules, sample_pdf=None):
             blocks.append(f'<div class="cc good"><h3>与实物吻合</h3><ul>{li(cc["confirmed"])}</ul></div>')
         if cc.get("discrepancies") or cc.get("corrected"):
             items = (cc.get("discrepancies") or []) + (cc.get("corrected") or [])
-            blocks.append(f'<div class="cc warn2"><h3>指南与实物不符（已按实测修正）</h3><ul>{li(items)}</ul></div>')
+            # 差异之后取了哪一边，由规则集的 typography_authority 决定，不在代码里认刊名
+            kept_official = (cc.get("resolution") == "official"
+                             or (cc.get("resolution") is None
+                                 and v.get("typography_authority") in ("guide", "template")))
+            tail = "保留官方值" if kept_official else "已按实测修正"
+            blocks.append(f'<div class="cc warn2"><h3>指南与实物不符（{tail}）</h3><ul>{li(items)}</ul></div>')
         if cc.get("observed_difference"):
             blocks.append(f'<div class="cc info"><h3>与实物有差异，但保留官方值</h3><ul>{li(cc["observed_difference"])}</ul></div>')
         if cc.get("conclusion"):
             blocks.append(f'<p class="hint" style="margin:12px 0 0">{html.escape(cc["conclusion"])}</p>')
         parts.append('<section><h2>交叉核对（{0} 篇样本）</h2>{1}</section>'.format(
             cc.get("samples", "—"), "".join(blocks)))
+
+    conflict = v.get("conflict")
+    if conflict:
+        parts.append(
+            '<section class="warn"><h2>官方与实物冲突</h2><table>'
+            + row("官方要求", conflict.get("official"))
+            + row("实物实测", conflict.get("published"))
+            + row("本稿取", conflict.get("resolution"))
+            + row("风险", conflict.get("risk"))
+            + '</table></section>')
 
     preview = embed_preview(sample_pdf)
     if preview:
