@@ -508,7 +508,18 @@ def _stage_render(d, jid, original):
 
     t0 = time.time()
 
-    details = read_json(d / "details.json", {}) or {}
+    # details.json 由路由在抢锁前原子写（tmp + os.replace）：半截 JSON 已不可能，
+    # 但 Windows 上读方仍可能在替换瞬间撞上 sharing violation（毫秒不到的窗口）。
+    # 这里重试而不是静默当空表——静默会把用户刚提交的补录内容整轮丢掉。
+    details = {}
+    for attempt in range(3):
+        try:
+            details = read_json(d / "details.json", {}) or {}
+            break
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(0.02)
     filled_docx, filled_ir = d / "filled.docx", d / "filled.ir.json"
     injected = []
     if any((details.get(k) or "").strip() for k in details):
@@ -1067,8 +1078,28 @@ def details(job):
             data[key] = (request.form.get(key) or "").strip()
         for f in author_page_fields(rules_of(meta["journal"]) or {}):
             data[f["key"]] = (request.form.get(f["key"]) or "").strip()
-        (d / "details.json").write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                                        encoding="utf-8")
+        # 原子写（F11）：这个文件在抢锁前落笔，而持锁的上一轮渲染开头就要读它
+        # （_stage_render 首步 read_json 对半截 JSON 抛异常）。同值幂等只保证值
+        # 相同，不保证写入动作与持锁者读不交错——非原子 write_text 的毫秒级窗口
+        # 命中时，第一轮会以 JSONDecodeError 误报失败页。先落临时名再 os.replace，
+        # 读方要么见完整旧值、要么见完整新值，永远见不到半个 JSON（同款姿势见
+        # write_meta / F34）。Windows 上对方进程恰好开着这个文件时 os.replace
+        # 会抛 PermissionError（毫秒不到的窗口），稍候重试即可，不必失败整轮。
+        p = d / "details.json"
+        tmp = d / "details.json.tmp"
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            for attempt in range(5):      # 对方进程读完即放手；5 次共约 0.44s
+                try:
+                    os.replace(tmp, p)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep((0.02, 0.04, 0.08, 0.1, 0.2)[attempt])
+        finally:
+            tmp.unlink(missing_ok=True)
         # 引用体系重排是唯一会改写正文/条目文字的开关，默认关，由用户显式勾选
         meta["citation"] = request.form.get("citation") == "on"
         write_meta(d, meta)
