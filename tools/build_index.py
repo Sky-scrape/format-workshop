@@ -14,6 +14,7 @@ import argparse
 import base64
 import html
 import json
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -131,13 +132,18 @@ padding:14px 18px;margin:0 0 8px;font-size:13px;color:#3d5751}
 """
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("-o", "--out", default=str(JDIR / "index.html"))
-    args = ap.parse_args()
+def build(jdir, out):
+    """生成总览页。坏文件逐个点名进返回值，不拖垮其余文件。
 
-    rows = [summarize(json.loads(p.read_text(encoding="utf-8")))
-            for p in sorted(JDIR.glob("*.json"))]
+    返回失败清单 [(文件名, 原因)]——空列表表示全部成功。
+    """
+    jdir, out = Path(jdir), Path(out)
+    rows, failures = [], []
+    for p in sorted(jdir.glob("*.json")):
+        try:
+            rows.append(summarize(json.loads(p.read_text(encoding="utf-8"))))
+        except Exception as e:  # noqa: BLE001 —— 一份手写坏 JSON 不能让总览整体崩溃
+            failures.append((p.name, f"{type(e).__name__}: {e}"))
     zh = [r for r in rows if r["lang"] == "zh"]
     en = [r for r in rows if r["lang"] != "zh"]
 
@@ -146,7 +152,7 @@ def main():
         cards.append(f'<h2 class="group">{group}　{len(items)} 本</h2><div class="grid">')
         for r in items:
             basis = r["auth_label"] + ("（有官方原件）" if r["official"] else "")
-            t = thumb(JDIR / f'{r["id"]}.sample.pdf')
+            t = thumb(jdir / f'{r["id"]}.sample.pdf')
             fields = dict(
                 name=html.escape(r["name"]), name_en=html.escape(r["name_en"] or ""),
                 page=html.escape(r["page"]), body=html.escape(r["body"]),
@@ -189,7 +195,7 @@ def main():
   每本卡片右下角的「版式规格页」列出全部推定项与交叉核对记录，交付前应逐条过一遍。
 </div>"""
 
-    out = f"""<!doctype html>
+    out_text = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>期刊版式规则总览 · 格式工坊</title>
@@ -198,9 +204,21 @@ def main():
 <footer>由 rules/journal/*.json 自动生成 · {date.today():%Y-%m-%d} · 与各刊样板、规格页同源</footer>
 </div></body></html>"""
 
-    Path(args.out).write_text(out, encoding="utf-8")
-    print(f"总览页 → {args.out}（{len(rows)} 本，{len(out) // 1024} KB）")
+    Path(out).write_text(out_text, encoding="utf-8")
+    print(f"总览页 → {out}（{len(rows)} 本，{len(out_text) // 1024} KB）")
+    if failures:
+        print(f"{len(failures)} 份规则集解析失败，已跳过：", file=sys.stderr)
+        for name, why in failures:
+            print(f"  失败：文件 {name}：{why}", file=sys.stderr)
+    return failures
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-o", "--out", default=str(JDIR / "index.html"))
+    args = ap.parse_args()
+    return 1 if build(JDIR, args.out) else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

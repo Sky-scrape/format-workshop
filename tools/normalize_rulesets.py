@@ -9,12 +9,14 @@
 """
 
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 JDIR = ROOT / "rules" / "journal"
 SCALE = 0.98          # PDF 排版缩放系数：实测值 × 0.98 ≈ 标称值
 LOG = []
+TYPE_WARNINGS = []    # 命中 SIZE_KEYS 但值是字符串的字段——没法归整，必须点名报警
 
 
 def snap(v: float) -> float:
@@ -38,6 +40,8 @@ def walk(node, path, fn):
             if k in SIZE_KEYS and isinstance(v, (int, float)) and not isinstance(v, bool):
                 fn(node, k, float(v), path + (k,))
             else:
+                if k in SIZE_KEYS and isinstance(v, str):
+                    TYPE_WARNINGS.append((".".join(str(p) for p in path + (k,)), v))
                 walk(v, path + (k,), fn)
     elif isinstance(node, list):
         for i, v in enumerate(node):
@@ -152,8 +156,9 @@ EN_SRC = ("官方指南未规定字体、字号与行距；按 Elsevier/Wiley �
           "属推定（见 assumptions 第 1 条）")
 
 
-def add_source(jid, mapping):
-    r = json.loads((JDIR / f"{jid}.json").read_text(encoding="utf-8"))
+def add_source(jid, mapping, jdir=None):
+    jdir = Path(jdir) if jdir else JDIR
+    r = json.loads((jdir / f"{jid}.json").read_text(encoding="utf-8"))
     for field, text in mapping.items():
         node = r["typography"].get(field)
         if isinstance(node, dict) and "source" not in node:
@@ -161,34 +166,59 @@ def add_source(jid, mapping):
     r["verification"]["typography_provenance"] = (
         "字号逐项出处见 typography.*.source；无 source 者见 verification.cross_check 与 assumptions"
     )
-    (JDIR / f"{jid}.json").write_text(json.dumps(r, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (jdir / f"{jid}.json").write_text(json.dumps(r, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def main():
-    # 1 + 2 一起走，官方改完再归整余下的小数
-    for p in sorted(JDIR.glob("*.json")):
-        r = json.loads(p.read_text(encoding="utf-8"))
-        jid = r["journal"]["id"]
-        if jid == "ciejournal":
-            official_ciejournal(r)
-        if jid == "cmjj":
-            official_cmjj(r)
-        normalize(r, jid)
-        r.setdefault("verification", {})["size_normalization"] = (
-            "字号一律落在 0.5 磅刻度上（Word 字号的真实精度）；实物实测值先按 0.98 反算排版缩放再取刻度，"
-            "原始读数保留在 typography.*.size_pt_raw 或 measured 中"
-        )
-        p.write_text(json.dumps(r, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def main(jdir=None):
+    jdir = Path(jdir) if jdir else JDIR
+    failures = []
+    # 1 + 2 一起走，官方改完再归整余下的小数。逐文件隔离：坏文件点名报错，
+    # 其余照常处理，末尾汇总失败清单（退出码非零）。
+    for p in sorted(jdir.glob("*.json")):
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+            jid = r["journal"]["id"]
+            if jid == "ciejournal":
+                official_ciejournal(r)
+            if jid == "cmjj":
+                official_cmjj(r)
+            normalize(r, jid)
+            r.setdefault("verification", {})["size_normalization"] = (
+                "字号一律落在 0.5 磅刻度上（Word 字号的真实精度）；实物实测值先按 0.98 反算排版缩放再取刻度，"
+                "原始读数保留在 typography.*.size_pt_raw 或 measured 中"
+            )
+            p.write_text(json.dumps(r, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            failures.append((p.name, f"{type(e).__name__}: {e}"))
 
-    add_source("gjjryj", GJJRYJ_SRC)
-    add_source("kjyj", KJYJ_SRC)
+    for jid, mapping in (("gjjryj", GJJRYJ_SRC), ("kjyj", KJYJ_SRC)):
+        if not (jdir / f"{jid}.json").exists():
+            continue
+        try:
+            add_source(jid, mapping, jdir)
+        except Exception as e:  # noqa: BLE001
+            failures.append((f"{jid}.json", f"出处补写失败：{type(e).__name__}: {e}"))
     for jid in ("cer", "cwe", "ecmo", "jae", "jce", "jde"):
-        add_source(jid, {"body": EN_SRC, "title": EN_SRC})
+        if not (jdir / f"{jid}.json").exists():
+            continue
+        try:
+            add_source(jid, {"body": EN_SRC, "title": EN_SRC}, jdir)
+        except Exception as e:  # noqa: BLE001
+            failures.append((f"{jid}.json", f"出处补写失败：{type(e).__name__}: {e}"))
 
     print(f"共 {len(LOG)} 处改动：")
     for jid, path, old, new, why in LOG:
         print(f"  {jid:10s} {path:38s} {old} → {new}   [{why}]")
+    if TYPE_WARNINGS:
+        print(f"\n{len(TYPE_WARNINGS)} 处字号是字符串，未归整（无法参与刻度检查）：")
+        for path, val in TYPE_WARNINGS:
+            print(f"  {path} = {val!r}")
+    if failures:
+        print(f"\n{len(failures)} 份处理失败：")
+        for name, why in failures:
+            print(f"  失败：文件 {name}：{why}")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -54,6 +54,7 @@ details summary{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:
 
   <div class="kpis">
     <div class="kpi"><strong>{{ report.stats.extracted or 0 }}</strong><span>有原文依据</span></div>
+    <div class="kpi"><strong>{{ report.stats.unverified or 0 }}</strong><span>未证实，未写入</span></div>
     <div class="kpi"><strong>{{ report.stats.inherited or 0 }}</strong><span>沿用基线，需核对</span></div>
     <div class="kpi"><strong>{{ report.stats.dropped or 0 }}</strong><span>引文核验失败被丢弃</span></div>
     <div class="kpi"><strong>{{ report.errors|length }}</strong><span>阻断性错误</span></div>
@@ -81,6 +82,21 @@ details summary{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:
   </div>
   {% endif %}
 
+  {% if ext.unverified %}
+  <div class="flash bad"><strong>{{ ext.unverified|length }} 项未证实（需人工核）。</strong>
+    模型给出了值，但没有提供能对上原文的引文——按防编造闸门，这些值<strong>没有写入规则集</strong>，
+    不计入「有原文依据」，当前值仍是基线值。
+    <ul class="plain" style="margin-top:6px">
+      {% for u in ext.unverified %}<li>{{ u.label }}：模型声称 {{ u.value }}（{{ u.why }}）——若该值属实，请按稿约手工修正对应字段</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if ext.ocr_failed_pages %}
+  <div class="flash bad"><strong>第 {{ ext.ocr_failed_pages|map(attribute='page')|join('、') }} 页识别失败。</strong>
+    这些页的文字没有取到，稿约对应内容<strong>完全缺失</strong>——抽取结论不覆盖它们，请先解决取文问题再复核。</div>
+  {% endif %}
+
   <div class="card">
     <h2>从稿约里读到的</h2>
     <p class="hint">每条右侧是 PDF 原文片段，你可以直接拿去比对。值不对就说明模型读错了这一句。</p>
@@ -103,17 +119,24 @@ details summary{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:
   </div>
 
   <div class="card">
-    <details {{ 'open' if inherited|length < 12 }}>
-      <summary>{{ inherited|length }} 项未从稿约抽到，沿用结构基线</summary>
-      <p class="hint">这些值来自《国际金融研究》的规则集，只保证结构完整，不代表本刊。发布前请逐条对着稿约核一遍。</p>
-      <table>
-        <thead><tr><th>字段</th><th>当前值</th></tr></thead>
-        <tbody>
-        {% for it in inherited %}
-          <tr><td class="k">{{ it.label }}</td><td>{{ it.value if it.value is not none else '—' }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
+    <details>
+      <summary>{{ inherited|length }} 项未从稿约抽到，逐字段沿用结构基线《{{ ext.baseline or '基线刊' }}》</summary>
+      <p class="hint">下面是基线规则集里全部未被本次抽取覆写的字段——不只是上面的事实键，还包括 blocks
+        区块清单、statements 声明、personal_fields、表格边框等。它们只保证产物能渲染，不代表本刊。发布前请按区块逐组过一遍。</p>
+      {% for section, items in inherited|groupby('section') %}
+      <details {{ 'open' if inherited|length < 12 }}>
+        <summary>{{ section }} · {{ items|length }} 项 ← 来自基线刊</summary>
+        <table>
+          <thead><tr><th>字段</th><th>当前值</th></tr></thead>
+          <tbody>
+          {% for it in items %}
+            <tr><td class="k">{{ it.label }}</td>
+              <td>{% if it.value is none %}—{% elif it.value is mapping or (it.value is not string and it.value is sequence) %}{{ it.value|tojson }}{% else %}{{ it.value }}{% endif %}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </details>
+      {% endfor %}
     </details>
   </div>
 
@@ -123,7 +146,7 @@ details summary{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:
     <form method="post" action="/journals/draft/{{ jid }}/publish">
       <label class="publish">
         <input type="checkbox" name="confirm" value="on" required>
-        <div>我已逐项核对过：标注「沿用基线」的字段确实适用于本刊，或已按稿约修正。</div>
+        <div>我已逐项核对过：标注「沿用基线」的字段确实适用于本刊，或已按稿约修正；「未证实」清单里的值若属实，也已手工补录。</div>
       </label>
       {% if ext.baseline %}
       <label class="publish">

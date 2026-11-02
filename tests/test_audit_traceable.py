@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from conftest import RULES, TARGET_JOURNAL, render_into, run_sizes
+from conftest import RULES, TARGET_JOURNAL, change_items_without_rule, render_into, run_sizes
 from rules_ref import resolvable
 
 SHIPPED_JOURNALS = ["cjyj", "tjyj", "gjjryj"]
@@ -69,11 +69,28 @@ def test_every_rule_reference_resolves(baseline):
     assert not broken, f"这些引用在规则集里指不到实处：{broken[:5]}"
 
 
+def test_change_items_carry_a_resolvable_rule(baseline):
+    """一般性强制（DESIGN §8.5）：凡改动型条目必须带 rule 且可解析（F41）。
+
+    B 档测试只覆盖文字条目；A 档改动点（正文套版、标题套版、悬挂缩进…）
+    漏掉 rule= 不会让上面任何一条变红。这里按「改动型」判定——文字快照
+    真的变了、动作以「套版」结尾、或记录了格式目标值——要求 rule 存在且
+    解析得回规则集；说明型条目（before/after 全空、只解释为什么没动，如
+    「编号样文本未转换」「引用体系转换（已跳过）」「公式（伪表格）原样保留」）
+    豁免。
+    """
+    rules = json.loads((RULES / f"{TARGET_JOURNAL}.json").read_text(encoding="utf-8"))
+    bad = change_items_without_rule(baseline, rules)
+    assert not bad, f"这些改动型条目的依据缺失或解析不到：{bad[:5]}"
+
+
 @pytest.mark.parametrize("target", SHIPPED_JOURNALS)
 def test_rule_refs_resolve_across_shipped_journals(sample_docx, tmp_path, target):
     """换几本刊跑，所有引用都要能落到各自的规则集里。
 
     单刊通过不代表全通过——不同规则集的键不一样，缺哪个键只有跑到了才知道。
+    同一次渲染顺带跑 F41 的一般性断言：三本入库刊的全量审计里，改动型条目
+    都必须带可解析的 rule。
     """
     p = render_into(tmp_path / target, sample_docx, target=target)
     rules = json.loads((RULES / f"{target}.json").read_text(encoding="utf-8"))
@@ -81,6 +98,9 @@ def test_rule_refs_resolve_across_shipped_journals(sample_docx, tmp_path, target
     broken = [(it["action"], it["rule"]) for it in p.items
               if it["rule"] and not resolvable(rules, it["rule"])]
     assert not broken, f"{target} 有不落地的引用：{broken[:5]}"
+
+    bad = change_items_without_rule(p, rules)
+    assert not bad, f"{target} 有依据缺失的改动型条目：{bad[:5]}"
 
 
 def test_body_restyling_is_audited(baseline):

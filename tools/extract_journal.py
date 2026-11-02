@@ -244,6 +244,39 @@ def baseline_rules():
     return deepcopy(json.loads(cands[0].read_text(encoding="utf-8"))), cands[0].stem
 
 
+def iter_leaves(node, path=()):
+    """产出 (路径元组, 叶子值)：dict 逐层下钻，其余（标量、列表）整体算一片叶子。
+
+    列表不当 dict 拆——blocks 是一整份区块清单、headings.levels 是一串编号，
+    拆开既没法回填也没法人工核对，整片披露才有意义。
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from iter_leaves(v, path + (k,))
+    else:
+        yield path, node
+
+
+# 抽取会覆写的非 FACTS 路径（成组项）。继承披露的分界线靠它算：
+# 路径在这里面 → 值来自本次抽取；不在 → 值与基线刊相同，必须逐条披露。
+_GROUPED_PATHS = {
+    "body_line": (("typography", "body", "line_spacing"),),
+    "heading_levels": (("headings", "levels"), ("headings", "max_level")),
+}
+
+
+def written_paths(used, name_zh=""):
+    """本次抽取（含刊物标识覆写）实际落盘的路径集合。"""
+    ps = {tuple(FACTS[k][0]) for k in used if k in FACTS}
+    for gk, gpaths in _GROUPED_PATHS.items():
+        if gk in used:
+            ps.update(gpaths)
+    ps.add(("journal", "id"))            # 刊物代号是用户指定的，永远不算继承
+    if name_zh:
+        ps.add(("journal", "name_zh"))   # 用户亲手填的刊名同上，否则复核页出假风险
+    return ps
+
+
 def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
     """把事实清单映射成完整规则集。返回 (rules, report)。"""
     base, base_id = baseline_rules()
@@ -264,9 +297,11 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
             continue
         quote = str(evidence.get(key) or "").strip()
         if not quote:
+            # 无引文的事实不能进规则集——防编造主闸不允许「没引文照写入」的旁路
             unverified.append({"key": key, "label": label, "value": val,
                                "why": "模型未给出原文引文，无法核验"})
-        elif norm(quote) not in norm(text):
+            continue
+        if norm(quote) not in norm(text):
             # 引文在原文里搜不到 —— 判为编造，整条丢弃
             dropped.append({"key": key, "label": label, "value": raw,
                             "why": f"引文在原文中找不到：{quote[:40]}"})
@@ -274,32 +309,52 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
         if _set_path(rules, path, val):
             used[key] = {"label": label, "value": val, "evidence": quote}
 
-    # 成组项
+    # 成组项：与单值字段过同一道闸——没引文不落盘，引文对不上判编造丢弃
     mode = str(extracted.get("body_line_mode") or "").strip()
     value = extracted.get("body_line_value")
     if mode in ("exact", "multiple") and value not in (None, ""):
-        try:
-            v = float(value)
-            size = rules["typography"]["body"].get("size_pt") or 10.5
-            ls = {"mode": mode}
-            if mode == "exact":
-                ls["value_pt"] = v
-            else:
-                ls["value"] = v
-                ls["equivalent_exact_pt"] = round(size * v, 1)
-            rules["typography"]["body"]["line_spacing"] = ls
-            used["body_line"] = {"label": "行距", "value": f"{mode} {v}",
-                                 "evidence": str(evidence.get("body_line_value") or "")}
-        except (TypeError, ValueError):
-            dropped.append({"key": "body_line_value", "label": "行距",
-                            "value": value, "why": "不是数字"})
+        quote = str(evidence.get("body_line_value")
+                    or evidence.get("body_line_mode") or "").strip()
+        if not quote:
+            unverified.append({"key": "body_line", "label": "行距",
+                               "value": f"{mode} {value}",
+                               "why": "模型未给出原文引文，无法核验"})
+        elif norm(quote) not in norm(text):
+            dropped.append({"key": "body_line_value", "label": "行距", "value": value,
+                            "why": f"引文在原文中找不到：{quote[:40]}"})
+        else:
+            try:
+                v = float(value)
+                size = rules["typography"]["body"].get("size_pt") or 10.5
+                ls = {"mode": mode}
+                if mode == "exact":
+                    ls["value_pt"] = v
+                else:
+                    ls["value"] = v
+                    ls["equivalent_exact_pt"] = round(size * v, 1)
+                rules["typography"]["body"]["line_spacing"] = ls
+                used["body_line"] = {"label": "行距", "value": f"{mode} {v}",
+                                     "evidence": quote}
+            except (TypeError, ValueError):
+                dropped.append({"key": "body_line_value", "label": "行距",
+                                "value": value, "why": "不是数字"})
 
     levels = extracted.get("heading_levels")
     if isinstance(levels, list) and levels and all(isinstance(x, str) and x.strip() for x in levels):
-        rules["headings"]["levels"] = [x.strip() for x in levels]
-        rules["headings"]["max_level"] = min(len(levels), 4)
-        used["heading_levels"] = {"label": "标题编号", "value": rules["headings"]["levels"],
-                                  "evidence": str(evidence.get("heading_levels") or "")}
+        quote = str(evidence.get("heading_levels") or "").strip()
+        if not quote:
+            unverified.append({"key": "heading_levels", "label": "标题编号",
+                               "value": levels,
+                               "why": "模型未给出原文引文，无法核验"})
+        elif norm(quote) not in norm(text):
+            dropped.append({"key": "heading_levels", "label": "标题编号",
+                            "value": levels,
+                            "why": f"引文在原文中找不到：{quote[:40]}"})
+        else:
+            rules["headings"]["levels"] = [x.strip() for x in levels]
+            rules["headings"]["max_level"] = min(len(levels), 4)
+            used["heading_levels"] = {"label": "标题编号", "value": rules["headings"]["levels"],
+                                      "evidence": quote}
 
     # 刊物标识：以用户在页面上填的为准，AI 抽到的只作补充
     rules["journal"]["id"] = jid
@@ -307,12 +362,27 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
         rules["journal"]["name_zh"] = name_zh
     rules.setdefault("journal", {})["name_zh"] = rules["journal"].get("name_zh") or name_zh or jid
 
-    # 用户亲手填的字段不算"沿用基线"，否则复核页会提示一条假风险
-    handwritten = {"journal_name_zh"} if name_zh else set()
-    inherited = [{"key": k, "label": meta[2],
-                  "value": _get_path(rules, meta[0])}
-                 for k, meta in FACTS.items()
-                 if k not in used and k not in handwritten]
+    # 继承披露：基线里每个未被本次覆写、且值原样保留的叶子，逐条列出。
+    # 只披露 FACTS 键会漏掉 blocks 标签、statements、personal_fields、tables
+    # 边框等几百个静默继承的字段，「沿用 N 项」就成了完整假象。
+    by_path = {m[0]: (k, m[2]) for k, m in FACTS.items()}
+    written = written_paths(used, name_zh)
+    inherited = []
+    for path, val in iter_leaves(base):
+        if not path or path[0] in ("verification", "assumptions"):
+            continue                  # 草稿的核验区由本次重建，不算继承
+        if path in written:
+            continue
+        if _get_path(rules, path) != val:
+            continue                  # 已被本次抽取覆写成别的值
+        key, label = by_path.get(path, (None, None))
+        inherited.append({
+            "key": ".".join(str(p) for p in path),
+            "label": label or ".".join(str(p) for p in path),
+            "value": val,
+            "section": path[0],
+            "fact": key is not None,
+        })
 
     rules["verification"] = {
         "status": "unverified",
@@ -323,7 +393,8 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
         "verified_at": "",
         "verified_by": "AI 从稿约 PDF 抽取，未经人工核对",
         "notes": (f"抽取自 {source}；{len(used)} 项有原文依据，"
-                  f"{len(inherited)} 项沿用基线值，{len(dropped)} 项被丢弃"),
+                  f"{len(inherited)} 项沿用基线值，{len(dropped)} 项被丢弃，"
+                  f"{len(unverified)} 项未证实未采用"),
         "typography_authority": "guide",
         "extraction": {
             "source_file": source,
@@ -334,6 +405,8 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
             # 文字从哪来的必须留痕：OCR 一定有错字，复核时要区别对待
             "text_method": (meta or {}).get("method", "text_layer"),
             "ocr_pages": (meta or {}).get("ocr_pages") or [],
+            # 哪些页识别失败必须留痕——整页内容静默丢失比读错更严重
+            "ocr_failed_pages": (meta or {}).get("ocr_failed_pages") or [],
             "ocr_engine": (meta or {}).get("engine", ""),
             "ai_model": None,
             "used": {k: v for k, v in used.items()},
@@ -342,11 +415,20 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
             "unverified": unverified,
         },
     }
-    # 渲染器把 assumptions 逐条当字符串转义，这里只能是字符串数组
+    # 渲染器把 assumptions 逐条当字符串转义，这里只能是字符串数组。
+    # 事实键逐条列；结构字段（blocks/statements/personal_fields 等）数量太多，
+    # 收成一条汇总，逐字段清单在 verification.extraction.inherited 里可查。
+    fact_inherited = [it for it in inherited if it["fact"]]
+    n_struct = len(inherited) - len(fact_inherited)
     rules["assumptions"] = [
         f"{it['label']} = {it['value']}（未从稿约抽到，沿用基线值，须人工核对）"
-        for it in inherited if it["value"] not in (None, "", [], {})
+        for it in fact_inherited if it["value"] not in (None, "", [], {})
     ]
+    if n_struct:
+        rules["assumptions"].append(
+            f"另有 {n_struct} 个结构字段（blocks 区块清单、statements、personal_fields、"
+            f"tables 边框等）未经稿约逐项抽取，逐字段沿用基线《{base_id}》原值；"
+            f"逐字段清单见 verification.extraction.inherited，发布前须人工核对")
 
     report = validate(rules, used=used, inherited=inherited, dropped=dropped)
     report["stats"] = {"extracted": len(used), "inherited": len(inherited),
@@ -435,8 +517,17 @@ def main():
         return 1
 
     Path(a.out).write_text(json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
+    ext_meta = rules["verification"]["extraction"]
+    # OCR 丢页与未证实项都必须在命令行里喊出来，不能只在 JSON 里躺着
+    for m in ocr.failure_warnings(ext_meta):
+        print(m, file=sys.stderr)
     s = report["stats"]
-    print(f"抽取 {s['extracted']} 项 / 沿用基线 {s['inherited']} 项 / 丢弃 {s['dropped']} 项")
+    if s.get("unverified"):
+        print(f"警告：{s['unverified']} 项模型给了值但没有原文引文（未证实），"
+              f"未写入规则集，需人工核对（见草稿 verification.extraction.unverified）",
+              file=sys.stderr)
+    print(f"抽取 {s['extracted']} 项 / 沿用基线 {s['inherited']} 项 / "
+          f"丢弃 {s['dropped']} 项 / 未证实 {s['unverified']} 项")
     for e in report["errors"]:
         print("  错误:", e["msg"])
     for w in report["warnings"][:10]:

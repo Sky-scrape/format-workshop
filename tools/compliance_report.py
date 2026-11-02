@@ -10,6 +10,7 @@ import argparse
 import html
 import json
 import re
+import sys
 from pathlib import Path
 
 from report_theme import BASE
@@ -135,23 +136,34 @@ def detect_citation_style(ir):
     return ("numbered" if numbered > len(refs) / 2 else "author-year"), len(refs)
 
 
+def _need(container, key, what):
+    """取必需键；缺失时给出人话说明，而不是让 KeyError 冒成一屏 traceback。"""
+    if not isinstance(container, dict) or container.get(key) is None:
+        raise ValueError(f"{what}缺少必需键「{key}」——不是有效的数据结构，无法继续体检")
+    return container[key]
+
+
 def check(ir, rules):
     rows = []
     rows_raw = []
-    present = {b["type"] for b in ir["blocks"]}
+    ir_blocks = _need(ir, "blocks", "稿件 IR")
+    rules_blocks = _need(rules, "blocks", "规则集")
+    cite_cfg = _need(rules, "citation", "规则集")
+    want = _need(cite_cfg, "system", "规则集 citation")
+    present = {b["type"] for b in ir_blocks}
     present |= {"front_matter"} if "front_matter" in present else set()
 
-    fm = [b.get("text", "") for b in ir["blocks"] if b["type"] == "front_matter"]
+    fm = [b.get("text", "") for b in ir_blocks if b["type"] == "front_matter"]
     has_org = any(ORG.search(t) for t in fm)
     has_author = any(not ORG.search(t) and not t.strip().startswith(("——", "—", "-"))
                      for t in fm[1:])
     # 分类号常有中英两套，必须按语言分别判断
     cls_zh = any(b["type"] == "classification" and (b.get("lang") or "zh") != "en"
-                 for b in ir["blocks"])
+                 for b in ir_blocks)
     cls_en = any(b["type"] == "classification" and b.get("lang") == "en"
-                 for b in ir["blocks"])
+                 for b in ir_blocks)
 
-    for blk in rules["blocks"]:
+    for blk in rules_blocks:
         t = blk["type"]
         lang = blk.get("lang")
         if t == "classification_code":
@@ -187,7 +199,7 @@ def check(ir, rules):
     if raw_scope not in SCOPE_FILTER:
         scope_note = (f"规则集声明为「{raw_scope}」，写法未识别，按全文口径统计"
                       if raw_scope else "规则集未声明统计范围，按全文口径统计")
-    words = count_words(ir["blocks"], scope=eff_scope)
+    words = count_words(ir_blocks, scope=eff_scope)
     w_res = []
     for key, label in (("A", "字符数（不计空格）"), ("B", "中文字符 + 英文单词"), ("C", "字符数（计空格）")):
         val = words[key]
@@ -211,7 +223,7 @@ def check(ir, rules):
     abs_lo = lim_abs.get("min")
     abs_hi = lim_abs.get("max") or lim_abs.get("value")
     if abs_lo or abs_hi:
-        abs_text = "".join(b.get("text", "") for b in ir["blocks"] if b["type"] == "abstract")
+        abs_text = "".join(b.get("text", "") for b in ir_blocks if b["type"] == "abstract")
         actual = measure(abs_text, lim_abs.get("metric", "chars_cn"))
         abstract_info = {"lo": abs_lo, "hi": abs_hi, "value": abs_hi, "actual": actual,
                          "over": max(0, actual - abs_hi) if abs_hi else 0,
@@ -224,7 +236,7 @@ def check(ir, rules):
     lim_kw = limits.get("keywords") or {}
     keywords_info = None
     if lim_kw.get("min") or lim_kw.get("max"):
-        kw_text = "".join(b.get("text", "") for b in ir["blocks"] if b["type"] == "keywords")
+        kw_text = "".join(b.get("text", "") for b in ir_blocks if b["type"] == "keywords")
         body = kw_text.split("：", 1)[-1] if "：" in kw_text else kw_text
         count = len([x for x in re.split(r"[；;、,，\s\u3000]+", body) if x.strip()])
         keywords_info = {"min": lim_kw.get("min"), "max": lim_kw.get("max"),
@@ -234,14 +246,13 @@ def check(ir, rules):
     lim_title = limits.get("title_chars_max")
     title_info = None
     if lim_title:
-        title_text = next((b.get("text", "") for b in ir["blocks"]
+        title_text = next((b.get("text", "") for b in ir_blocks
                            if b.get("type") == "front_matter"), "")
         n_title = measure(title_text, "chars_cn")
         title_info = {"max": lim_title, "actual": n_title,
                       "over": max(0, n_title - lim_title), "found": bool(title_text)}
 
     style, nrefs = detect_citation_style(ir)
-    want = rules["citation"]["system"]
     cite_ok = style == want if style else None
 
     # 匿名要求：多数中文经管期刊明确要求正文匿名（会计研究更是「否则直接退稿」）。
@@ -255,7 +266,7 @@ def check(ir, rules):
     # 必备声明：规则集 statements 逐条列出。只判断"稿件里提到过没有"，
     # 不判断是否合规——版权转让这类常在投稿系统里单独勾选，正文本来就不会有。
     st_conf = rules.get("statements") or {}
-    all_text = "\n".join(b.get("text") or "" for b in ir["blocks"])
+    all_text = "\n".join(b.get("text") or "" for b in ir_blocks)
     statements = []
     for key, conf in st_conf.items():
         conf = conf if isinstance(conf, dict) else {}
@@ -272,7 +283,7 @@ def check(ir, rules):
     # 分节字数：帮作者定位"哪一节最占篇幅"，属定位信息，不是改写建议
     sections = []
     cur = None
-    for b in ir["blocks"]:
+    for b in ir_blocks:
         if b["type"] == "heading1":
             title = re.sub(r"^[一二三四五六七八九十]{1,3}\s*[、.．]\s*", "", b.get("text", "")).strip()
             if re.search(r"[\u4e00-\u9fff]", title):
@@ -306,17 +317,19 @@ def check(ir, rules):
         "citation": {"actual": style, "want": want, "ok": cite_ok, "n": nrefs},
         "anonymous": anon,
         "statements": statements,
-        "tables": sum(1 for b in ir["blocks"] if b["type"] == "table"),
-        "figures": sum(1 for b in ir["blocks"] if b["type"] == "figure"),
-        "equations_text": sum(1 for b in ir["blocks"]
+        "tables": sum(1 for b in ir_blocks if b["type"] == "table"),
+        "figures": sum(1 for b in ir_blocks if b["type"] == "figure"),
+        "equations_text": sum(1 for b in ir_blocks
                               if b["type"] in ("equation_pseudo_table",) or
                               (b["type"] == "body" and re.match(r"^[a-zA-Z_]+\s*=\s*\S+（\d+）$", b.get("text", "")))),
-        "equations_omml": sum(1 for b in ir["blocks"] if b["type"] == "equation"),
+        "equations_omml": sum(1 for b in ir_blocks if b["type"] == "equation"),
     }
 
 
 def render(ir, rules, res):
-    j = rules["journal"]
+    j = rules.get("journal") or {}
+    ver = rules.get("verification") or {}
+    src = ir.get("source") or "未命名稿件"
     rows_html = "".join(
         f'<tr><td>{html.escape(n)}</td>'
         f'<td class="{"ok" if v == "有" else "miss"}">{v}</td>'
@@ -532,7 +545,7 @@ def render(ir, rules, res):
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>投稿体检 · {html.escape(ir['source'].replace('.docx', ''))} → {html.escape(j['name_zh'])}</title>
+<title>投稿体检 · {html.escape(src.replace('.docx', ''))} → {html.escape(j.get('name_zh') or j.get('name_en') or '未知期刊')}</title>
 <style>{BASE}
 td.ok{{color:var(--accent)}} td.miss{{color:var(--danger);font-weight:500}}
 td.num{{font-variant-numeric:tabular-nums;white-space:nowrap}}
@@ -576,9 +589,9 @@ border:1px solid var(--line);color:var(--ink2)}}
 }}
 </style></head><body><div class="wrap">
 <header>
-  <h1>{html.escape(ir['source'].replace('.docx', ''))}</h1>
-  <p class="sub">目标期刊：<strong>{html.escape(j['name_zh'])}</strong>
-  · 依据 {html.escape(rules['verification'].get('source_title') or rules['verification']['source_url'])}</p>
+  <h1>{html.escape(src.replace('.docx', ''))}</h1>
+  <p class="sub">目标期刊：<strong>{html.escape(j.get('name_zh') or j.get('name_en') or '未知期刊')}</strong>
+  · 依据 {html.escape(ver.get('source_title') or ver.get('source_url') or '（未记录出处）')}</p>
 </header>
 <div class="verdict">
   <p class="v">{verdict}</p>
@@ -659,15 +672,28 @@ def main():
     ap.add_argument("ruleset")
     ap.add_argument("-o", "--out", required=True)
     a = ap.parse_args()
-    ir = json.loads(Path(a.ir).read_text(encoding="utf-8"))
-    rules = json.loads(Path(a.ruleset).read_text(encoding="utf-8"))
-    res = check(ir, rules)
-    Path(a.out).write_text(render(ir, rules, res), encoding="utf-8")
+
+    parsed = {}
+    for label, path in (("稿件 IR", a.ir), ("规则集", a.ruleset)):
+        try:
+            parsed[label] = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001 —— 坏文件点名报错，不甩原始 traceback
+            print(f"失败：文件 {path}（{label}）：{type(e).__name__}: {e}", file=sys.stderr)
+            return 1
+    ir, rules = parsed["稿件 IR"], parsed["规则集"]
+    try:
+        res = check(ir, rules)
+        out_html = render(ir, rules, res)
+    except ValueError as e:  # 缺键等数据问题：说明缺什么，而不是冒 traceback
+        print(f"失败：{e}", file=sys.stderr)
+        return 1
+    Path(a.out).write_text(out_html, encoding="utf-8")
     print("已生成:", a.out)
     print("  结构缺失:", [n for n, v, r in res["rows"] if v == "缺" and r] or "无")
     print("  引用体系:", res["citation"]["actual"], "→", res["citation"]["want"],
           "一致" if res["citation"]["ok"] else "需重排")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

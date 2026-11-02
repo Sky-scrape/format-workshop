@@ -177,31 +177,59 @@ def _page_needs_ocr(text):
 
 
 def _ocr_page(page, dpi):
+    """识别单页。返回 (文本, 检测框数, 失败原因)。
+
+    失败原因是 None / engine_missing（引擎没装）/ page_error（该页识别抛错）。
+    失败不能静默吞掉——整页内容丢了，调用方必须能知道丢在哪页、为什么丢。
+    """
     eng = engine()
     if eng is None:
-        return "", 0
-    pix = page.get_pixmap(dpi=dpi)
+        return "", 0, "engine_missing"
+    try:
+        pix = page.get_pixmap(dpi=dpi)
+    except Exception:  # noqa: BLE001
+        return "", 0, "page_error"
     img = pix.tobytes("png")
     try:
         result, _ = eng(img)
     except Exception:  # noqa: BLE001
-        return "", 0
+        return "", 0, "page_error"
     lines = [squash(x) for x in merge_paragraphs(group_lines(result))]
-    return "\n".join(x for x in lines if x), len(result or [])
+    return "\n".join(x for x in lines if x), len(result or []), None
+
+
+def failure_warnings(meta):
+    """把取文失败转成人读的警告句。meta 来自 extract_pdf_text；无失败返回 []。"""
+    failed = (meta or {}).get("ocr_failed_pages") or []
+    missing = [f["page"] for f in failed if f.get("why") == "engine_missing"]
+    errored = [f["page"] for f in failed if f.get("why") == "page_error"]
+    msgs = []
+    if missing:
+        msgs.append(f"警告：未安装 RapidOCR（pip install rapidocr-onnxruntime），"
+                    f"第 {missing} 页是扫描图，无法取文，这些页的内容缺失。")
+    if errored:
+        msgs.append(f"警告：第 {errored} 页 OCR 识别失败，这些页的内容缺失。")
+    return msgs
 
 
 def extract_pdf_text(path, *, dpi=DEFAULT_DPI, max_chars=24000, log=None):
-    """返回 (text, meta)。meta.method: text_layer / ocr / mixed。"""
+    """返回 (text, meta)。meta.method: text_layer / ocr / mixed。
+
+    meta.ocr_failed_pages 逐页记录识别失败（含原因）——失败页的内容是静默
+    丢失的，上游必须有机会知道并报警，而不是拿到一份看似完整的文本。
+    """
     import fitz
 
     doc = fitz.open(str(path))
-    pages, ocr_pages, chars = [], [], 0
+    pages, ocr_pages, chars, failed = [], [], 0, []
     try:
         for i, page in enumerate(doc):
             raw = (page.get_text("text") or "").strip()
             used = "text_layer"
             if _page_needs_ocr(raw):
-                txt, n = _ocr_page(page, dpi)
+                txt, n, why = _ocr_page(page, dpi)
+                if why:
+                    failed.append({"page": i + 1, "why": why})
                 if txt.strip():
                     raw, used = txt, "ocr"
                     ocr_pages.append(i + 1)
@@ -217,9 +245,13 @@ def extract_pdf_text(path, *, dpi=DEFAULT_DPI, max_chars=24000, log=None):
     trunc = len(text) > max_chars
 
     if not text:
+        if not ocr_pages and any(f["why"] == "engine_missing" for f in failed):
+            raise RuntimeError(
+                "未安装 RapidOCR（pip install rapidocr-onnxruntime），扫描页无法取文。")
         raise RuntimeError(
-            "PDF 里既没有文字层，OCR 也没读出内容。"
-            "如果是扫描件，请确认图像清晰、不是整页手写或表格截图。")
+            "PDF 里既没有文字层，OCR 也没读出内容"
+            + (f"（识别失败页：{[f['page'] for f in failed]}）" if failed else "")
+            + "。如果是扫描件，请确认图像清晰、不是整页手写或表格截图。")
 
     if not ocr_pages:
         method = "text_layer"
@@ -229,8 +261,9 @@ def extract_pdf_text(path, *, dpi=DEFAULT_DPI, max_chars=24000, log=None):
         method = "mixed"
 
     meta = {"method": method, "pages": len(pages), "chars": chars,
-            "ocr_pages": ocr_pages, "truncated": trunc, "dpi": dpi,
-            "engine": engine_name() if ocr_pages else "文字层"}
+            "ocr_pages": ocr_pages, "ocr_failed_pages": failed,
+            "truncated": trunc, "dpi": dpi,
+            "engine": engine_name() if (ocr_pages or failed) else "文字层"}
     if log and ocr_pages:
         log(f"OCR：第 {ocr_pages} 页无文字层，已识别")
     return text[:max_chars], meta
@@ -249,8 +282,11 @@ def main():
     try:
         text, meta = extract_pdf_text(a.pdf, dpi=a.dpi, max_chars=a.chars, log=print)
     except Exception as e:  # noqa: BLE001
-        print(f"失败：{e}")
+        print(f"失败：{e}", file=sys.stderr)
         return 1
+
+    for m in failure_warnings(meta):
+        print(m, file=sys.stderr)
 
     if a.out:
         Path(a.out).write_text(text, encoding="utf-8")

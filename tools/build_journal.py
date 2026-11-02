@@ -19,6 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
+# soffice 偶发挂死会无限期阻塞整个构建；给个上限，超时杀进程报错
+SOFFICE_TIMEOUT = 180
+
 SOFFICE_CANDIDATES = [
     shutil.which("soffice"),
     r"C:\Program Files\LibreOffice\program\soffice.exe",
@@ -35,14 +38,39 @@ def find_soffice():
     return None
 
 
-def run(cmd, **kw):
-    r = subprocess.run(cmd, capture_output=True, text=True, **kw)
+def run(cmd, timeout=None, **kw):
+    try:
+        # cmd 一律是参数列表（绝不拼 shell 字符串），shell=False 显式声明
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           shell=False, **kw)
+    except subprocess.TimeoutExpired:
+        print("失败（超时）:", " ".join(map(str, cmd)),
+              f"— 超过 {timeout} 秒未结束，已终止")
+        raise SystemExit(1)
     if r.returncode != 0:
         print("失败:", " ".join(map(str, cmd)))
         print(r.stdout[-800:])
         print(r.stderr[-800:])
         raise SystemExit(1)
     return r
+
+
+def convert_pdf(soffice, sample, pdf, timeout=SOFFICE_TIMEOUT):
+    """soffice 转 PDF。三条防线：
+
+    1. 转换前删掉旧 PDF——残留的旧件是上一轮样板的影，会被规格页静默内嵌
+    2. 带超时调用——soffice 挂死不能无限期阻塞
+    3. 退出码 0 但 PDF 没落盘 → 显式失败。漂移的样板比没有样板更糟，
+       宁可让 build 以非零退出，也不带着过期预览假装「完成」。
+    """
+    if pdf.exists():
+        pdf.unlink()
+    run([soffice, "--headless", "--convert-to", "pdf",
+         "--outdir", str(pdf.parent), str(sample)], timeout=timeout)
+    if not pdf.exists():
+        raise SystemExit(
+            f"失败：soffice 退出码为 0，但 {pdf.name} 没有生成——转换实际没有成功。"
+            "规格页不会带着旧 PDF 假装完成，请检查 LibreOffice 是否正常。")
 
 
 def main():
@@ -63,10 +91,15 @@ def main():
 
     soffice = find_soffice()
     if soffice:
-        run([soffice, "--headless", "--convert-to", "pdf", "--outdir", str(outdir), str(sample)])
+        convert_pdf(soffice, sample, pdf)
         print("  PDF  →", pdf.name)
     else:
-        print("  跳过 PDF：未找到 LibreOffice，规格页将不含成品预览")
+        if pdf.exists():
+            # 没有转换器也不能拿上一轮的 PDF 冒充本轮样板的预览
+            pdf.unlink()
+            print("  已删除旧 PDF：未找到 LibreOffice，无法重新生成，规格页将不含成品预览")
+        else:
+            print("  跳过 PDF：未找到 LibreOffice，规格页将不含成品预览")
 
     run([PY, str(ROOT / "tools/render_spec.py"), str(ruleset), "-o", str(spec),
          "--sample-pdf", str(pdf) if pdf.exists() else ""])

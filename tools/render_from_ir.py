@@ -927,6 +927,19 @@ def apply_citation(doc, elems, ir, rules, audit):
     if not refs:
         return
 
+    # 体例硬闸（P4-1）：引用重排只服务于声明了作者-年份体的目标刊。编号实引的
+    # 刊（cjyj 等，citation.system=numbered）勾了也不转——编号映射再正确，交付
+    # 稿的引用体例也是错的。判别只读规则集字段，代码不内置任何刊名；未声明
+    # system 时同样不转（越线开关宁可不做，见 journal-schema §4）。
+    system = ((rules or {}).get("citation") or {}).get("system") or ""
+    if system != "author-year":
+        why = ("该刊声明编号实引，不转" if system == "numbered"
+               else f"该刊引用体例声明为「{system or '未声明'}」，仅 author-year 才转")
+        audit.add(-3, "citation", "引用体系转换（已跳过）",
+                  note=f"{why}（citation.system，正文编号引用与文献表保持原样）",
+                  rule="citation.system")
+        return
+
     index = cr.build_index([block_text(p) for _, p in refs])
     body_paras = [(b["idx"], b["type"], elems.get(b["idx"])) for b in ir["blocks"]
                   if b["type"] not in ("reference_item", "references_heading")

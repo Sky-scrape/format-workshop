@@ -87,6 +87,22 @@
 }
 ```
 
+`citation.system` 是**引用体例判别字段**，与语言无关（§11.1），枚举两个值：
+
+| 值 | 正文引注写法 | 例 |
+|---|---|---|
+| `numbered` | 顺序编码制：正文以 `[1]`（或上标）标注，编号与文献表一一对应 | 国际金融研究、财经研究 |
+| `author-year` | 作者-年份制：正文以「（张三，2020）」标注 | 金融研究、管理世界 |
+
+它描述的是**正文怎么标引注**，与文献表是否编号解耦——「作者年制 + 编号表」的组合（统计研究）由 `reference_list.numbered` 表达（§19.2），不改 `system`。
+
+与 `in_text` 其他键的关系：`in_text` 的其余键描述的都是**本刊正文引注的具体写法**，是否被引用重排消费由 `system` 决定——
+
+- `system: "author-year"`：`bracket`、`multiple_separator`、`cn_one_author` / `en_two_authors` / `en_three_plus` 等是转换产物的依据（`citation_ref.in_text_style` 只在这里取值）；
+- `system: "numbered"`：`bracket: "[]"`、`position`、实引对应要求等描述的是**编号标注**本身，重排一律不取——编号实引的刊不存在「转作者-年份」这件事。
+
+消费点三处，口径必须一致：补录页勾选闸（仅 `author-year` 刊提供转换选项，DESIGN §1.4）、`render_from_ir.apply_citation` 入口硬闸（非 `author-year` 时记审计并整体跳过）、`citation_ref.in_text_style`（作者-年份括注与分隔符只认 `author-year` 刊的声明）。`system` 缺省按「不支持转换」对待——引用重排是越线开关，宁可不做。
+
 `style_id` 指向**独立的引用格式化器插件**，不写在渲染器里。新增一种引用体系 = 新增一个格式化器，不改渲染器。
 
 `reference_list.templates` 是引用体系重排（§1.4）消费的条目模板，键为 `{语言}_{类型}`（`cn_journal` / `en_book`…，与 `citation_ref.KIND` 的 slot 对应），值必须带 `{authors}` 这类**占位符**——渲染器只认带占位符的模板；纯描述式的著录写法说明（如 GB/T 7714 的「[序号]主要责任者.文献题名[M]…」）不是模板，放进来也不会被拿去改写条目。

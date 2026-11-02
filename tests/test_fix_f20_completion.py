@@ -174,9 +174,13 @@ def test_citation_gate_opens_for_migrated_journals(tmp_path):
     ir = {"blocks": [{"idx": 0, "type": "body", "text": "引用了文献[1]和[2]。"}]}
     (d / "manuscript.ir.json").write_text(json.dumps(ir, ensure_ascii=False),
                                           encoding="utf-8")
-    for jid in MIGRATED_AUTHOR_YEAR[:2] + MIGRATED_NUMBERED:  # 抽样 + 全部编号制
+    for jid in MIGRATED_AUTHOR_YEAR[:2]:  # 抽样作者-年份刊：迁移后闸必须开
         offered = app.details_context(d, {"journal": jid})["citation_offered"]
         assert offered is True, f"{jid} 迁移后勾选闸仍打不开"
+    # 编号实引刊（ciejournal）：P4-1 之后渲染层硬闸整批拒绝转换，勾选闸加同款
+    # 条件（阶段 D）后对它关——开着的勾选框永远落空，还暗示「能转编号实引」
+    numbered = app.details_context(d, {"journal": MIGRATED_NUMBERED[0]})["citation_offered"]
+    assert numbered is False
     # 无模板刊（gjjryj，入库）仍然关闸：模板缺席是如实状态，不许虚报
     denied = app.details_context(d, {"journal": "gjjryj"})["citation_offered"]
     assert denied is False

@@ -61,18 +61,45 @@ def body_texts(docx_path):
     return out
 
 
-def normalize(text):
-    """把允许的字符级归一全部抹平，剩下的差异才算真改动。
+# ---- 白名单口径（DESIGN §4.1 的实现口径，2026-11-02）----
+# 渲染器真正落地的字符级归一只有：段首缩进删除（N-01 段首＋N-08，只对
+# body/abstract/keywords）；标题编号前缀按规则集重写、未编号节的标题文字整段
+# 来自规则集 intro_title_text（「引　　言」的留白是版式）；题注的编号间隔归一；
+# 文献条目编号前缀（N-07）。N-02～N-06（正文内部空格、全半角）与段尾空白未实现，
+# 守卫逐字比对——「无条件删全部空白」的宽松口径已按 F31 收紧。
+INDENT_LEADING_TYPES = {"body", "abstract", "keywords"}
+HEADING_TYPES = {"heading1", "heading2", "heading3"}
+CAPTION_TYPES = {"table_caption", "figure_caption"}
 
-    抹掉的东西都来自 DESIGN §4.1 的白名单（空格、全半角、标题编号），
-    以及标题行内的多空格（「引　　言」是版式留白，不是文字）。
+HEADING_NUMBER_PREFIXES = (re.compile(r"^[一二三四五六七八九十]{1,3}、"),
+                           re.compile(r"^[（(][一二三四五六七八九十]{1,3}[）)]"),
+                           re.compile(r"^\d{1,2}(?:\.\d{1,2})*[.．]?"))
+CAPTION_PREFIX = re.compile(r"^(表|图)\s*\d+")
+REF_NUMBER_PREFIX = re.compile(
+    r"^\s*[\[［〔【(（]?\s*\d{1,3}\s*[\]］〕】)）]?\s*[.．、]?\s*")
+
+
+def normalize(text, btype=""):
+    """把该块类型下白名单允许的字符级归一抹平，剩下的差异才算真改动。
+
+    口径按块类型收紧（F31）：段首缩进空白只允许 body/abstract/keywords 删
+    （N-01 段首＋N-08 的唯一落地处）；标题允许抹编号前缀与留白（未编号节的
+    标题文字整段来自规则集 intro_title_text）；题注允许抹「表1/图2」前缀与
+    两端空白（题注归一只改间隔）；文献条目允许抹编号前缀（N-07）。其余——
+    包括全角↔半角、中文与拉丁之间的空格——一律不在白名单：normalize('数字
+    金融 A 股') 不再等于 normalize('数字金融A股')。
     """
-    s = re.sub(r"\s+", "", text)
-    s = "".join(chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in s)
-    for pat in (r"^[一二三四五六七八九十]{1,3}、",
-                r"^[（(][一二三四五六七八九十]{1,3}[）)]",
-                r"^\d{1,2}(?:\.\d{1,2})*[.．]?"):
-        s = re.sub(pat, "", s)
+    s = text
+    if btype in INDENT_LEADING_TYPES:
+        s = s.lstrip("\t \u3000")
+    if btype in HEADING_TYPES:
+        s = re.sub(r"\s+", "", s.strip())
+        for pat in HEADING_NUMBER_PREFIXES:
+            s = pat.sub("", s)
+    elif btype in CAPTION_TYPES:
+        s = CAPTION_PREFIX.sub("", s.strip()).strip()
+    elif btype == "reference_item":
+        s = REF_NUMBER_PREFIX.sub("", s, count=1)
     return s
 
 
@@ -97,22 +124,34 @@ def content_of(text, btype):
     return "" if btype == "references_heading" else text.rstrip("：:")
 
 
-def signature(text, btype):
+def keyword_terms(body, sep=None):
+    """关键词串切词条。口径与渲染器 split_keywords 同一（tools/render_from_ir.py）。
+
+    逗号、顿号、分号是明确的分隔符，总是切；空白分两等——目标分隔符本身是
+    空白时全部当分隔符，否则只有「连续两个以上的空白」或全角空格才算
+    （英文词组「digital finance」里的单词空格是词间空格）。sep 缺省按非空白
+    分支（保守侧）：守卫欠切只是把词条连成大块来比，渲染器错把一个关键词
+    拆成两个会被抓到；过切则会把这类错放行。
+    """
+    pattern = (r"[\s,，;；、]+" if sep is not None and not sep.strip()
+               else r"(?:\s{2,}|\u3000|[,，;；、])+")
+    return [t for t in re.split(pattern, body or "") if t.strip()]
+
+
+def signature(text, btype, kw_sep=None):
     """块的可比对指纹。
 
-    关键词单独处理：分隔符从全角空格换成「；」属于白名单内的归一
-    （`关键词分隔符归一`），所以拆成词条再比，而不是整串比。
+    关键词单独处理：分隔符从全角空格换成「；」属于规则集定义的归一
+    （`关键词分隔符归一`），所以按目标刊的分隔符口径拆成词条再比，词条
+    本身逐字比（kw_sep 是目标刊 blocks:keywords/zh/separator 的值）。
 
-    参考文献条目剥掉编号前缀：`[1]`→`〔1]` 这类改写法属 N-07 白名单，
-    但条目正文必须逐字不变，所以只比前缀之后的部分。
+    参考文献条目剥掉编号前缀（见 normalize）：`[1]`→`〔1〕` 这类改写法属
+    N-07 白名单，但条目正文必须逐字不变，所以只比前缀之后的部分。
     """
     body = content_of(text, btype)
     if btype == "keywords":
-        terms = [t for t in re.split(r"[；;、,，\s\u3000]+", body) if t.strip()]
-        return tuple(normalize(t) for t in terms)
-    if btype == "reference_item":
-        body = re.sub(r"^\s*[\[［〔【(（]?\s*\d{1,3}\s*[\]］〕】)）]?\s*[.．、]?\s*", "", body)
-    return (normalize(body),)
+        return tuple(normalize(t) for t in keyword_terms(body, kw_sep))
+    return (normalize(body, btype),)
 
 
 # 会真正改写文字的动作。只有这些条目的 before/after 是文字快照，
@@ -133,11 +172,12 @@ def sample_docx(tmp_path_factory):
 class Pipeline:
     """一次「解析 → 渲染 → 审计」的结果，以及常用派生数据。"""
 
-    def __init__(self, workdir, docx, audit, ir):
+    def __init__(self, workdir, docx, audit, ir, keyword_sep=None):
         self.dir = workdir
         self.docx = docx
         self.audit = audit
         self.ir = ir
+        self.keyword_sep = keyword_sep
         self.items = audit.get("items", [])
         self.source_texts = body_texts(workdir / "manuscript.docx")
         self.output_texts = body_texts(docx)
@@ -170,8 +210,14 @@ def tracked_rulesets():
     return {Path(line).stem for line in r.stdout.splitlines() if line.endswith(".json")}
 
 
-def render_into(workdir, source_docx, target=TARGET_JOURNAL, rejects=None, rules_path=None):
-    """在指定目录完整跑一遍流水线，返回 Pipeline。"""
+def render_into(workdir, source_docx, target=TARGET_JOURNAL, rejects=None, rules_path=None,
+                citation=False):
+    """在指定目录完整跑一遍流水线，返回 Pipeline。
+
+    citation=True 时带上 --citation：渲染器里唯一越线的开关（正文编号引用
+    改作者-年份、文献条目按模板重排）。invariant_failures 对这类改写块有
+    引用感知的豁免（F39），harness 因此能跑完 citation 路径。
+    """
     d = Path(workdir)
     d.mkdir(parents=True, exist_ok=True)
 
@@ -186,17 +232,25 @@ def render_into(workdir, source_docx, target=TARGET_JOURNAL, rejects=None, rules
 
     ruleset = Path(rules_path) if rules_path else RULES / f"{target}.json"
     outdocx = d / f"manuscript.{target}.docx"
+    # 目标刊的关键词分隔符：signature 切词条的口径与渲染器 split_keywords
+    # 同一（它读同一个字段），守卫才不会把规则集驱动的分隔符归一误判成改字
+    rules = json.loads(Path(ruleset).read_text(encoding="utf-8"))
+    kw_sep = next((b.get("separator") for b in rules.get("blocks", [])
+                   if b.get("type") == "keywords" and b.get("lang") == "zh"), None)
     cmd = ["render_from_ir.py", d / "manuscript.ir.json", ruleset, "-o", outdocx]
     if rejects:
         (d / "reject.json").write_text(
             json.dumps({"ids": list(rejects)}, ensure_ascii=False), encoding="utf-8")
         cmd += ["--reject", d / "reject.json"]
+    if citation:
+        cmd += ["--citation"]
     run_tool(*cmd)
 
     audit_path = outdocx.with_suffix(".audit.json")
     return Pipeline(d, outdocx,
                     json.loads(audit_path.read_text(encoding="utf-8")),
-                    json.loads((d / "manuscript.ir.json").read_text(encoding="utf-8")))
+                    json.loads((d / "manuscript.ir.json").read_text(encoding="utf-8")),
+                    keyword_sep=kw_sep)
 
 
 NS_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -248,38 +302,146 @@ def baseline(tmp_path_factory, sample_docx):
     return render_into(tmp_path_factory.mktemp("baseline"), sample_docx)
 
 
+# ---- 共享判定（F31：invariant_failures 与 test_text_fingerprint 同源）----
+# 四条承诺各自的不变式在这里各有一个判定函数；矩阵测试的 invariant_failures
+# 和承诺测试（test_text_fingerprint.py）调用同一批函数，杜绝「同一不变式
+# 两份实现」——抄本迟早和正本漂移，漂移的方向必然是更宽松。
+
+# --citation 的豁免凭证（F39）：这两个动作会改写正文/条目文字，属产品唯一
+# 越线开关。豁免以审计条目本身为准——条目存在且 rule 指对才豁免，改了字
+# 没记录、或 rule 指错位置的，一律仍按白名单外改动处理。
+CITATION_REWRITE_RULES = {
+    "正文引用改作者-年份": "citation.in_text",
+    "条目按目标刊体例重排": "citation.reference_list.templates",
+}
+
+
+def citation_rewrite_blocks(p):
+    """凭引用改写获得豁免的块：动作与 rule 都对得上的审计条目所在块。"""
+    return {it["idx"] for it in p.items
+            if CITATION_REWRITE_RULES.get(it.get("action")) == it.get("rule")}
+
+
+def unaudited_changes(p):
+    """文字变了却没有审计记录的块（纯换位的表注/图注除外）。"""
+    recorded = {it["idx"] for it in p.items}
+    return sorted(p.changed_idx - recorded - note_reorder_blocks(p))
+
+
+def whitelist_violations(p):
+    """超出白名单的文字改动 [(idx, 块类型, before, after)]。
+
+    引用改写块豁免逐块比对，但豁免只在条目（action+rule）对得上时成立：
+    改了字而没有引用改写条目的，照旧算违规——豁免不豁免审计。
+    """
+    exempt = citation_rewrite_blocks(p)
+    offenders = []
+    for idx in sorted(p.changed_idx - note_reorder_blocks(p)):
+        btype = p.block_type.get(idx, "")
+        if (signature(p.source_texts[idx], btype, getattr(p, "keyword_sep", None))
+                == signature(p.output_texts[idx], btype, getattr(p, "keyword_sep", None))):
+            continue
+        if idx in exempt:
+            continue
+        offenders.append((idx, btype,
+                          p.source_texts[idx][:40], p.output_texts[idx][:40]))
+    return offenders
+
+
+def block_count_mismatch(p):
+    """源稿与成品的 body 子元素是否还一一对应。"""
+    return set(p.output_texts) != set(p.source_texts)
+
+
+def fingerprint_delta(p, exclude=frozenset()):
+    """（凭空新增, 丢失）文字指纹的多重集差；exclude 里的块两侧都不计。"""
+    sep = getattr(p, "keyword_sep", None)
+
+    def prints(texts):
+        return Counter(signature(t, p.block_type.get(i, ""), sep)
+                       for i, t in texts.items() if i not in exclude)
+
+    before, after = prints(p.source_texts), prints(p.output_texts)
+    return after - before, before - after
+
+
+def change_items_without_rule(p, rules):
+    """改动型条目里缺 rule、或 rule 解析不到实处的（DESIGN §8.5 的一般性强制，F41）。
+
+    改动型 = 以下任一：文字快照真的变了（before≠after）；版式套版（动作名以
+    「套版」结尾——这类 A 档条目的 before/after 是空串，说明在 note 里）；记
+    录了格式目标值（after 非空，如悬挂缩进「2.3 字符」）。说明型（before==
+    after 都是空串且非套版，如「编号样文本未转换」「引用体系转换（已跳过）」
+    「公式（伪表格）原样保留」）只解释为什么没动，豁免。
+    """
+    from rules_ref import resolvable
+
+    bad = []
+    for it in p.items:
+        before, after = it.get("before") or "", it.get("after") or ""
+        action = it.get("action") or ""
+        if before == after and not after and not action.endswith("套版"):
+            continue
+        if not it.get("rule") or not resolvable(rules, it["rule"]):
+            bad.append((it["id"], action, it.get("rule") or "<缺 rule>"))
+    return bad
+
+
+def layout_signature(docx_path):
+    """版式层的结构指纹：word/document.xml 与 word/styles.xml 的规范化序列化。
+
+    docx 是 zip，条目头带时间戳，不能裸比字节（F40）。把承载正文与版式样式
+    的这两个 part 解析后按文档顺序重新序列化，并剔除 rsid 修订会话属性
+    （人在 Word 里每次编辑都会变，不属于版式），剩下的就是版式结构本身：
+    同一输入两次渲染指纹相同，规则集变了指纹必然漂移。
+
+    两个 part 是自家渲染器产出的 XML，解析前仍拒绝 DOCTYPE/ENTITY 声明
+    （实体扩展这类解析器风险挡在门外）。
+    """
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    parts = []
+    with zipfile.ZipFile(str(docx_path)) as z:
+        for name in ("word/document.xml", "word/styles.xml"):
+            raw = z.read(name)
+            if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+                raise ValueError(f"{name} 带有 DOCTYPE/ENTITY 声明，拒绝解析")
+            root = ET.fromstring(raw)
+            for el in root.iter():
+                for attr in [a for a in el.attrib if "rsid" in a.lower()]:
+                    del el.attrib[attr]
+            parts.append(ET.tostring(root))
+    return b"\n".join(parts)
+
+
 def invariant_failures(p):
     """一次核对四条不变式，返回问题清单（空表示全部通过）。
 
-    单独用例外面的矩阵测试靠它复用同一套判断——不然每换一个期刊组合，
-    就得把同样的断言抄一遍，抄着抄着就漏了。
+    判定全部来自上面那批共享函数，与 test_text_fingerprint.py 的承诺测试
+    同源（F31）——矩阵测试只是把同一批判定装配成消息。
+
+    引用模式（--citation，F39）：引用改写块豁免「白名单外改动」与守恒比对，
+    豁免凭证是 action 与 rule 都对得上的审计条目（见 CITATION_REWRITE_RULES）。
     """
     problems = []
-    reordered = note_reorder_blocks(p)
-    recorded = {it["idx"] for it in p.items}
 
-    missing = sorted(p.changed_idx - recorded - reordered)
+    missing = unaudited_changes(p)
     if missing:
         problems.append(f"文字变了却没有审计记录：{missing[:5]}")
 
-    for idx in sorted(p.changed_idx - reordered):
-        btype = p.block_type.get(idx, "")
-        if signature(p.source_texts[idx], btype) != signature(p.output_texts[idx], btype):
-            problems.append(
-                f"块 {idx}（{btype}）超出白名单改动："
-                f"{p.source_texts[idx][:20]} → {p.output_texts[idx][:20]}")
+    for idx, btype, before, after in whitelist_violations(p):
+        problems.append(f"块 {idx}（{btype}）超出白名单改动：{before[:20]} → {after[:20]}")
 
-    if set(p.output_texts) != set(p.source_texts):
+    if block_count_mismatch(p):
         problems.append("段落数量变了：源稿与成品的 body 子元素不再一一对应")
 
-    def prints(texts):
-        return Counter(signature(t, p.block_type.get(i, "")) for i, t in texts.items())
-
-    before, after = prints(p.source_texts), prints(p.output_texts)
-    if before - after:
-        problems.append(f"成品里丢了文字：{[''.join(s)[:20] for s in (before - after)][:3]}")
-    if after - before:
-        problems.append(f"成品里凭空多出文字：{[''.join(s)[:20] for s in (after - before)][:3]}")
+    exclude = note_reorder_blocks(p) | citation_rewrite_blocks(p)
+    created, lost = fingerprint_delta(p, exclude=exclude)
+    if lost:
+        problems.append(f"成品里丢了文字：{[''.join(s)[:20] for s in lost][:3]}")
+    if created:
+        problems.append(f"成品里凭空多出文字：{[''.join(s)[:20] for s in created][:3]}")
 
     for it in p.items:
         if not (it.get("action") or "").strip():

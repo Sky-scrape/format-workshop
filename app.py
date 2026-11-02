@@ -732,7 +732,11 @@ def details_context(d, meta):
                    for b in ir.get("blocks", []) if b["type"] == "body")
     cite_label = {"author-year": "作者-年份制（张三，2020）",
                   "numbered": "顺序编码制（[1]）"}.get(cite_cfg.get("system"), "")
-    citation_offered = bool(cite_rl.get("templates")) and has_cite
+    # 勾选闸与渲染层 apply_citation 的硬闸同一判据（P4-1 阶段 D）：只对声明
+    # 作者-年份体的刊开。编号实引刊勾了也会被硬闸整批拒绝，UI 不该开出
+    # 永远落空的勾选框。
+    citation_offered = (cite_cfg.get("system") == "author-year"
+                        and bool(cite_rl.get("templates")) and has_cite)
     return {
         "rules": rules,
         "citation_offered": citation_offered,

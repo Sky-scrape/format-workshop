@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +59,24 @@ def walk_sizes(node, path=()):
             yield from walk_sizes(v, path + (i,))
 
 
+def walk_string_sizes(node, path=()):
+    """产出 (路径, 字符串值) —— 命中 SIZE_KEYS 但值是字符串的字段。
+
+    这类值既不参与刻度检查也没法归整，静默跳过等于假装没看见，必须点名报警。
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in ("measured", "measured_raw", "size_pt_raw"):
+                continue
+            if k in SIZE_KEYS and isinstance(v, str):
+                yield path + (k,), v
+            else:
+                yield from walk_string_sizes(v, path + (k,))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from walk_string_sizes(v, path + (i,))
+
+
 def get_path(node, path):
     for p in path:
         node = node[p]
@@ -96,6 +115,9 @@ def audit_one(path: Path):
 
     sizes = list(walk_sizes({k: rules.get(k) for k in
                              ("typography", "headings", "tables", "figures", "numbering")}))
+    str_sizes = [(".".join(str(p) for p in sp), v) for sp, v in
+                 walk_string_sizes({k: rules.get(k) for k in
+                                    ("typography", "headings", "tables", "figures", "numbering")})]
     off_grid = []
     prov = {"official": 0, "official+measured": 0, "measured": 0, "unknown": 0}
     for sub_path, val in sizes:
@@ -144,6 +166,7 @@ def audit_one(path: Path):
         "has_official_source": (SOURCE_DIR / jid).is_dir(),
         "source_url": ver.get("source_url"),
         "size_fields": len(sizes),
+        "string_sizes": str_sizes,
         "off_grid": off_grid,
         "provenance": prov,
         "missing_blocks": missing_blocks,
@@ -157,19 +180,30 @@ def audit_one(path: Path):
 
 
 def render_md(rows):
-    out = ["| 期刊 | 状态 | 字号权威 | 官方原件 | 字号字段 | 非半磅 | 有出处 | 实测/推定 | 缺构件 | 产物过期 |",
-           "|---|---|---|---|---|---|---|---|---|---|"]
+    out = ["| 期刊 | 状态 | 字号权威 | 官方原件 | 字号字段 | 非半磅 | 字符串字号 | 有出处 | 实测/推定 | 缺构件 | 产物过期 |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         prov = r["provenance"]
         known = prov["official"] + prov["official+measured"] + prov["measured"]
         out.append(
             f"| {r['name']}（{r['id']}） | {r['status']} | {r['authority'] or '—'} | "
             f"{'有' if r['has_official_source'] else '无'} | {r['size_fields']} | "
-            f"{len(r['off_grid'])} | {known}/{r['size_fields']} | "
+            f"{len(r['off_grid'])} | {len(r['string_sizes'])} | {known}/{r['size_fields']} | "
             f"{prov['measured']} | {len(r['missing_blocks'])} | "
             f"{len(r['stale_artifacts'])} |"
         )
     return "\n".join(out)
+
+
+def audit_all(jdir):
+    """体检目录下全部规则集。坏文件逐个点名进 failures，不拖垮其余文件。"""
+    rows, failures = [], []
+    for p in sorted(Path(jdir).glob("*.json")):
+        try:
+            rows.append(audit_one(p))
+        except Exception as e:  # noqa: BLE001 —— 一份手写坏 JSON 不能让体检整体崩溃
+            failures.append((p.name, f"{type(e).__name__}: {e}"))
+    return rows, failures
 
 
 def main():
@@ -178,8 +212,11 @@ def main():
     ap.add_argument("--md")
     args = ap.parse_args()
 
-    rows = [audit_one(p) for p in sorted(JOURNAL_DIR.glob("*.json"))]
-    print(f"规则集 {len(rows)} 份，体检时间 {datetime.now():%Y-%m-%d %H:%M}")
+    rows, failures = audit_all(JOURNAL_DIR)
+    print(f"规则集 {len(rows)} 份，体检时间 {datetime.now():%Y-%m-%d %H:%M}"
+          + (f"，{len(failures)} 份失败" if failures else ""))
+    for name, why in failures:
+        print(f"  失败：文件 {name}：{why}")
     print(render_md(rows))
 
     total_off = sum(len(r["off_grid"]) for r in rows)
@@ -187,6 +224,11 @@ def main():
     total_fields = sum(r["size_fields"] for r in rows)
     stale = [r["id"] for r in rows if r["stale_artifacts"]]
     print(f"\n字号字段合计 {total_fields}，非半磅 {total_off}，无出处 {total_unknown}/{total_fields}")
+    bad_type = [(r["id"], s) for r in rows for s in r["string_sizes"]]
+    if bad_type:
+        print(f"\n{len(bad_type)} 处字号是字符串（无法参与刻度检查）：")
+        for jid, (path, val) in bad_type:
+            print(f"  {jid}: {path} = {val!r}")
     if stale:
         print("产物过期：", "、".join(stale))
 
@@ -194,7 +236,8 @@ def main():
         Path(args.json).write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     if args.md:
         Path(args.md).write_text(render_md(rows) + "\n", encoding="utf-8")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
