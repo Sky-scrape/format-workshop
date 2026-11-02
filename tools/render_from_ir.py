@@ -12,6 +12,7 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 from docx import Document
@@ -41,6 +42,97 @@ ALIGN_DESC = {"center": "居中", "left": "左对齐", "right": "右对齐", "bo
 CAPTION_GAP = {"一字空": "  ", "半字空": " ", "两字空": "    ", "无间隔": ""}
 
 CN_SEQ = "一二三四五六七八九十"
+
+# ---- F13：规则集必填键 ----------------------------------------------------
+# 渲染器会裸下标消费的键全在这里列清单：入口一次报全，缺任何一个都在动稿
+# 之前拦下，而不是渲染中途 KeyError 崩掉（崩溃输出还会被上层一律翻译成
+# 「稿件结构超出识别范围」，把锅甩给稿件——失败且误诊）。
+RULESET_ERR_PREFIX = "[RULESET-INCOMPLETE]"
+
+SECTION_NAMES = {
+    "journal": "期刊", "typography": "版式", "headings": "标题",
+    "blocks": "块声明", "page": "页面", "tables": "表格",
+    "figures": "图", "citation": "引用",
+}
+
+REQUIRED_RULE_KEYS = [
+    "journal.name_zh",
+    "typography.body.font_cn",
+    "typography.body.size_pt",
+    "typography.body.line_spacing",
+    "typography.body.first_line_indent_chars",
+    "typography.title",
+    "headings.level1",
+    "headings.levels",
+    "blocks",
+    "page.size",
+    "page.size_mm.width",
+    "page.size_mm.height",
+    "page.margin_mm.top",
+    "page.margin_mm.bottom",
+    "page.margin_mm.left",
+    "page.margin_mm.right",
+    "tables.border_pt.top",
+    "tables.border_pt.header_bottom",
+    "tables.border_pt.bottom",
+    "tables.note_layers",
+    "figures.note_layers",
+    "citation",
+]
+
+
+def missing_required_keys(rules):
+    """返回规则集缺失的必填键（点路径列表），一次报全。"""
+    missing = []
+    for ref in REQUIRED_RULE_KEYS:
+        node = rules
+        for key in ref.split("."):
+            if not isinstance(node, dict) or key not in node:
+                missing.append(ref)
+                break
+            node = node[key]
+    return missing
+
+
+# ---- F30：渲染器的缺省值只有这一张表 --------------------------------------
+# 键 → (缺省值, 缺省说明)。规则集没写时从这里取，代码里不再散落第二真源；
+# 用到缺省值的审计条目 rule 走 rules_ref 的 '~' 可缺省约定、note 带「缺省值」
+# 说明——用户必须分得清哪些值是期刊明文规定、哪些是代码约定（DESIGN §6）。
+# 「缺省值」与「推定值」是两回事：推定值专指规则集标了 measured:false、登记
+# 进 assumptions 的取值（见 assumed()）；刊里整条没写时走的是代码缺省，不得
+# 冒称推定——否则审计会谎报该刊登记过这条推定。
+DEFAULTS = {
+    "body_line_pt":          (20,     "正文行距未声明固定磅值，兜底取"),
+    "title_size_pt":         (22,     "标题字号未声明，取"),
+    "title_font_cn":         ("黑体", "标题中文字体未声明，取"),
+    "title_line_mult":       (1.5,    "标题行距按字号×1.5 折算"),
+    "subtitle_font_cn":      ("黑体", "副标题中文字体未声明，取"),
+    "subtitle_size_pt":      (16,     "副标题字号未声明，取"),
+    "subtitle_line_mult":    (1.5,    "副标题行距按字号×1.5 折算"),
+    "authors_line_mult":     (1.5,    "作者行行距按自身字号×1.5 折算"),
+    "table_font_size_pt":    (9,      "表内文字字号未声明，取"),
+    "caption_font_cn":       ("黑体", "题注中文字体未声明，取"),
+    "caption_gap":           ("一字空", "题注编号与标题的间隔未声明，取"),
+    "note_size_pt":          (9,      "表注字号未声明，取"),
+    "author_note_line_mult": (1.6,    "作者简介行距按字号×1.6 折算"),
+    "author_note_label_font_cn": ("黑体", "作者简介标签中文字体未声明，取"),
+}
+
+
+def _fmt_default(v):
+    return f"{v:g}" if isinstance(v, (int, float)) else f"「{v}」"
+
+
+def presumed(keys):
+    """缺省值标注：本条审计用到了哪些代码缺省，在 note 里自报家门（F30）。
+
+    措辞是「缺省值」不是「推定值」：推定值专指规则集标了 measured:false 的
+    取值（assumed() 负责），代码缺省不冒称推定（test_audit_traceable）。
+    """
+    if not keys:
+        return ""
+    why = "；".join(f"{DEFAULTS[k][1]} {_fmt_default(DEFAULTS[k][0])}" for k in keys)
+    return f"，缺省值（{why}）"
 
 
 def cn_numeral(n):
@@ -758,6 +850,49 @@ def table_snapshot(table):
     return {"borders": borders, "cells": tuple(cells)}
 
 
+def elem_of(blk, elems):
+    """块 → 文档元素。
+
+    sdt 内容控件里的块（parse_docx 下钻产出，带 sdt_pos）落在同槽位的元素
+    列表里，按 sdt_pos 取（F24）。槽位编号仍与 body 子元素位置同源，消费端
+    按 idx 定位的契约不破。列表里取不到（IR 与文档不配套）就返回 None，
+    不猜位置——猜错就是套版错段。
+    """
+    el = elems.get(blk.get("idx"))
+    if isinstance(el, list):
+        pos = blk.get("sdt_pos")
+        return el[pos] if isinstance(pos, int) and 0 <= pos < len(el) else None
+    return el
+
+
+def footnote_texts(doc):
+    """脚注部件里的正文文本（F23）：脚注不在 body，正文体检看不见它。
+
+    解析姿势与 style_footnotes 同一套（拒 DOCTYPE/ENTITY、不解析外部实体）。
+    分隔符/续行符没有正文，跳过。
+    """
+    texts = []
+    for rel in list(doc.part.rels.values()):
+        if not rel.reltype.endswith("/footnotes"):
+            continue
+        try:
+            blob = rel.target_part.blob
+            xmlsafe.reject_dtd(blob)
+            parser = etree.XMLParser(resolve_entities=False, no_network=True)
+            root = etree.fromstring(blob, parser)
+        except (etree.XMLSyntaxError, xmlsafe.UnsafeXml):
+            continue
+        for fn in root.findall(qn("w:footnote")):
+            if (fn.get(qn("w:type"))
+                    or fn.find(".//" + qn("w:separator")) is not None
+                    or fn.find(".//" + qn("w:continuationSeparator")) is not None):
+                continue
+            t = "".join(n.text or "" for n in fn.iter(qn("w:t")))
+            if t.strip():
+                texts.append(t)
+    return texts
+
+
 def reorder_notes(elems, ir, rules, audit):
     """按目标刊的层序重排表注／图注。
 
@@ -806,16 +941,16 @@ def reorder_notes(elems, ir, rules, audit):
                       rule=f"{b['type']}s.note_layers")
             continue
         if b["type"] == "table":
-            anchor = elems[b["idx"]]._tbl
+            anchor = elem_of(b, elems)._tbl
         else:
-            anchor = elems[cap["idx"]]._p if cap else elems[b["idx"]]._p
+            anchor = elem_of(cap or b, elems)._p
         ordered = [n for _, n in sorted(zip(seq, notes), key=lambda x: x[0])]
         for n in notes:
-            el = elems[n["idx"]]._p
+            el = elem_of(n, elems)._p
             el.getparent().remove(el)
         cur = anchor
         for n in ordered:
-            el = elems[n["idx"]]._p
+            el = elem_of(n, elems)._p      # sdt 内的注也要能搬回（F24，同上）
             cur.addnext(el)
             cur = el
         audit.add(b["idx"], b["type"], "表注／图注层序调整",
@@ -824,19 +959,45 @@ def reorder_notes(elems, ir, rules, audit):
                   rule=f"{b['type']}s.note_layers")
 
 
-def sort_key(entry):
-    """中文在前（按拼音）、英文在后（按字母）；同作者同年按年份再排。"""
-    cn = entry["lang"] == "cn"
+# 文献表排序体例（F21）：行为完全由规则集 citation.reference_list.sort 声明
+# 决定。渲染器只实现 SORT_NOTE 里列出的声明；appearance 类保持条目原序不排；
+# 声明不认识（或没声明）就宁可不排，note 如实说明——不再内置「中文在前、
+# 英文在后」却冒用 citation.reference_list.sort 之名出审计。
+APPEARANCE_SCHEMES = ("by_appearance_order", "by-appearance")
+SORT_NOTE = {
+    "cn-first-by-pinyin-then-en-by-alphabet":
+        "中文按 GB 序（近似拼音）在前、英文按字母在后",
+    "cn-first-by-alphabet-then-en-by-alphabet":
+        # 字母类声明的中文键是名字裸比较＝Unicode 码位序（sort_key），对中文
+        # 不是拼音序（「周一」U+5468 排在「张三」U+5F20 前）——note 必须照实
+        # 说，不得冒用「字母序」（F21/F22：措辞必须描述实际发生的排序）
+        "中文按码位序（非拼音序）在前、英文按字母序在后",
+    "alphabetical": "条目按字母序排列",
+}
+
+
+def sort_key(entry, scheme):
+    """按目标刊声明的排序体例给条目一个比较键（F21/F22）。
+
+    排序键完全由 scheme 决定，这里不内置「中文在前」的默认。拼音类声明的
+    中文键用 GB2312 序近似（citation_ref.gb_sort_key）——环境里没有拼音库，
+    旧做法 except 吞掉 ImportError 后用码位序冒充拼音序，会把「周一」排到
+    「张三」前面；GB 序的一级字库本身就是拼音序。审计措辞见 SORT_NOTE，
+    必须描述实际发生的排序。
+    """
     name = entry["authors"][0] if entry["authors"] else ""
-    if cn:
-        try:
-            from pypinyin import lazy_pinyin
-            key = "".join(lazy_pinyin(name)).lower()
-        except Exception:            # 没装拼音库时退到码位序，仍保证中文整体在前
-            key = name
-    else:
-        key = re.split(r"[\s,，]", name)[0].lower()
-    return (0 if cn else 1, key, entry["year"])
+    if scheme == "alphabetical":
+        # 全文键名：剥掉条目开头的 [n] 编号，整条按字母排（英文刊的声明）
+        import citation_ref as cr
+        return (cr.NUMBERED_PREFIX.sub("", entry["raw"]).lower(), entry["year"])
+    if entry["lang"] == "cn":
+        if scheme == "cn-first-by-alphabet-then-en-by-alphabet":
+            key = name                          # 字母类声明：中文按码位字母序
+        else:                                   # 拼音类声明：GB 序近似拼音
+            import citation_ref as cr
+            key = cr.gb_sort_key(name)
+        return (0, key, entry["year"])
+    return (1, re.split(r"[\s,，]", name)[0].lower(), entry["year"])
 
 
 def rewrite_citations(p, index, rules):
@@ -920,7 +1081,7 @@ def apply_citation(doc, elems, ir, rules, audit):
     """
     import citation_ref as cr
 
-    refs = [(b["idx"], elems.get(b["idx"])) for b in ir["blocks"]
+    refs = [(b["idx"], elem_of(b, elems)) for b in ir["blocks"]
             if b["type"] == "reference_item"]
     # 条目文字按聚合口径取：整条藏在超链接或修订插入里的条目 p.text 看不见
     refs = [(i, p) for i, p in refs if p is not None and block_text(p).strip()]
@@ -941,15 +1102,27 @@ def apply_citation(doc, elems, ir, rules, audit):
         return
 
     index = cr.build_index([block_text(p) for _, p in refs])
-    body_paras = [(b["idx"], b["type"], elems.get(b["idx"])) for b in ir["blocks"]
+    body_paras = [(b["idx"], b["type"], elem_of(b, elems)) for b in ir["blocks"]
                   if b["type"] not in ("reference_item", "references_heading")
-                  and hasattr(elems.get(b["idx"]), "text")]
+                  and hasattr(elem_of(b, elems), "text")]
     body_paras = [x for x in body_paras if x[2] is not None]
 
     # 体检与改写必须同一份文本：体检用 p.text、改写走直接 run 时，藏在
     # 超链接、修订插入里或横跨多个 run 的引用能过闸门却永远改不到，
     # 条目重排后残留编号指向错位的文献，审计里还没有漏改记录
     cited, problems = cr.check([block_text(p) for _, _, p in body_paras], index, rules)
+
+    # F23 fail-closed 两道补充闸。这三类位置两头（体检、改写）都够不着，
+    # 转换后必然出现指向错位/已改写条目的残留——整批不转，点名让人看得见。
+    strays = cr.unnumbered_entries([block_text(p) for _, p in refs])
+    if strays:
+        problems.append("文献表有 {} 条不带 [n] 编号的条目：{}".format(
+            len(strays), "；".join(s[:20] for s in strays[:3])))
+    fn_hits = cr.footnote_citation_hits(footnote_texts(doc))
+    if fn_hits:
+        problems.append("脚注里出现编号引用 {}，条目重排会让它指向错位的条目".format(
+            "、".join(m.group(0) for m in fn_hits[:3])))
+
     if problems:
         audit.add(-3, "citation", "引用体系转换（已跳过）",
                   note="；".join(problems[:4]) + ("…" if len(problems) > 4 else ""),
@@ -999,13 +1172,28 @@ def apply_citation(doc, elems, ir, rules, audit):
                   rule="citation.reference_list.templates")
 
     if rewritten:
-        ordered = sorted(rewritten, key=lambda x: sort_key(x[2]))
+        # 排序体例只由规则集声明决定（F21）：声明了渲染器实现的 scheme 才排；
+        # appearance 类保持条目原序不排；声明不认识（或没声明）就宁可不排、
+        # note 如实说明，绝不内置「中文在前、英文在后」冒充已排序。
+        scheme = (((rules or {}).get("citation") or {}).get("reference_list")
+                  or {}).get("sort") or ""
+        if scheme in SORT_NOTE:
+            ordered = sorted(rewritten, key=lambda x: sort_key(x[2], scheme))
+            sort_note = SORT_NOTE[scheme]
+            sort_rule = "citation.reference_list.sort"
+        else:
+            # appearance 类声明与未知/未声明声明都不排
+            ordered = list(rewritten)
+            sort_note = ("按声明保持正文引用出现序" if scheme in APPEARANCE_SCHEMES
+                         else f"未支持的排序声明「{scheme or '未声明'}」，保持原序")
+            sort_rule = ("citation.reference_list.sort" if scheme
+                         else "citation.reference_list~")
         # 锚点必须选一个不会跟着搬家的元素：「参考文献」标题。若拿条目自己的
         # 前一个兄弟当锚点，那个兄弟可能也在待搬列表里，摘掉后整段条目就丢了。
         anchor = None
         for b in ir["blocks"]:
             if b["type"] == "references_heading":
-                el = elems.get(b["idx"])
+                el = elem_of(b, elems)
                 anchor = getattr(el, "_p", None)
                 break
         if anchor is None:
@@ -1016,10 +1204,11 @@ def apply_citation(doc, elems, ir, rules, audit):
             for _, p, _e in ordered:
                 anchor.addnext(p._p)
                 anchor = p._p
-            if [x[0] for x in ordered] != [x[0] for x in rewritten]:
+            changed = [x[0] for x in ordered] != [x[0] for x in rewritten]
+            if changed or (scheme not in SORT_NOTE
+                           and scheme not in APPEARANCE_SCHEMES):
                 audit.add(-4, "reference_item", "文献表排序",
-                          note="中文按拼音在前、英文按字母在后",
-                          rule="citation.reference_list.sort")
+                          note=sort_note, rule=sort_rule)
 
 
 def main():
@@ -1034,6 +1223,20 @@ def main():
 
     ir = json.loads(Path(a.ir).read_text(encoding="utf-8"))
     rules = json.loads(Path(a.ruleset).read_text(encoding="utf-8"))
+
+    # F13：规则集缺字段不在渲染中途裸 KeyError（那会被上层一律翻译成
+    # 「稿件结构超出当前识别范围」，把锅甩给稿件——失败且误诊）。入口按
+    # 清单一次报全，带专属前缀输出到 stderr 后干净退出，traceback 不外泄；
+    # 上层识别前缀即可翻译成「规则集不完整」的友好页，不再误诊稿件。
+    missing = missing_required_keys(rules)
+    if missing:
+        rid = (rules.get("journal") or {}).get("id") or Path(a.ruleset).stem
+        for ref in missing:
+            sec = SECTION_NAMES.get(ref.split(".")[0], ref.split(".")[0])
+            print(f"{RULESET_ERR_PREFIX} 规则集 {rid} 缺少字段 {ref}（章节 {sec}）",
+                  file=sys.stderr)
+        raise SystemExit(1)
+
     src = Path(a.ir).with_suffix("")
     src_docx = Path(a.ir.replace(".ir.json", ".docx"))
     doc = Document(str(src_docx))
@@ -1052,8 +1255,13 @@ def main():
     # 代码不猜系数
     ls = body["line_spacing"]
     line_mult = ls["value"] if ls.get("mode") == "multiple" else None
-    line_pt = None if line_mult else (ls.get("value_pt") or ls.get("equivalent_exact_pt") or 20)
-    line_desc = f"{line_mult:g} 倍行距" if line_mult else f"行距 {line_pt:g}pt"
+    line_pt = None if line_mult else (ls.get("value_pt") or ls.get("equivalent_exact_pt")
+                                      or DEFAULTS["body_line_pt"][0])
+    # 行距兜底值是代码约定：用到的审计条目要标缺省（F30）
+    line_def = [] if (line_mult or ls.get("value_pt") or ls.get("equivalent_exact_pt")) \
+        else ["body_line_pt"]
+    line_desc = (f"{line_mult:g} 倍行距" if line_mult
+                 else f"行距 {line_pt:g}pt" + presumed(line_def))
     indent = body["first_line_indent_chars"]
     hd = rules["headings"]
     lv1 = hd["level1"]
@@ -1062,39 +1270,57 @@ def main():
     # 审计不该有一条「无差异」记录——每条目都必须对应一次真实改动。
     # 容差 0.05mm：mm↔twips 往返的舍入误差实测 ≤0.009mm（半 twip 刻度），
     # 而真实设置差异至少 0.1mm，两者差一个数量级以上
-    sec = doc.sections[0]
+    # 页面设置遍历全部节（F32）：只设 sections[0] 的话，分节符造出的其余节
+    # 保持 Word 默认版面。任一节不合规即整组设置（幂等：全合规后不再出条目）。
+    secs = list(doc.sections)
 
     def page_diffs():
         def off(cur, want):
             return cur is None or abs(cur.mm - want) > 0.05
         diffs = []
-        if off(sec.page_width, rules["page"]["size_mm"]["width"]) or \
-                off(sec.page_height, rules["page"]["size_mm"]["height"]):
+        if any(off(s.page_width, rules["page"]["size_mm"]["width"])
+               or off(s.page_height, rules["page"]["size_mm"]["height"])
+               for s in secs):
             diffs.append("纸张")
         for side in ("top", "bottom", "left", "right"):
-            if off(getattr(sec, f"{side}_margin"), rules["page"]["margin_mm"][side]):
+            if any(off(getattr(s, f"{side}_margin"), rules["page"]["margin_mm"][side])
+                   for s in secs):
                 diffs.append(side)
         return diffs
 
     if page_diffs():
-        sec.page_width = Mm(rules["page"]["size_mm"]["width"])
-        sec.page_height = Mm(rules["page"]["size_mm"]["height"])
-        for side in ("top", "bottom", "left", "right"):
-            setattr(sec, f"{side}_margin", Mm(rules["page"]["margin_mm"][side]))
+        for sec in secs:
+            sec.page_width = Mm(rules["page"]["size_mm"]["width"])
+            sec.page_height = Mm(rules["page"]["size_mm"]["height"])
+            for side in ("top", "bottom", "left", "right"):
+                setattr(sec, f"{side}_margin", Mm(rules["page"]["margin_mm"][side]))
         mg = rules["page"]["margin_mm"]
         mg_txt = "，".join(f"{cn}{mg[side]:g}" for side, cn in
                            (("top", "上"), ("bottom", "下"), ("left", "左"), ("right", "右")))
         audit.add(-1, "page", "页面设置",
-                  note=f"纸张 {rules['page']['size']}，页边距 {mg_txt} mm",
+                  note=f"纸张 {rules['page']['size']}，页边距 {mg_txt} mm"
+                       f"（应用于全部 {len(secs)} 节）",
                   rule="page.margin_mm")
 
-    # 建立 idx → 元素映射
+    # 建立 idx → 元素映射。sdt 内容控件整块占一个槽位，其内的段落/表格下钻
+    # 展开成列表挂在同一槽位，由块的 sdt_pos 取用（F24，见 elem_of）——槽位
+    # 编号与 IR 的 idx 仍同源，不会让按 body 子元素定位的其它环节错位。
     elems = {}
     for i, child in enumerate(doc.element.body):
         if child.tag == qn("w:p"):
             elems[i] = Paragraph(child, doc)
         elif child.tag == qn("w:tbl"):
             elems[i] = Table(child, doc)
+        elif child.tag == qn("w:sdt"):
+            content = child.find(qn("w:sdtContent"))
+            inner = []
+            for e in (content if content is not None else []):
+                if e.tag == qn("w:p"):
+                    inner.append(Paragraph(e, doc))
+                elif e.tag == qn("w:tbl"):
+                    inner.append(Table(e, doc))
+            if inner:
+                elems[i] = inner
 
     # 一级标题起始号：introduction 编 1（多数刊）或 0（管理科学学报）
     sec_no = {1: hd.get("intro_number", 1) - 1, 2: 0, 3: 0}
@@ -1102,31 +1328,51 @@ def main():
     figure_no = 0
     fm_index = 0
     for blk in ir["blocks"]:
-        p = elems.get(blk.get("idx"))
-        if p is None:
+        el = elem_of(blk, elems)
+        if el is None:
             continue
+        if blk.get("sdt_pos") is not None:
+            # sdt 内块的审计键带「槽.序」：同槽多块的条目 id 仍然唯一、可驳回
+            blk = {**blk, "idx": f'{blk["idx"]}.{blk["sdt_pos"]}'}
+        p = el
         t = blk["type"]
 
         if t == "front_matter":
             fm_index += 1
             txt = p.text.strip()
             title_tp = rules["typography"]["title"]
-            sub_tp = rules["typography"].get("subtitle") or {"font_cn": "黑体", "size_pt": 16}
+            sub_tp = rules["typography"].get("subtitle")
+            s_def = []
+            if sub_tp is None:
+                # 副标题样式整条未声明：字号字体取代码缺省（F30），要标缺省
+                sub_tp = {"font_cn": DEFAULTS["subtitle_font_cn"][0],
+                          "size_pt": DEFAULTS["subtitle_size_pt"][0]}
+                s_def = ["subtitle_font_cn", "subtitle_size_pt"]
+            s_def.append("subtitle_line_mult")   # 副标题行距折算恒为代码约定
             if fm_index == 1:
-                sz = title_tp.get("size_pt", 22)
+                t_def = [k for k, f in (("title_size_pt", "size_pt"),
+                                        ("title_font_cn", "font_cn")) if f not in title_tp]
+                t_def.append("title_line_mult")  # 标题行距折算恒为代码约定
+                sz = title_tp.get("size_pt", DEFAULTS["title_size_pt"][0])
                 restyle_audited(p, audit, blk["idx"], t, "文章标题套版",
-                                f"{sz:g}pt，行距 {round(sz * 1.5)}pt",
-                                "typography.title", tp=title_tp,
-                                cn=title_tp.get("font_cn", "黑体"), latin=latin, size=sz,
-                                align="center", line_pt=round(sz * 1.5), bold=False,
+                                f"{sz:g}pt，行距 {round(sz * DEFAULTS['title_line_mult'][0])}pt"
+                                + presumed(t_def),
+                                "typography.title" + ("~" if t_def else ""), tp=title_tp,
+                                cn=title_tp.get("font_cn", DEFAULTS["title_font_cn"][0]),
+                                latin=latin, size=sz,
+                                align="center", line_pt=round(sz * DEFAULTS["title_line_mult"][0]),
+                                bold=False,
                                 before_pt=round(sz * 0.2), after_pt=round(sz * 0.25),
                                 letter_spacing=title_tp.get("letter_spacing_pt"))
             elif fm_index == 2 and txt.startswith(("——", "—", "-")):
-                sz = sub_tp.get("size_pt", 16)
-                restyle_audited(p, audit, blk["idx"], t, "副标题套版", f"{sz:g}pt",
+                sz = sub_tp.get("size_pt", DEFAULTS["subtitle_size_pt"][0])
+                restyle_audited(p, audit, blk["idx"], t, "副标题套版",
+                                f"{sz:g}pt" + presumed(s_def),
                                 "typography.subtitle~", tp=sub_tp,
-                                cn=sub_tp.get("font_cn", "黑体"), latin=latin, size=sz,
-                                align="center", line_pt=round(sz * 1.5), bold=False,
+                                cn=sub_tp.get("font_cn", DEFAULTS["subtitle_font_cn"][0]),
+                                latin=latin, size=sz,
+                                align="center", line_pt=round(sz * DEFAULTS["subtitle_line_mult"][0]),
+                                bold=False,
                                 after_pt=round(sz * 0.2))
             else:
                 # 作者署名：期刊可单独定字体字号（如四号楷体），未定则随正文
@@ -1134,20 +1380,24 @@ def main():
                 asz = au.get("size_pt", size)
                 al = au.get("align", "center")
                 restyle_audited(p, audit, blk["idx"], t, "作者署名套版",
-                                f"{au.get('font_cn', cn)} {asz:g}pt {ALIGN_DESC[al]}",
+                                f"{au.get('font_cn', cn)} {asz:g}pt {ALIGN_DESC[al]}"
+                                + presumed(["authors_line_mult"]),
                                 # 该刊没单列 authors 样式时随正文，依据就是正文样式
-                                "typography.authors" if au else "typography.body", tp=au,
+                                "typography.authors" if au else "typography.body~", tp=au,
                                 cn=au.get("font_cn", cn), latin=latin, size=asz,
                                 align=al,
                                 # 正文用倍数行距时 line_pt 为 None，作者行按自身字号取 1.5 倍
-                                line_pt=max(line_pt or 0, round(asz * 1.5)), bold=False,
+                                line_pt=max(line_pt or 0,
+                                            round(asz * DEFAULTS["authors_line_mult"][0])),
+                                bold=False,
                                 before_pt=round(asz * 0.15), after_pt=round(asz * 0.9))
             continue
 
         if t == "table":
             table_no += 1
             bp = rules["tables"]["border_pt"]
-            tbl_size = rules["tables"].get("font_size_pt", 9)
+            tbl_def = "font_size_pt" not in rules["tables"]
+            tbl_size = rules["tables"].get("font_size_pt", DEFAULTS["table_font_size_pt"][0])
             before_tbl = table_snapshot(p)
             apply_table(p, bp, tbl_size, cn, latin)
             after_tbl = table_snapshot(p)
@@ -1177,12 +1427,17 @@ def main():
                         or [cell[0] for cell in before_tbl["cells"]]
                         != [cell[0] for cell in after_tbl["cells"]]):
                     bits.append("边框按三线表规范重写：颜色统一为黑色、间距归 0")
+                border_bits = bool(bits)
                 if fonts_of(before_tbl, 0) != fonts_of(after_tbl, 0):
-                    bits.append(f"表内文字改为 {tbl_size:g}pt")
+                    bits.append(f"表内文字改为 {tbl_size:g}pt"
+                                + presumed(["table_font_size_pt"] if tbl_def else []))
                 elif fonts_of(before_tbl, 1) != fonts_of(after_tbl, 1):
                     bits.append(f"表内西文字体（hAnsi）统一为 {latin}")
+                # 表内字号走缺省值时不再挂在 border_pt 的依据下（F30）
+                rule = ("tables.border_pt" if border_bits else
+                        "tables.font_size_pt" + ("~" if tbl_def else ""))
                 audit.add(blk["idx"], t, "表格重设为三线表", note="；".join(bits),
-                          rule="tables.border_pt")
+                          rule=rule)
             continue
 
         if isinstance(p, Table):
@@ -1358,12 +1613,17 @@ def main():
             # parse_docx 不会产出 title 块（标题一律走 front_matter 分支），
             # 此分支是给外部直接构造 IR 时的防御，当前主流程不可达。
             tp_t = rules["typography"]["title"]
-            sz = tp_t.get("size_pt", 22)
+            t_def = [k for k, f in (("title_size_pt", "size_pt"),
+                                    ("title_font_cn", "font_cn")) if f not in tp_t]
+            t_def.append("title_line_mult")      # 标题行距折算恒为代码约定
+            sz = tp_t.get("size_pt", DEFAULTS["title_size_pt"][0])
             restyle_audited(p, audit, blk["idx"], t, "文章标题套版",
-                            f"{sz:g}pt，行距 {round(sz * 1.5)}pt",
-                            "typography.title", tp=tp_t,
-                            cn=tp_t.get("font_cn", "黑体"), latin=latin,
-                            size=sz, align="center", line_pt=round(sz * 1.5), bold=False,
+                            f"{sz:g}pt，行距 {round(sz * DEFAULTS['title_line_mult'][0])}pt"
+                            + presumed(t_def),
+                            "typography.title" + ("~" if t_def else ""), tp=tp_t,
+                            cn=tp_t.get("font_cn", DEFAULTS["title_font_cn"][0]), latin=latin,
+                            size=sz, align="center",
+                            line_pt=round(sz * DEFAULTS["title_line_mult"][0]), bold=False,
                             before_pt=round(sz * 0.2), after_pt=round(sz * 0.25),
                             letter_spacing=tp_t.get("letter_spacing_pt"))
             continue
@@ -1413,13 +1673,18 @@ def main():
             key = ("abstract_en" if t == "abstract" else "keywords_en") if blk.get("lang") == "en" \
                 else ("abstract" if t == "abstract" else "keywords")
             absp = rules["typography"].get(key) or rules["typography"].get("abstract") or {}
-            abs_ls = (absp.get("line_spacing") or {}).get("value_pt") \
-                or (absp.get("line_spacing") or {}).get("equivalent_exact_pt") or line_pt
+            abs_own_line = (absp.get("line_spacing") or {}).get("value_pt") \
+                or (absp.get("line_spacing") or {}).get("equivalent_exact_pt")
+            abs_ls = abs_own_line or line_pt
             abs_rule = (f"typography.{key}" if rules["typography"].get(key)
                         else "typography.abstract" if rules["typography"].get("abstract")
                         else "typography.body")
+            if not abs_own_line and line_def:
+                abs_rule += "~"                  # 行距落到了正文缺省值上（F30）
+            abs_line = (f"行距 {abs_ls:g}pt" + (presumed(line_def) if not abs_own_line else "")
+                        if abs_ls else line_desc)
             abs_target = (f"{absp.get('font_cn', cn)} {absp.get('size_pt', size):g}pt，"
-                          + (f"行距 {abs_ls:g}pt" if abs_ls else line_desc))
+                          + abs_line)
             restyle_audited(p, audit, blk["idx"], t,
                             "摘要套版" if t == "abstract" else "关键词套版",
                             abs_target, abs_rule, tp=absp,
@@ -1431,21 +1696,27 @@ def main():
         if t == "author_note":
             # 文末作者简介：标签一段、每人一段，字体字号单独声明
             an = rules["typography"].get("author_note") or {}
+            an_own_line = (an.get("line_spacing") or {}).get("value_pt")
+            an_def = [] if an_own_line else ["author_note_line_mult"]
             sz = an.get("size_pt", size)
-            an_ls = (an.get("line_spacing") or {}).get("value_pt") or round(sz * 1.6, 1)
+            an_ls = an_own_line or round(sz * DEFAULTS["author_note_line_mult"][0], 1)
             lab = (next((b.get("label") for b in rules["blocks"]
                          if b["type"] == "author_note"), "") or "作者简介").strip()
-            an_rule = "typography.author_note" if an else "typography.body"
+            an_rule = ("typography.author_note" if an else "typography.body") \
+                + ("~" if an_def else "")
             if p.text.strip() == lab:
                 restyle_audited(p, audit, blk["idx"], t, "作者简介套版",
-                                f"{an.get('label_font_cn', '黑体')} {sz:g}pt",
+                                f"{an.get('label_font_cn', DEFAULTS['author_note_label_font_cn'][0])}"
+                                f" {sz:g}pt" + presumed(an_def),
                                 an_rule, tp=an,
-                                cn=an.get("label_font_cn", "黑体"), latin=latin, size=sz,
+                                cn=an.get("label_font_cn",
+                                          DEFAULTS["author_note_label_font_cn"][0]),
+                                latin=latin, size=sz,
                                 align=an.get("heading_align", "left"), line_pt=an_ls,
                                 indent=an.get("heading_indent_chars") or indent)
             else:
                 restyle_audited(p, audit, blk["idx"], t, "作者简介套版",
-                                f"{an.get('font_cn', cn)} {sz:g}pt",
+                                f"{an.get('font_cn', cn)} {sz:g}pt" + presumed(an_def),
                                 an_rule, tp=an,
                                 cn=an.get("font_cn", cn), latin=latin, size=sz,
                                 align="both", line_pt=an_ls, indent=indent)
@@ -1477,8 +1748,8 @@ def main():
             r_size = ref_tp.get("size_pt", size)
             # 参考文献行距逐刊不同（经济研究 14.2、统计研究 12.3），不能沿用正文行距
             ref_ls = ref_tp.get("line_spacing") or {}
-            ref_line = (ref_ls.get("value_pt") or ref_ls.get("equivalent_exact_pt")
-                        or line_pt)
+            ref_own_line = ref_ls.get("value_pt") or ref_ls.get("equivalent_exact_pt")
+            ref_line = ref_own_line or line_pt
             before_fmt = fmt_snapshot(p)
             restyle(p, cn=ref_tp.get("font_cn", cn), latin=latin, size=r_size, line_multiple=line_mult,
                     align="both", line_pt=ref_line, indent=None, bold=False)
@@ -1507,21 +1778,30 @@ def main():
             if ind_dedicated:
                 before_fmt["ind"] = after_fmt["ind"]   # 缩进已单列，套版对比不再计
             if before_fmt != after_fmt:
-                ref_desc = ("单倍行距" if ref_tp.get("line_single")
-                            else f"行距 {ref_line:g}pt" if ref_line else line_desc)
+                if ref_tp.get("line_single"):
+                    ref_desc = "单倍行距"
+                elif ref_line:
+                    ref_desc = (f"行距 {ref_line:g}pt"
+                                + (presumed(line_def) if not ref_own_line else ""))
+                else:
+                    ref_desc = line_desc
+                ref_rule = ("typography.references" if ref_tp else "typography.body") \
+                    + ("~" if (not ref_own_line and line_def) else "")
                 audit.add(blk["idx"], t, "参考文献条目套版",
                           note=fmt_delta(before_fmt, after_fmt,
                                          f"{ref_tp.get('font_cn', cn)} {r_size:g}pt，{ref_desc}"),
-                          rule="typography.references" if ref_tp else "typography.body")
+                          rule=ref_rule)
             continue
 
         if t in ("table_caption", "figure_caption"):
             figure_no += t == "figure_caption"
             size_cap = rules["tables"].get("caption_size_pt", size)
-            font_cap = rules["tables"].get("caption_font_cn", "黑体")
+            cap_font_def = "caption_font_cn" not in rules["tables"]
+            font_cap = rules["tables"].get("caption_font_cn", DEFAULTS["caption_font_cn"][0])
             # 「表1」与标题之间的间隔由规则集给出（一字空/半字空…），不再写死两空格
             gap_kind = (rules["tables"].get("caption_gap")
-                        or (rules.get("figures") or {}).get("caption_gap") or "一字空")
+                        or (rules.get("figures") or {}).get("caption_gap")
+                        or DEFAULTS["caption_gap"][0])
             pad = CAPTION_GAP.get(gap_kind, "  ")
             gap_rule = ("tables.caption_gap" if "caption_gap" in rules["tables"]
                         else "figures.caption_gap" if "caption_gap" in (rules.get("figures") or {})
@@ -1539,21 +1819,28 @@ def main():
                         replace_text(p, new_cap)
                         audit.add(blk["idx"], t, "题注归一", old_cap, new_cap,
                                   f"编号与标题间隔改为「{gap_kind}」，题注文字未动", rule=gap_rule)
+            cap_def = ((["caption_font_cn"] if cap_font_def else [])
+                       + (["body_line_pt"] if line_def else []))
+            cap_rule = ("tables.caption_size_pt" if "caption_size_pt" in rules["tables"]
+                        else "tables.caption_size_pt~")
+            if cap_def:
+                cap_rule = "tables.caption_size_pt~"   # 用到缺省值的条目标可缺省（F30）
             restyle_audited(p, audit, blk["idx"], t, "题注套版",
-                            f"{font_cap} {size_cap:g}pt 居中",
-                            "tables.caption_size_pt" if "caption_size_pt" in rules["tables"]
-                            else "tables.caption_size_pt~",
+                            f"{font_cap} {size_cap:g}pt 居中" + presumed(cap_def),
+                            cap_rule,
                             cn=font_cap, latin=latin, size=size_cap, align="center",
                             line_multiple=line_mult, line_pt=line_pt, bold=False)
             continue
 
         if t == "table_note":
             _nl = rules["tables"].get("note_layers") or [{}]
-            note_sz = _nl[0].get("size_pt", 9)
+            note_def = ["note_size_pt"] if (not _nl[0] or "size_pt" not in _nl[0]) else []
+            note_sz = _nl[0].get("size_pt", DEFAULTS["note_size_pt"][0])
             restyle_audited(p, audit, blk["idx"], t, "表注套版",
-                            f"{cn} {note_sz:g}pt 左对齐",
-                            "tables.note_layers" if rules["tables"].get("note_layers")
-                            else "tables.note_layers~",
+                            f"{cn} {note_sz:g}pt 左对齐" + presumed(note_def),
+                            "tables.note_layers"
+                            + ("~" if (note_def or not rules["tables"].get("note_layers"))
+                               else ""),
                             tp=_nl[0],
                             cn=cn, latin=latin, size=note_sz, align="left", line_pt=line_pt,
                             line_multiple=line_mult)
@@ -1570,11 +1857,12 @@ def main():
             after_fmt = fmt_snapshot(p)
             # 已经是「最小值」行距的公式段不再报
             if before_fmt != after_fmt:
-                tgt = ("行距随正文倍数设置" if line_mult else f"行距最小值 {line_pt:g}pt")
+                tgt = ("行距随正文倍数设置" if line_mult
+                       else f"行距最小值 {line_pt:g}pt" + presumed(line_def))
                 audit.add(blk["idx"], t, "公式段行距",
                           note=fmt_delta(before_fmt, after_fmt, tgt)
                           + "：固定值会裁掉分式与上下标",
-                          rule="typography.body")
+                          rule="typography.body" + ("~" if line_def else ""))
             continue
 
         # 正文、公式、伪表格、英文区等一律按正文字体处理。
@@ -1592,7 +1880,7 @@ def main():
             audit.add(blk["idx"], t, "正文套版",
                       note=fmt_delta(before_fmt, after_fmt,
                                      f"{cn} {size:g}pt，{line_desc}"),
-                      rule="typography.body")
+                      rule="typography.body" + ("~" if line_def else ""))
 
     reorder_notes(elems, ir, rules, audit)
 
@@ -1630,6 +1918,12 @@ def main():
         kinds[it["action"]] = kinds.get(it["action"], 0) + 1
     for k, v in sorted(kinds.items(), key=lambda x: -x[1]):
         print(f"   {v:4d}  {k}")
+    if ir.get("unsupported_content_blocks"):
+        # 解析时记数进 IR 的仍不支持的 sdt 结构（F24）：渲染汇总必须报出来，
+        # 不能让「这里没处理」变成静默的
+        print(f"未处理内容块: {ir['unsupported_content_blocks']} 个"
+              f"（整块没有可处理的段落/表格，或内嵌了未下钻的内容控件，"
+              f"已原样保留）")
 
 
 if __name__ == "__main__":

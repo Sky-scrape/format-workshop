@@ -82,7 +82,24 @@ def looks_like_ref(text):
 
 
 def para_text(p):
-    return "".join(t.text or "" for t in p.iter(W + "t")).strip()
+    """段落聚合文本；w:txbxContent（文本框）子树不计。
+
+    文本框文字不属于段落：混进来会污染标题/摘要/表格题注这些分类判据
+    （F24），而文本框对象本身原样保留、不参与分类与改写。mc:AlternateContent
+    的 Choice/Fallback 双份同文都在各自的 txbxContent 里，一并排除。
+    """
+    parts = []
+
+    def walk(node):
+        for child in node:
+            if child.tag == W + "txbxContent":
+                continue
+            if child.tag == W + "t":
+                parts.append(child.text or "")
+            walk(child)
+
+    walk(p)
+    return "".join(parts).strip()
 
 
 def has_omml(p):
@@ -347,29 +364,54 @@ def parse(path, ai_cfg=None):
     blocks = []
     seen_level = set()
     in_references = False
-    idx = -1
+    unsupported_content = 0
+
+    def emit(block):
+        if sdt_pos is not None:
+            block["sdt_pos"] = sdt_pos    # sdt 内容块：同槽内的序号（F24）
+        blocks.append(block)
+        return block
+
+    # idx 对 body 全部子元素统一编号（dense）：bookmarkStart、sdt 等异类
+    # 子元素也占一个号。消费端（render_from_ir / anonymize / apply_details）
+    # 一律按 body 子元素位置定位，生产端只数 w:p/w:tbl 的话，body 里一旦
+    # 出现位于块元素之前的书签等元素，双方就整体错位——套版错段、改错正文、
+    # 匿名路径漏删（F08）。sdt 内容控件也占自己的槽号；其内的 w:p/w:tbl
+    # 下钻为块、共用该槽号并带 sdt_pos 序号（F24）——不重新编号，按 body
+    # 子元素位置定位的契约不破。下不出来的（里面没有段落/表格）记数进 IR；
+    # 外层下钻了、内嵌套的内容控件（sdt 套 sdt）没有——其内段落不进 IR，
+    # 也逐个记数进 IR，不让「这里没处理」变成静默（F24）。只数 sdtContent
+    # 的直接子级：段落/表格内部的行内 sdt 文字已随段落文本处理，不算未处理块。
     # 标题样式级别整体偏移（文档标题占用了 Heading 1 时）；规则识别的兜底仍走文本
     offset = style_offset(body)
-
-    for child in body:
-        # idx 对 body 全部子元素统一编号（dense）：bookmarkStart、sdt 等异类
-        # 子元素也占一个号。消费端（render_from_ir / anonymize / apply_details）
-        # 一律按 body 子元素位置定位，生产端只数 w:p/w:tbl 的话，body 里一旦
-        # 出现位于块元素之前的书签等元素，双方就整体错位——套版错段、改错正文、
-        # 匿名路径漏删（F08）。
-        idx += 1
-        if child.tag not in (W + "tbl", W + "p"):
+    children = []
+    for slot, child in enumerate(body):
+        if child.tag == W + "sdt":
+            content = child.find(W + "sdtContent")
+            inner = [e for e in (content if content is not None else [])
+                     if e.tag in (W + "p", W + "tbl")]
+            for pos, e in enumerate(inner):
+                children.append((slot, e, pos))
+            if not inner:
+                unsupported_content += 1
+            else:
+                unsupported_content += sum(
+                    1 for e in content if e.tag == W + "sdt")
             continue
+        if child.tag in (W + "tbl", W + "p"):
+            children.append((slot, child, None))
+
+    for idx, child, sdt_pos in children:
         if child.tag == W + "tbl":
             text = "".join(t.text or "" for t in child.iter(W + "t")).strip()
             rows = child.findall(W + "tr")
             cols = len(rows[0].findall(W + "tc")) if rows else 0
             # 伪表格：1 行且列数很少、文字极短，实际是公式加编号
             if len(rows) == 1 and cols <= 3 and len(text) <= 60:
-                blocks.append({"type": "equation_pseudo_table", "text": text, "idx": idx,
-                               "n_rows": len(rows), "n_cols": cols})
+                emit({"type": "equation_pseudo_table", "text": text, "idx": idx,
+                      "n_rows": len(rows), "n_cols": cols})
                 continue
-            blocks.append({
+            emit({
                 "type": "table", "idx": idx, "n_rows": len(rows), "n_cols": cols,
                 "borders": table_borders(child),
                 "header": [para_text(tc) for tc in rows[0].findall(W + "tc")] if rows else [],
@@ -383,13 +425,13 @@ def parse(path, ai_cfg=None):
         text = para_text(child)
         has_img = has_drawing(child)
         if not text and has_img:
-            blocks.append({"type": "figure", "text": "", "idx": idx})
+            emit({"type": "figure", "text": "", "idx": idx})
             continue
         if not text:
             # 纯公式段落没有文字，但它是内容，不能像空行一样丢掉——
             # 丢了渲染器就不知道这里有个公式，也就不会给它上行距保护。
             if has_omml(child):
-                blocks.append({"type": "equation", "text": "", "idx": idx, "no_text": True})
+                emit({"type": "equation", "text": "", "idx": idx, "no_text": True})
             continue
 
         level = conf = None
@@ -438,7 +480,9 @@ def parse(path, ai_cfg=None):
                 btype = "equation"
             elif not seen_level and len(text) < 250 and ascii_ratio(text) > 0.7:
                 btype = "english_title"
-            elif len(blocks) <= 3 and len(text) < 80:
+            elif len(blocks) <= 3 and len(text) < 80 and sdt_pos is None:
+                # 前置区是按「前三段」的位置猜的：藏在内容控件里的段落不参与
+                # 这个推断——补录占位符路径会把非段落元素当段落包一层，直接崩
                 btype = "front_matter"
             else:
                 btype = "body"
@@ -449,7 +493,7 @@ def parse(path, ai_cfg=None):
         if level:
             block["level"] = level
             block["confidence"] = conf
-        blocks.append(block)
+        emit(block)
 
     # 顺序不可换：规则先给基线 → AI 补漏（只改标签）→ 题注绑定。
     # 题注绑定放最后，因为 AI 可能刚把某个 body 认出是表题。
@@ -461,13 +505,19 @@ def parse(path, ai_cfg=None):
     bind_captions(blocks)
 
     stats = Counter(b["type"] for b in blocks)
-    return {
+    ir = {
         "source": str(Path(path).name),
         "stats": dict(stats),
         "block_total": len(blocks),
         "blocks": blocks,
         "ai": trace,
     }
+    if unsupported_content:
+        # 仍不支持的 sdt 结构（整块没有可处理的段落/表格，或内嵌套了下钻
+        # 不到的内容控件）记数进 IR（F24），渲染汇总据此提示，
+        # 不让「这里没处理」静默
+        ir["unsupported_content_blocks"] = unsupported_content
+    return ir
 
 
 def main():
@@ -491,6 +541,11 @@ def main():
     print(f"识别 {ir['block_total']} 个块\n")
     for k, v in sorted(ir["stats"].items(), key=lambda x: -x[1]):
         print(f"  {v:5d}  {k}")
+
+    if ir.get("unsupported_content_blocks"):
+        print(f"\n  未处理内容块: {ir['unsupported_content_blocks']} 个"
+              f"（整块没有可处理的段落/表格，或内嵌了未下钻的内容控件，"
+              f"对象原样保留）")
 
     heads = [b for b in ir["blocks"] if b["type"].startswith("heading")]
     print(f"\n-- 识别出的标题（{len(heads)} 个） --")

@@ -143,6 +143,8 @@ FOOTER_FIELDS = [
 # ---------------------------------------------------------------- 数据加载
 
 def rules_of(jid):
+    if not JID_RE.match(jid or ""):      # 不合法的 id 不参与路径拼接（F47，同 draft_dir）
+        return None
     p = RULES_DIR / f"{jid}.json"
     if not p.exists():
         return None
@@ -624,8 +626,25 @@ def _stage_render(d, jid, original):
     return meta
 
 
+def _scrub_local_paths(text):
+    """技术细节脱敏（F44）：traceback / format_exc / 子进程 stderr 里的本机
+    绝对路径会原样进 error.json 并渲染到失败页，页面还引导转发给开发者——
+    贴公开 issue 即泄露目录结构（解释器目录还带 C:\\Users\\<用户名>）。
+    落盘与渲染前统一把仓库根与用户主目录替换成「.」；正斜杠写法
+    （as_posix / 手拼路径）一并替换。异常信息本身保留，只抹路径。
+    """
+    if not text:
+        return text
+    for p in (ROOT, Path.home()):
+        for s in (str(p), p.as_posix()):
+            if s and s != ".":
+                text = text.replace(s, ".")
+    return text
+
+
 def fail_page(d, err, journals=None):
     meta = read_meta(d)
+    err.detail = _scrub_local_paths(err.detail)   # error.json 与页面同一份 detail（F44）
     (d / "error.json").write_text(json.dumps(
         {"title": err.title, "hint": err.hint, "detail": err.detail}, ensure_ascii=False),
         encoding="utf-8")
@@ -782,6 +801,8 @@ def render_workspace(error=None, preselect=""):
 @app.route("/workspace")
 def workspace():
     jid = request.args.get("journal") or ""
+    if jid and not JID_RE.match(jid):    # 预选参数也要过体例：不合法 → 400（F47）
+        abort(400)
     return render_workspace(preselect=jid if (RULES_DIR / f"{jid}.json").exists() else "")
 
 
@@ -1026,7 +1047,9 @@ def history():
 def convert():
     f = request.files.get("file")
     jid = request.form.get("journal") or ""
-    keep = jid if (RULES_DIR / f"{jid}.json").exists() else ""
+    # keep 判断先过 JID_RE：..\ 反斜杠 id 不能参与 RULES_DIR 拼接（F47），
+    # 不合法的落到 keep="" 走「请选择目标期刊」的既有 400 分支
+    keep = jid if (JID_RE.match(jid) and (RULES_DIR / f"{jid}.json").exists()) else ""
     if not f or not f.filename:
         return render_workspace("请选择一份 DOCX 稿件", keep), 400
     name = Path(f.filename).name
@@ -1162,7 +1185,8 @@ def retry(job):
     d = job_dir(job)
     meta = read_meta(d)
     jid = request.form.get("journal") or meta.get("journal")
-    if not (RULES_DIR / f"{jid}.json").exists():
+    # 换刊目标先过 JID_RE：不合法的 id 会被拼进渲染路径、原样写进 meta（F47）
+    if not (jid and JID_RE.match(jid) and (RULES_DIR / f"{jid}.json").exists()):
         abort(400)
     if not (d / "manuscript.docx").exists():
         abort(404)
@@ -1341,6 +1365,8 @@ def job_file(job, name):
 
 @app.route("/journal/<jid>/spec")
 def journal_spec(jid):
+    if not JID_RE.match(jid or ""):      # 同 draft_dir：..\ 穿透先拦下（F47）
+        abort(404)
     p = RULES_DIR / f"{jid}.spec.html"
     if not p.exists():
         abort(404)

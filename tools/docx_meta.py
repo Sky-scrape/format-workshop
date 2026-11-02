@@ -22,6 +22,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -290,7 +291,17 @@ def sanitize_docx(path, scrub_people=False):
                     # 属性扫描覆盖所有 .xml 部件（含 customXml），清理口径必须一致
                     data = _sanitize_people(data, info.filename, removed)
                 dst.writestr(info, data)
-        os.replace(tmp, path)
+        # Windows 瞬时文件占用（杀毒/索引/预览句柄，WinError 5）会让 replace
+        # 偶发 PermissionError——这不是真失败，稍候重试即可（FX1）。同款姿势见
+        # app.py details.json 的原子写：5 次递增退避，共约 0.44s。
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep((0.02, 0.04, 0.08, 0.1, 0.2)[attempt])
     finally:
         if tmp.exists():
             tmp.unlink(missing_ok=True)

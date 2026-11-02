@@ -180,11 +180,14 @@ def build(rules, out_path):
 
     doc = Document()
 
-    sec = doc.sections[0]
-    sec.page_width = Mm(rules["page"]["size_mm"]["width"])
-    sec.page_height = Mm(rules["page"]["size_mm"]["height"])
-    for side, key in (("top", "top"), ("bottom", "bottom"), ("left", "left"), ("right", "right")):
-        setattr(sec, f"{side}_margin", Mm(rules["page"]["margin_mm"][key]))
+    # 页面设置遍历全部节（F32）：只设 sections[0] 的话，分节符造出的其余节
+    # 保持 Word 默认版面。样板虽从空白文档生成（正常单节），遍历姿势与
+    # render_from_ir 的页面设置保持同一，多节也不漏。
+    for sec in doc.sections:
+        sec.page_width = Mm(rules["page"]["size_mm"]["width"])
+        sec.page_height = Mm(rules["page"]["size_mm"]["height"])
+        for side, key in (("top", "top"), ("bottom", "bottom"), ("left", "left"), ("right", "right")):
+            setattr(sec, f"{side}_margin", Mm(rules["page"]["margin_mm"][key]))
 
     normal = doc.styles["Normal"]
     normal.font.name = body["font_latin"]

@@ -128,20 +128,26 @@ def test_details_write_survives_reader_racing_writer(app_module, light_job,
     def reader():
         p = d / "details.json"
         while not stop.is_set():
-            try:
-                data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-            except ValueError as e:
-                # 半截/拼接 JSON 会从这里现形：原子写下这必须永不发生
-                errors.append(e)
-                return
-            except OSError:
-                # Windows 共享冲突是毫秒不到的瞬时窗口，生产读方（_stage_render）
-                # 同样重试；只有重试耗尽才与半截 JSON 同罪
+            # 单次读取的重试预算：os.replace 落位的一瞬间，替换方要以 DELETE
+            # 权限短暂打开主文件，并发读的 open 撞上就是共享冲突（Windows 上
+            # 映射成 PermissionError 13）。这是毫秒不到的瞬时窗口，生产读方
+            # （_stage_render）同样重试；写入方自己也带 5 次重试，单次立即重试
+            # 会连环撞上——按预算退避，重试耗尽才与半截 JSON 同罪。
+            budget = time.monotonic() + 2.0
+            while True:
                 try:
-                    data = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError) as e:
+                    data = (json.loads(p.read_text(encoding="utf-8"))
+                            if p.exists() else {})
+                    break
+                except ValueError as e:
+                    # 半截/拼接 JSON 会从这里现形：原子写下这必须永不发生
                     errors.append(e)
                     return
+                except OSError as e:
+                    if time.monotonic() > budget:
+                        errors.append(e)
+                        return
+                    time.sleep(0.005)
             v = data.get("english_abstract")
             if v:
                 observed.add(v)

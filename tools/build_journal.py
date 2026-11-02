@@ -55,6 +55,17 @@ def run(cmd, timeout=None, **kw):
     return r
 
 
+def remove_old_pdf(pdf):
+    """清理旧 PDF。Windows 上旧件常被阅读器占用着删不掉，
+    裸 PermissionError 的 traceback 不是给人看的——点名文件、给出出路、非零退出。"""
+    try:
+        pdf.unlink()
+    except PermissionError:
+        print(f"失败：旧 PDF {pdf} 被占用（通常是阅读器开着它），"
+              "请关闭阅读器后重试。")
+        raise SystemExit(1)
+
+
 def convert_pdf(soffice, sample, pdf, timeout=SOFFICE_TIMEOUT):
     """soffice 转 PDF。三条防线：
 
@@ -64,7 +75,7 @@ def convert_pdf(soffice, sample, pdf, timeout=SOFFICE_TIMEOUT):
        宁可让 build 以非零退出，也不带着过期预览假装「完成」。
     """
     if pdf.exists():
-        pdf.unlink()
+        remove_old_pdf(pdf)
     run([soffice, "--headless", "--convert-to", "pdf",
          "--outdir", str(pdf.parent), str(sample)], timeout=timeout)
     if not pdf.exists():
@@ -96,7 +107,7 @@ def main():
     else:
         if pdf.exists():
             # 没有转换器也不能拿上一轮的 PDF 冒充本轮样板的预览
-            pdf.unlink()
+            remove_old_pdf(pdf)
             print("  已删除旧 PDF：未找到 LibreOffice，无法重新生成，规格页将不含成品预览")
         else:
             print("  跳过 PDF：未找到 LibreOffice，规格页将不含成品预览")

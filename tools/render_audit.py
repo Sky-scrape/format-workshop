@@ -83,12 +83,20 @@ def clip(text, limit=48):
 
 
 def pos_label(idx):
-    """审计里的位置标记：负数不是段落下标，别显示成段号。"""
+    """审计里的位置标记：负数不是段落下标，别显示成段号。
+
+    idx 先归一为整数再出 HTML（F46）：审计 JSON 是半开放文件（匿名稿分支
+    会追加、人工可查改），非整数的 idx 此前会被原样插值进三处位置列
+    （改动表 / 版式分组 / 说明节）。数字照常显示，非数字值转义成纯文本。
+    """
     if idx == -1:
         return "页面"
     if idx == -2:
         return "脚注"
-    return idx
+    try:
+        return int(idx)
+    except (TypeError, ValueError):
+        return html.escape(str(idx))
 
 
 def render(d, job=None):

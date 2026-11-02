@@ -90,6 +90,13 @@ def build(rules, sample_pdf=None):
                  "published": "已发表论文实测"}.get(auth, "未声明")
     auth_color = {"template": "#176b57", "guide": "#0e4f41",
                   "published": "#8a6626"}.get(auth, "#52655f")
+    src_url = str(v.get("source_url", "") or "")
+    # html.escape 只转义 <>&'"，拦不住 javascript: 这类协议——规格页由应用
+    # 同源提供，恶意 href 点击即在应用源内执行（F45）。仅 http(s) 渲染成
+    # 链接，其余值降级为纯文本，出处本身仍如实展示。
+    src_html = (f'<a href="{html.escape(src_url)}">{html.escape(src_url)}</a>'
+                if src_url.startswith(("http://", "https://"))
+                else html.escape(src_url))
 
     parts.append(f"""
 <header>
@@ -98,7 +105,7 @@ def build(rules, sample_pdf=None):
   <p class="sub">{html.escape(j.get('name_en',''))} · {html.escape(j.get('sponsor',''))}</p>
   <p class="meta">核验于 {html.escape(str(v.get('verified_at','')))} · 依据 {html.escape(v.get('verified_by',''))}<br>
   版式依据：<strong style="color:{auth_color}">{auth_text}</strong><br>
-  来源：<a href="{html.escape(v.get('source_url',''))}">{html.escape(v.get('source_url',''))}</a></p>
+  来源：{src_html}</p>
 </header>""")
 
     # 交叉核对结论

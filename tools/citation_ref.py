@@ -376,7 +376,7 @@ def build_index(entries):
     """条目序号 → 解析结果。序号取自条目开头的 [n]。"""
     index = {}
     for raw in entries:
-        m = re.match(r"^\s*\[\s*(\d{1,3})\s*\]", raw)
+        m = NUMBERED_PREFIX.match(raw)
         if not m:
             continue
         parsed = parse_entry(raw)
@@ -384,6 +384,51 @@ def build_index(entries):
             parsed["raw"] = raw
             index[int(m.group(1))] = parsed
     return index
+
+
+NUMBERED_PREFIX = re.compile(r"^\s*\[\s*(\d{1,3})\s*\]")
+
+
+def unnumbered_entries(texts):
+    """文献表里「像条目但没有 [n] 编号」的段落原文（F23）。
+
+    build_index 只收带编号的条目：非编号条目进不了双向校验，条目重排时
+    也会被留在原地，与搬移后的条目拼成错序的混合表。返回非空时调用方必须
+    整批放弃转换，并把这些段落点名进审计。
+    """
+    return [t for t in (x.strip() for x in texts)
+            if t and not NUMBERED_PREFIX.match(t)]
+
+
+def footnote_citation_hits(texts):
+    """脚注文本里的编号引用（F23），与正文同一套 classify_spans 口径。
+
+    脚注部件不在正文体检与改写范围内：条目一搬家，脚注里的编号就指向
+    错位、已被改写的条目。返回非空时调用方整批放弃并点名脚注。数学语境
+    的判定与正文一致——「区间为[90, 100]」这类样文本不算引用，不误杀。
+    """
+    hits = []
+    for text in texts:
+        hits.extend(classify_spans(text or "")[0])
+    return hits
+
+
+def gb_sort_key(text):
+    """中文按 GB2312 序取排序键：一级汉字库本身就是拼音序，用它近似拼音。
+
+    不引入第三方拼音依赖——requirements 里没有 pypinyin，靠 import 探测
+    的「真拼音」永远走不到，码位序会冒充拼音序把「周一」排到「张三」前面
+    （F22）。二级汉字在 GB2312 里按部首排，对文献条目的常用字够用；编码
+    取不到的字统一排到最后。调用方的审计 note 必须如实写「GB 序（近似
+    拼音）」，不得写成真拼音序。
+    """
+    buf = bytearray()
+    for ch in text or "":
+        try:
+            buf += ch.encode("gb2312")
+        except UnicodeEncodeError:
+            buf += b"\xff\xff"
+    return bytes(buf)
 
 
 def check(paragraph_texts, index, rules):
