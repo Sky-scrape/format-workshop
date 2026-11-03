@@ -11,6 +11,10 @@ conftest 的运行时守卫只阻止夹具用私有刊（CI 上会 FileNotFoundE
    styles.xml 与任何绕过 python-docx 字号属性的原始 XML 写入路径）。
 2. 流水线矩阵——对每本规则集，用合成稿（conftest.sample_docx，项目约定的
    源稿形态）走 parse→render→invariant_failures，四条不变式全过。
+3. 双渲染幂等矩阵（IDMPOT）——对每本规则集渲染两次（第二次的输入是第一次
+   的成品），断言版式签名逐字一致、四条不变式仍全过。渲染器写出的每种
+   形态（无冒号标签、空白分隔编号、模板体例的标题编号、文献表标题）必须
+   能被自己的解析器读回，否则第二次 parse 分类漂移、版式跟着漂。
 
 参数化按「文件存在才跑」：本机 23 本全跑，CI 只有入库的 3 本也能过。
 全库规模的下限守卫（test_full_library_coverage_floor）防目录被清空或私有库
@@ -25,7 +29,8 @@ import pytest
 from docx.oxml.ns import qn
 
 import render_sample
-from conftest import NS_W, RULES, invariant_failures, render_into, tracked_rulesets
+from conftest import (NS_W, RULES, invariant_failures, layout_signature,
+                      render_into, tracked_rulesets)
 
 # README 与 DESIGN 记载全库 23 本。下限取 20，容忍个别刊被有意移出库，
 # 但绝不允许缩水到入库的 3 本而无人察觉。
@@ -113,3 +118,21 @@ def test_pipeline_full_library(sample_docx, tmp_path, rules_path):
                     target=rules_path.stem, rules_path=rules_path)
     problems = invariant_failures(p)
     assert not problems, f"{rules_path.stem}: " + "；".join(problems)
+
+
+@pytest.mark.parametrize("rules_path", ruleset_paths(), ids=lambda p: p.stem)
+def test_pipeline_double_render_idempotent(sample_docx, tmp_path, rules_path):
+    """③全库双渲染幂等矩阵（IDMPOT）：对自家成品二次渲染，版式签名不变。
+
+    第二次的输入是第一次的成品（先 parse 再渲染，与真实重跑同路径）。
+    承诺③在这里按「整库每本渲染两次」把守；二次渲染还必须继续过四条
+    不变式——文字逐字不变是版式幂等的前提。
+    """
+    first = render_into(tmp_path / f"idem1-{rules_path.stem}", sample_docx,
+                        target=rules_path.stem, rules_path=rules_path)
+    second = render_into(tmp_path / f"idem2-{rules_path.stem}", first.docx,
+                         target=rules_path.stem, rules_path=rules_path)
+    assert layout_signature(second.docx) == layout_signature(first.docx), \
+        f"{rules_path.stem} 对自家成品二次渲染，版式指纹漂移"
+    problems = invariant_failures(second)
+    assert not problems, f"{rules_path.stem} 二次渲染: " + "；".join(problems)

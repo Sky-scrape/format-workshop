@@ -100,6 +100,13 @@ vertical-align:1px}
     这些页的文字没有取到，稿约对应内容<strong>完全缺失</strong>——抽取结论不覆盖它们，请先解决取文问题再复核。</div>
   {% endif %}
 
+  {% if ext.ocr_low_text_pages %}
+  {# 低文字层 ≠ 失败（F51）：扫描页可能已由 OCR 补上，也可能真是页眉页码
+     凑数的旁路页——只提示人工核对，不替人下结论，所以用黄档不用红档。 #}
+  <div class="flash warn"><strong>第 {{ ext.ocr_low_text_pages|map(attribute='page')|join('、') }} 页文字层异常少。</strong>
+    这几页可能<strong>漏取了内容</strong>（扫描页或页眉页码类旁路页）——请对照原 PDF 核对这几页是否都参与了抽取。</div>
+  {% endif %}
+
   <div class="card">
     <h2>从稿约里读到的</h2>
     <p class="hint">每条右侧是 PDF 原文片段，你可以直接拿去比对。值不对就说明模型读错了这一句。</p>

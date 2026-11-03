@@ -716,7 +716,14 @@ def stage_parse(d, jid, original):
 def _stage_parse(d, jid, original):
     """解析 + 体检。产出 manuscript.ir.json 与 triage.html。"""
     src, ir = d / "manuscript.docx", d / "manuscript.ir.json"
-    run(["tools/parse_docx.py", src, "-o", ir])
+    # WEBLOG2 收尾：AI 补漏事件（调用失败/采纳数）已由 parse() log 进解析
+    # stdout，但网页流水线以子进程跑解析器，stdout 本来无人接收——逐行转进
+    # app.logger（server.log），识别汇总与存疑标题随之可在后台关窗后回溯。
+    out = run(["tools/parse_docx.py", src, "-o", ir])
+    for ln in (out or "").splitlines():
+        ln = ln.strip()
+        if ln:
+            app.logger.info("[parse] %s", ln)
     ir_data = read_json(ir)
     # 解析器看到的是任务目录里的 manuscript.docx，把来源名改回用户上传的文件名
     if original and ir_data.get("source") != original:
@@ -1270,7 +1277,11 @@ def journal_extract():
         f.save(src)
 
         try:
-            rules, report, text = extract_journal.extract(src, jid=jid, name_zh=name)
+            # 抽取过程的事件（F52 截断降级重试、OCR 丢页/低文字层）必须记进
+            # 服务日志——CLI 链路走 stderr，web 链路不传 log 就全部静默，
+            # draft.json 里只有结果，查不到「发生过」。
+            rules, report, text = extract_journal.extract(
+                src, jid=jid, name_zh=name, log=app.logger.warning)
         except Exception as e:  # noqa: BLE001
             app.logger.exception("稿约抽取失败")
             return back(f"抽取失败：{e}")

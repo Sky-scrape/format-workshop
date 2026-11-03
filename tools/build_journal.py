@@ -60,6 +60,10 @@ def remove_old_pdf(pdf):
     裸 PermissionError 的 traceback 不是给人看的——点名文件、给出出路、非零退出。"""
     try:
         pdf.unlink()
+    except FileNotFoundError:
+        # exists() 检查与 unlink 之间文件可能被外部删掉——旧件已不在，
+        # 清理目的已达成，按已删除继续，不裸 traceback（FDOC2 残留）。
+        pass
     except PermissionError:
         print(f"失败：旧 PDF {pdf} 被占用（通常是阅读器开着它），"
               "请关闭阅读器后重试。")

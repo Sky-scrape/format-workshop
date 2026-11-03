@@ -34,18 +34,49 @@ MAX_HEADING_LEN = 40
 # AI 可以"补漏"的起点：规则判不出来时才落到 body，front_matter 更是只按位置猜的
 AI_UPGRADE_FROM = {"body", "front_matter"}
 
+# 标签括号体例（全库实有：【摘要】〔…〕﹝参考文献﹞）：闭合括号本身就是
+# 标签与正文的分隔，冒号/空白不再是必要条件（IDMPOT：解析必须能读回渲染器
+# 按规则集写出的每一种标签形态，否则二次解析整段退化成正文、重跑即漂移）
+_LABEL_BRA = "[【〔﹝\\[（(]"
+_LABEL_KET = "[】〕﹞\\]）)]"
+
 PAT = {
     # 内容提要／提要 是「内容摘要／摘要」的常见变体（《经济研究》即用「内容提要」）。
     # 这里必须与 render_from_ir 的标签归一正则保持一致，否则解析认不出、
     # 渲染就进不了摘要分支：字号不套、字数不查、标签也不归一。
-    "abstract": re.compile(r"^(内容摘要|内容提要|摘\s*要|提\s*要)\s*[:：]"),
-    "keywords": re.compile(r"^关\s*键\s*词\s*[:：]"),
+    # 标签后允许「空白」代替冒号（IDMPOT）：有的刊体例标签后不加冒号、直接接
+    # 全角空格（如《世界经济》式「内容提要　」），渲染器按规则集写出的就是
+    # 这个形态——二次解析认不出它，摘要/关键词整段退化成正文，重跑即漂移。
+    # 括号体例（【摘要】）由闭合括号充当分隔。无分隔的「内容提要本文」仍不当摘要。
+    "abstract": re.compile(
+        r"^(?:[" + _LABEL_BRA[1:-1] + r"]\s*(?:内容摘要|内容提要|摘\s*要|提\s*要)\s*"
+        r"[" + _LABEL_KET[1:-1] + r"]"
+        r"|(?:内容摘要|内容提要|摘\s*要|提\s*要)(?:\s*[:：]|\s))"),
+    "keywords": re.compile(
+        r"^(?:[" + _LABEL_BRA[1:-1] + r"]\s*关\s*键\s*词\s*[" + _LABEL_KET[1:-1]
+        + r"]|关\s*键\s*词(?:\s*[:：]|\s))"),
     "classification": re.compile(r"^(中图分类号|JEL分类号|JEL|文献标识码)"),
-    "ref_head": re.compile(r"^参\s*考\s*文\s*献\s*[:：]?$"),
+    # 文献表标题必须能读回渲染器写出的全部体例：「参考文献：」「参 考 文 献」
+    # 「﹝参考文献﹞」（ciejournal）与英文刊的「References」（cwe 等，re.I
+    # 覆盖 REFERENCES），否则二次解析时文献区整段失效、条目全部退化成正文
+    # （IDMPOT）。
+    "ref_head": re.compile(
+        r"^(?:[" + _LABEL_BRA[1:-1] + r"]\s*参\s*考\s*文\s*献\s*[" + _LABEL_KET[1:-1]
+        + r"]|参\s*考\s*文\s*献\s*[:：]?|references)\s*[:：]?$", re.I),
     "table_caption": re.compile(r"^表\s*\d+"),
     "figure_caption": re.compile(r"^图\s*\d+"),
     "note": re.compile(r"^(注|资料来源|数据来源)\s*[:：]"),
     "h1": re.compile(r"^[一二三四五六七八九十]{1,3}、"),
+    # 「一　引言」：中文数字＋空白分隔的一级体例（《世界经济》等，levels[0]=「一　」）。
+    # 渲染器按规则集重写出的就是这个形态，二次解析认不出它标题就退化成正文
+    # （IDMPOT）。分隔空白必须存在（顿号体例由 h1 管）。护栏与 h1_num 同一口径
+    # （短、无句读、分类词负向断言，见下）：只有「短＋无句读」挡不住「一 些
+    # 研究表明」「一 种新的方法」这类把数量词拆开写的正文短句——它们没有
+    # 句读、也够短，而判成一级是 high 置信，AI 不得纠正（DESIGN §14.2），
+    # 必须在正则处排除。负向断言与 h1_num 的分类词清单一致，另加「些」——
+    # 「一些」被空格拆开是中文正文的高频形态，节名不会以「些」起头。
+    "h1_ws": re.compile(
+        r"^[一二三四五六七八九十]{1,3}\s+(?![个项种类条位名年月日次篇本些])\S"),
     "h2": re.compile(r"^[（(][一二三四五六七八九十]{1,3}[）)]"),
     "h3": re.compile(r"^\d{1,2}\s*[.．](?!\d)\s*\S"),
     "h4": re.compile(r"^[（(]\d{1,2}[）)]"),
@@ -303,6 +334,8 @@ def classify_heading(text):
     # 这一条掉进正文，后面所有章节号就整体错位一格。
     if PAT["h1"].match(text):
         return (1, "high")
+    if PAT["h1_ws"].match(text) and len(text) <= 30 and not HEADING_PUNCT.search(text):
+        return (1, "high")
     if PAT["h2"].match(text):
         return (2, "high")
 
@@ -323,7 +356,11 @@ def classify_heading(text):
 
 
 def detect_arabic_level(children):
-    """判定「1.」在一级标题下是二级还是三级，返回 (级别, 是否有明确依据)。
+    """判定「1.」「（1）」这类歧义编号的层级。
+
+    返回 (arabic_level, arabic_sure, paren_level)：
+      arabic_level —— 「1.」的级别；arabic_sure —— 是否有明确依据；
+      paren_level  —— 「（1）」的级别（缺省 4）。
 
     单看「1.标题」本身定不了级：`（一）` 体系里它是三级，《经济管理》体例
     （一、／1.／（1））里它是二级。两种都在中文经管期刊里常见，猜错不是
@@ -334,11 +371,21 @@ def detect_arabic_level(children):
     边扫边判会在「（一）」出现在第一个「1.」之后时判反——引言章直接进正文
     小节、二级标题晚于三级出现，在真实稿件里并不罕见。
 
-    第二个返回值是「有没有依据」。全文既没有「（一）」也没有「（1）」，说明
-    这份稿子只有两级，判二级是**推断**而非依据；调用方据此把置信度标成
-    ambiguous，别让推断混进「期刊要求」里。
+    「经济管理」式推断（「1.」是二级）的前提是全文存在中文一级标题「一、」：
+    那个体例是「一、／1.／（1）」。全文**一个中文编号都没有**的稿子（阿拉伯
+    层级体例 1／1.1，英文刊常见，也是本工具给 numeric 刊重编号后的自身产物，
+    IDMPOT），「1.」只能是顶级编号，判二级反而把整篇一级标题降级重排。
+
+    「（1）」同理（IDMPOT）：它挂在哪个层级下面由「1.」的层级决定——
+    一、／1.／（1）体系（有「一、」无「（一）」）里它是三级；有「（一）」的
+    （一）／1.／（1.1）体系里它才是四级。渲染器给前一类刊写出的三级标题就是
+    「（1）标题」，二次解析若仍判四级，渲染端没有四级分支、整段退回正文套版。
+
+    第二个返回值是「有没有依据」。有「一、」但既没有「（一）」也没有「（1）」
+    时，判二级是**推断**而非依据；调用方据此把置信度标成 ambiguous，别让
+    推断混进「期刊要求」里。
     """
-    has_cn2 = has_arabic3 = False
+    has_cn1 = has_cn2 = has_arabic3 = has_h2num = False
     for _slot, child, _pos in children:
         if child.tag != W + "p":
             continue
@@ -348,11 +395,26 @@ def detect_arabic_level(children):
         if PAT["h2"].match(t):
             has_cn2 = True
             break                 # 有中文括号二级就够了，无须扫完
+        if PAT["h1"].match(t):
+            has_cn1 = True
         if PAT["h4"].match(t):
             has_arabic3 = True
+        if PAT["h2_num"].match(t):
+            has_h2num = True
     if has_cn2:
-        return 3, True
-    return 2, has_arabic3
+        return 3, True, 4
+    if not has_cn1:
+        # 全文没有「一、」：「1.」是一级（阿拉伯层级体例的还原）。有「1.1」式
+        # 二级（has_h2num）是直接依据；连它也没有（只有「N.」标题）时，一级
+        # 仍是唯一自洽的层级——「一、／1.」体系必须有「一、」才成立。
+        # 「（1）」不能推翻这一判级：上面的预扫用 PAT["h4"] 直接匹配原文，
+        # 不带标题护栏，正文枚举句「（1）样本选择说明。」同样命中，分不出
+        # 标题与正文句——只有「一、」在场（一、／1.／（1）体系铁证）时
+        # 「（1）」才是层级证据。这里「（1）」保持缺省四级，不随「1.」下探
+        return 1, True, 4
+    # 有「一、」无「（一）」：一、／1.／（1）体系。「1.」是二级——有「（1）」
+    # 在场是铁证（sure），否则是推断；「（1）」顺延为三级。
+    return 2, has_arabic3, 3
 
 
 def table_borders(tbl):
@@ -384,8 +446,19 @@ def has_drawing(p):
     return False
 
 
-def _sdt_blocks(content):
+# sdt 嵌套下钻的深度上限（SDTCAP）：真实文档的内容控件嵌到不了这个层数；
+# 恶意/异常 docx 的超长嵌套链此前会让递归下钻打穿（RecursionError，批六
+# F24 验证 depth=60 链可复现——解析器整篇崩掉）。到顶后不再下钻，整个深层
+# 子树按「一个未识别结构」计数进 unsupported_content_blocks，对象原样保留，
+# 解析汇总必须能看见这笔账。
+SDT_MAX_DEPTH = 8
+
+
+def _sdt_blocks(content, depth=1):
     """sdtContent 递归下钻：返回（可处理块元素列表, 未识别叶节点数）。
+
+    depth 是当前内容控件的嵌套层数（顶层 sdt 为 1，SDTCAP）：超过
+    SDT_MAX_DEPTH 的更深 w:sdt 不再下钻，整体计 1 个未识别结构。
 
     w:p / w:tbl 直接收进块列表；内嵌 w:sdt 继续下钻，其块按文档序并入同一
     列表（SDTNEST：批五只下钻一层，外层有直接段落时内嵌 sdt 的段落既不进
@@ -393,15 +466,19 @@ def _sdt_blocks(content):
     叶节点，逐个计数。一个块都没取到、也没有未识别节点（空内容控件）时
     计 1——整块没有可处理段落/表格的对象要报出来（F24 口径，原样保留）。
 
-    渲染端 render_from_ir._sdt_blocks 必须与这里保持同一展开顺序：IR 的
-    sdt_pos 是槽位内序，两边顺序不一致渲染就套错段。
+    渲染端 render_from_ir._sdt_blocks 必须与这里保持同一展开顺序与同一深度
+    上限：IR 的 sdt_pos 是槽位内序，两边顺序不一致渲染就套错段。
     """
     blocks, unknown = [], 0
     for e in (list(content) if content is not None else []):
         if e.tag in (W + "p", W + "tbl"):
             blocks.append(e)
         elif e.tag == W + "sdt":
-            sub_blocks, sub_unknown = _sdt_blocks(e.find(W + "sdtContent"))
+            if depth >= SDT_MAX_DEPTH:
+                unknown += 1
+                continue
+            sub_blocks, sub_unknown = _sdt_blocks(e.find(W + "sdtContent"),
+                                                  depth + 1)
             blocks.extend(sub_blocks)
             unknown += sub_unknown
         else:
@@ -603,9 +680,9 @@ def parse(path, ai_cfg=None):
         if child.tag in (W + "tbl", W + "p"):
             children.append((slot, child, None))
 
-    # 「1.」的级别全文预扫一次（见 detect_arabic_level）：必须在进主循环之前
-    # 拿到结论，否则「（一）」晚于第一个「1.」出现时会判反
-    arabic_level, arabic_sure = detect_arabic_level(children)
+    # 「1.」「（1）」的级别全文预扫一次（见 detect_arabic_level）：必须在进
+    # 主循环之前拿到结论，否则「（一）」晚于第一个「1.」出现时会判反
+    arabic_level, arabic_sure, paren_level = detect_arabic_level(children)
 
     for idx, child, sdt_pos in children:
         if child.tag == W + "tbl":
@@ -684,6 +761,11 @@ def parse(path, ai_cfg=None):
                         conf = "ambiguous"
                 else:
                     level = cand
+                    if level == 4 and paren_level != 4:
+                        # 「（1）」的层级随编号体系顺延（detect_arabic_level）：
+                        # 一、／1.／（1）体系里它是三级。渲染端只实现一至三级，
+                        # 仍判四级的话整段会退回正文套版，重跑即漂移（IDMPOT）
+                        level = paren_level
                 if level is None:
                     btype, conf = "body", "low"
                 elif level == 3 and 2 not in seen_level:
@@ -719,7 +801,9 @@ def parse(path, ai_cfg=None):
     if ai_cfg is None:
         ai_cfg = ai_assist.load_config()
     if ai_assist.available(ai_cfg):
-        trace = apply_ai(blocks, ai_cfg)
+        # log 进解析 stdout（WEBLOG2）：截断、调用失败、采纳数不再静默；
+        # 截断数值另由 apply_ai 内部 trace 带回，落进 ir["ai"]（F50）。
+        trace = apply_ai(blocks, ai_cfg, log=print)
     bind_captions(blocks)
 
     stats = Counter(b["type"] for b in blocks)
@@ -767,8 +851,8 @@ def main():
 
     if ir.get("unsupported_content_blocks"):
         print(f"\n  未处理内容块: {ir['unsupported_content_blocks']} 个"
-              f"（内容控件里未识别的块级节点或取空的内容控件，"
-              f"对象原样保留）")
+              f"（内容控件里未识别的块级节点、取空或嵌套超过 "
+              f"{SDT_MAX_DEPTH} 层的内容控件，对象原样保留）")
 
     fs = ir.get("fields") or {}
     if fs.get("total"):

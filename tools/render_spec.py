@@ -100,9 +100,10 @@ def build(rules, sample_pdf=None):
     src_url = str(v.get("source_url", "") or "")
     # html.escape 只转义 <>&'"，拦不住 javascript: 这类协议——规格页由应用
     # 同源提供，恶意 href 点击即在应用源内执行（F45）。仅 http(s) 渲染成
-    # 链接，其余值降级为纯文本，出处本身仍如实展示。
+    # 链接，其余值降级为纯文本，出处本身仍如实展示。scheme 按不区分大小写
+    # 判（浏览器就是这么解析的）："HTTPS://example.com" 是链接不是纯文本。
     src_html = (f'<a href="{html.escape(src_url)}">{html.escape(src_url)}</a>'
-                if src_url.startswith(("http://", "https://"))
+                if src_url.lower().startswith(("http://", "https://"))
                 else html.escape(src_url))
 
     parts.append(f"""

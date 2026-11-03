@@ -63,8 +63,12 @@ def spawn_keepalive():
 def run_ps1_full(name, *args):
     """跑 tools/ 下的 PowerShell 脚本，返回 (stdout, 退出码)。
 
-    kill_by_cmdline.ps1 的约定：无匹配进程时 exit 1 且无输出。stop() 需要
+    kill_by_cmdline.ps1 的约定：无匹配进程时 exit 2 且无输出。stop() 需要
     真实退出码才能如实报「未找到匹配进程」，不能拿空输出当成功（F48）。
+    脚本没能执行（powershell 缺失、超时、进程被杀）返回 -1；脚本自身崩溃
+    （-File 下抛终止错误）实测退出码是 1、stdout 常为空——旧约定「无匹配
+    exit 1」与之同形，崩溃会被报成「未找到匹配进程」，所以无匹配改走 2
+    （APPCTLHON）：执行失败与确实无进程是两回事。
     """
     cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-File", str(TOOLS / name), *args]
@@ -73,7 +77,7 @@ def run_ps1_full(name, *args):
                            encoding="utf-8", errors="replace", timeout=60)
         return r.stdout, r.returncode
     except Exception:                       # noqa: BLE001
-        return "", 1
+        return "", -1
 
 
 def run_ps1(name, *args):
@@ -115,8 +119,16 @@ def stop():
         elif rc == 0:
             # 找到了进程但结束失败，ps1 的 failed 行带着原因
             print(f"  {label}结束失败：{out.strip()}")
-        else:
+        elif rc == 2 and not out.strip():
+            # ps1 约定：无匹配 exit 2 且无输出——只有这一种情形才算「无进程」。
+            # 崩溃的 ps1 在 -File 下退出码是 1、stdout 为空（APPCTLHON 实测），
+            # 不能再拿「exit 1 + 空输出」当无匹配的记号
             print(f"  {label}未找到匹配进程")
+        else:
+            # 脚本本身没跑成（powershell 缺失、超时、崩溃，exit<0 或异常退出
+            # 码）——与「无匹配」不是一回事，混报等于把执行失败说成没有进程。
+            detail = f"：{out.strip()}" if out.strip() else ""
+            print(f"  {label}停止脚本执行失败（exit {rc}）{detail}")
     time.sleep(1)
     if port_alive():
         # 兜底：还有监听者就直接按端口结束

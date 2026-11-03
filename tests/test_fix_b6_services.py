@@ -57,10 +57,14 @@ def run_ps1(*args):
 
 
 @pytest.mark.skipif(shutil.which("powershell") is None, reason="无 powershell")
-def test_ps1_no_match_exits_1_silently():
-    """ps1 约定：无匹配 exit 1 零输出——stop() 靠它如实报「未找到」。"""
+def test_ps1_no_match_exits_2_silently():
+    """ps1 约定：无匹配 exit 2 零输出——stop() 靠它如实报「未找到」。
+
+    不能是 exit 1：-File 下脚本自身崩溃的退出码也是 1、stdout 为空
+    （APPCTLHON 实测），同形就无法区分「没有进程」和「脚本没跑成」。
+    """
     r = run_ps1("-Pattern", "zzz_no_such_process_b6", "-Root", str(ROOT))
-    assert r.returncode == 1, f"无匹配应 exit 1，实际 {r.returncode}"
+    assert r.returncode == 2, f"无匹配应 exit 2，实际 {r.returncode}"
     assert not r.stdout.strip(), "无匹配不该有任何输出（旧版把空输出当成功）"
 
 
@@ -92,7 +96,7 @@ def test_ps1_scoped_to_project_root():
         assert child.poll() is None, "DryRun 不得杀进程"
 
         foreign = run_ps1("-Pattern", MARKER, "-Root", r"D:\b6_other_project")
-        assert foreign.returncode == 1 and not foreign.stdout.strip(), \
+        assert foreign.returncode == 2 and not foreign.stdout.strip(), \
             "模式命中但路径不属于本项目时必须不匹配（F48 的误杀就在这）"
         assert child.poll() is None
     finally:
@@ -104,7 +108,7 @@ def test_stop_reports_not_found_honestly(monkeypatch, capsys):
     """复现 F48 死分支：旧版无论成败都打「已处理」。无匹配要如实报「未找到」。"""
     import app_ctl
 
-    monkeypatch.setattr(app_ctl, "run_ps1_full", lambda name, *args: ("", 1))
+    monkeypatch.setattr(app_ctl, "run_ps1_full", lambda name, *args: ("", 2))
     monkeypatch.setattr(app_ctl, "port_alive", lambda **kw: False)
     monkeypatch.setattr(app_ctl, "time", types.SimpleNamespace(sleep=lambda *_: None))
     assert app_ctl.stop() == 0

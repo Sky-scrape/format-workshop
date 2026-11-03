@@ -65,6 +65,8 @@ KIND = {
     "条目重排（含域，已跳过）": "N",
     "引用体系转换（已跳过）": "N",
     "编号样文本未转换": "N",
+    # 外部脚注关系够不着（EXTFOOT）：原样保留，只落一条说明（changed=False）
+    "外部脚注关系未处理": "N",
 }
 
 GRADE_DESC = {
@@ -313,6 +315,7 @@ text-overflow:ellipsis;white-space:nowrap;margin-top:1px}}
 border-radius:6px;margin-right:9px}}
 .kA{{background:var(--accent-soft);color:var(--accent)}}
 .kB{{background:var(--gold-bg);color:var(--gold)}}
+.kN{{background:var(--soft);color:var(--ink2);border:1px solid var(--line)}}
 details.group{{border-bottom:1px solid var(--line2)}}
 details.group:last-child{{border-bottom:none}}
 details.group>summary{{display:flex;align-items:center;gap:0;padding:11px 0;cursor:pointer;

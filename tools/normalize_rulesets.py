@@ -28,7 +28,11 @@ def log(jid, path, old, new, why):
     LOG.append((jid, path, old, new, why))
 
 
-SIZE_KEYS = {"size_pt", "font_size_pt", "caption_size_pt", "value_pt"}
+# 与 tools/audit_rulesets.py 的 SIZE_KEYS 保持一致（六键并集）：改任何一边
+# 必须同步另一边，否则字符串字号会在其中一处漏检（SIZEKEYS——本文件原先
+# 只认四把核心键，references_size_pt / note_size_pt 的字符串值被静默放过）。
+SIZE_KEYS = {"size_pt", "font_size_pt", "caption_size_pt", "value_pt",
+             "references_size_pt", "note_size_pt"}
 
 
 def walk(node, path, fn):

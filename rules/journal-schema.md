@@ -268,7 +268,7 @@
 |---|---|---|
 | `scope` | `paper` / `author` | 全篇一个值，还是每个作者各一份 |
 | `required` | 布尔 | 必需项阻断交付，非必需项不阻断 |
-| `placement` | `byline` / `footnote` / `section` / `author_page` / `back_matter` / `system` | 影响稿件哪个位置，用于向用户说明改动范围。`author_page`＝作者信息页构件；`back_matter`＝文末要件；`system`＝投稿系统填写、不出现在稿件 |
+| `placement` | `byline` / `footnote` / `section` / `author_page` / `back_matter` / `system` / `title_page` / `separate_file` / `submission_system` | 影响稿件哪个位置，用于向用户说明改动范围。`author_page`＝作者信息页构件；`back_matter`＝文末要件；`system`＝投稿系统填写、不出现在稿件；`title_page`＝只出现在独立标题页、正文稿不含（库内现用于 blocks 的 corresponding_author，6 本英文刊）；`separate_file`＝单独成文件随稿提交、不进正文（库内用于 Highlights、作者简介等 personal_fields）；`submission_system`＝在投稿系统表单里逐项填写、不出现在稿件（与 `system` 同义，库内两种拼写并存：kjyj 用 `system`，jryj/ciejournal 用 `submission_system`）。代码消费方现状：`author_page`（补录表单过滤）、`back_matter`（文末简介落版）、`system`（作者行缺省判定，另认防御值 `none`）有专门分支；`title_page` / `separate_file` / `submission_system` 暂无读值分支，仅作字段元数据随补录表单与规则集展示 |
 | `prefill_from_paper` | 布尔 | 为真时先从稿件提取，已有值不询问 |
 | `hint` | 字符串 | 填写提示，用于降低返工 |
 

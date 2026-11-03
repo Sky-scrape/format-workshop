@@ -28,9 +28,12 @@ $procs = @(Get-CimInstance Win32_Process |
         $_.CommandLine.IndexOf($rootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
     })
 
-# No match: exit 1 with no output. The caller (app_ctl.stop) must report
+# No match: exit 2 with no output. The caller (app_ctl.stop) must report
 # "not found" honestly instead of treating empty output as success.
-if ($procs.Count -eq 0) { exit 1 }
+# NOT exit 1: a ps1 that dies on a terminating error under -File also exits 1
+# with empty stdout (APPCTLHON), so 1 cannot tell "no match" from "the script
+# itself failed". 2 is set only on this explicit no-match path.
+if ($procs.Count -eq 0) { exit 2 }
 
 foreach ($p in $procs) {
     if ($DryRun) { Write-Output ("match " + $p.ProcessId); continue }

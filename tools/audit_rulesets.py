@@ -26,6 +26,9 @@ JOURNAL_DIR = ROOT / "rules" / "journal"
 SOURCE_DIR = ROOT / "rules" / "sources"
 
 # 字号类字段名（值单位 pt）。不在此列的数值字段不参与刻度检查。
+# 与 tools/normalize_rulesets.py 的 SIZE_KEYS 保持一致（六键并集）：
+# 两处各留一份、互为镜像，改任何一边必须同步另一边，否则字符串字号
+# 会在其中一处漏检（SIZEKEYS）。
 SIZE_KEYS = {
     "size_pt", "font_size_pt", "caption_size_pt", "value_pt",
     "references_size_pt", "note_size_pt",

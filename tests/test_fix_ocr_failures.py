@@ -61,6 +61,22 @@ def boom_engine(monkeypatch):
     monkeypatch.setattr(ocr, "engine", lambda: Boom())
 
 
+@pytest.fixture
+def ok_engine(monkeypatch):
+    """引擎正常、空白页识别成功但没有检测框（正常路径的替身）。
+
+    不用真引擎跑本用例：真 ONNX 推理在 300dpi 整页图上吃内存，内存吃紧时
+    Conv 节点 bad allocation，会把「识别成功但无内容」变成环境相关的假失败。
+    本用例守的是「空白页只是没内容、不是失败」，替身足以表达这条语义。
+    """
+
+    class Ok:
+        def __call__(self, img):
+            return [], None
+
+    monkeypatch.setattr(ocr, "engine", lambda: Ok())
+
+
 # ---------------------------------------------------------------- meta 留痕
 
 def test_engine_missing_page_recorded(mixed_pdf, no_engine):
@@ -85,7 +101,7 @@ def test_failure_warnings_name_pages_and_package(mixed_pdf, no_engine):
     assert any("2" in m for m in msgs), "警告必须点名失败页号"
 
 
-def test_no_failure_no_warning(mixed_pdf):
+def test_no_failure_no_warning(mixed_pdf, ok_engine):
     """正常路径（空白页只是没内容、不是失败）不得产生假警告。"""
     text, meta = ocr.extract_pdf_text(str(mixed_pdf))
     assert meta["ocr_failed_pages"] == []

@@ -63,38 +63,55 @@ SECTION_NAMES = {
 
 # 字符串项查「键存在」；元组项是深一层断言（F13DEEP）——批五只查键存在性，
 # line_spacing={"mode":"multiple"} 缺 value 子键照样在渲染中途裸 KeyError，
-# note_layers 条目缺 kind 也是 reorder_notes 里的裸下标。三种断言形态：
+# note_layers 条目缺 kind 也是 reorder_notes 里的裸下标。断言形态：
+#   "路径"                             键存在即可（不限形态）
 #   (路径, "dict")                     键存在且为 dict（渲染器要下钻消费它）
+#   (路径, "num")                      键存在且为数值（渲染器要做算术与 :g 格式化）
+#   (路径, "str")                      键存在且为字符串
+#   (路径, "list")                     键存在且为 list
 #   (路径, "keys_when", 条件, *子键)    是 dict，且条件全满足时必须含这些子键
 #   (路径, "each_keys", *子键)          是 list，每项都是 dict 且含这些子键；
 #                                      键缺失或不是 list 时按路径本身报缺
+# 形态断言（F13STR）：该是 dict 的键给了字符串（typography.body.line_spacing
+# = "1.5倍"）在「只查存在」的校验下放行，渲染中途才以 AttributeError 崩——
+# 形态不符必须同样在动稿之前拦下，报「字段 X 形态不符：期望 Y」。
 REQUIRED_RULE_KEYS = [
-    "journal.name_zh",
-    "typography.body.font_cn",
-    "typography.body.size_pt",
-    "typography.body.line_spacing",
+    ("journal.name_zh", "str"),
+    ("typography.body.font_cn", "str"),
+    ("typography.body.size_pt", "num"),
+    ("typography.body.line_spacing", "dict"),
     # value 只在倍数行距声明下消费（固定值行距走 value_pt，可落到代码缺省），
     # 条件断言避免误杀 exact 模式的规则集
     ("typography.body.line_spacing", "keys_when", {"mode": "multiple"}, "value"),
-    "typography.body.first_line_indent_chars",
+    ("typography.body.first_line_indent_chars", "num"),
     ("typography.title", "dict"),
     ("headings.level1", "dict"),
-    "headings.levels",
+    ("headings.levels", "list"),
     ("blocks", "each_keys", "type"),
-    "page.size",
-    "page.size_mm.width",
-    "page.size_mm.height",
-    "page.margin_mm.top",
-    "page.margin_mm.bottom",
-    "page.margin_mm.left",
-    "page.margin_mm.right",
-    "tables.border_pt.top",
-    "tables.border_pt.header_bottom",
-    "tables.border_pt.bottom",
+    ("page.size", "str"),
+    ("page.size_mm.width", "num"),
+    ("page.size_mm.height", "num"),
+    ("page.margin_mm.top", "num"),
+    ("page.margin_mm.bottom", "num"),
+    ("page.margin_mm.left", "num"),
+    ("page.margin_mm.right", "num"),
+    ("tables.border_pt.top", "num"),
+    ("tables.border_pt.header_bottom", "num"),
+    ("tables.border_pt.bottom", "num"),
     ("tables.note_layers", "each_keys", "kind"),
     ("figures.note_layers", "each_keys", "kind"),
     ("citation", "dict"),
 ]
+
+# 形态判定与报错用名。num 排除 bool（True 是 int 的子类，但 size_pt=True
+# 只能是规则集写错了）
+_SHAPE_CHECK = {
+    "dict": lambda v: isinstance(v, dict),
+    "num": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "str": lambda v: isinstance(v, str),
+    "list": lambda v: isinstance(v, list),
+}
+_SHAPE_NAME = {"dict": "dict", "num": "数值", "str": "字符串", "list": "list"}
 
 
 def _required_walk(rules, path):
@@ -110,9 +127,10 @@ def _required_walk(rules, path):
 def missing_required_keys(rules):
     """返回规则集缺失的必填键（点路径列表），一次报全。
 
-    字符串项查「键存在」；元组项是深一层断言（形态见 REQUIRED_RULE_KEYS），
-    缺子键报成「路径.子键」，list 条目缺子键报成「路径[].子键」——与
-    存在性缺口在同一份清单里一次报全。
+    元组项是深一层断言（形态见 REQUIRED_RULE_KEYS）：缺子键报成
+    「路径.子键」，list 条目缺子键报成「路径[].子键」；形态不符（该是
+    dict/数值的键给了别的类型，F13STR）报成「路径 形态不符：期望 X」——
+    与存在性缺口在同一份清单里一次报全。
     """
     missing = []
     for item in REQUIRED_RULE_KEYS:
@@ -126,21 +144,20 @@ def missing_required_keys(rules):
             continue
         if kind == "exists":
             continue
-        if kind == "dict":
-            if not isinstance(node, dict):
-                missing.append(path)
-        elif kind == "keys_when":
+        if kind == "keys_when":
             cond, subkeys = args[0], args[1:]
             if isinstance(node, dict) and all(node.get(k) == v for k, v in cond.items()):
                 missing.extend(f"{path}.{s}" for s in subkeys if s not in node)
         elif kind == "each_keys":
             if not isinstance(node, list):
-                missing.append(path)
+                missing.append(f"{path} 形态不符：期望 {_SHAPE_NAME['list']}")
                 continue
             for e in node:
                 absent = args if not isinstance(e, dict) \
                     else tuple(s for s in args if s not in e)
                 missing.extend(f"{path}[].{s}" for s in absent)
+        elif not _SHAPE_CHECK[kind](node):
+            missing.append(f"{path} 形态不符：期望 {_SHAPE_NAME[kind]}")
     return missing
 
 
@@ -261,7 +278,11 @@ def strip_number_prefix(core, level, hd):
 NUM_PREFIX = {
     1: re.compile(r"^[一二三四五六七八九十]{1,3}、\s*"),
     2: re.compile(r"^[（(][一二三四五六七八九十]{1,3}[）)]\s*"),
-    3: re.compile(r"^\d{1,2}\s*[.．]\s*"),
+    # 三级的单段编号（「1.」）后不得再跟数字（(?!\d)）：三级标题写成「2.1.1 标题」
+    # 时，裸的「N.」只会吃掉第一段编号、把「1.1 」残留在正文里，重编号后
+    # 变成「2.1.1 1.1 标题」越跑越长（IDMPOT 双渲染实测）。链式形态由
+    # NUM_PREFIX_NUM[3] 整段剥掉
+    3: re.compile(r"^\d{1,2}\s*[.．]\s*(?!\d)"),
     4: re.compile(r"^[（(]\d{1,2}[）)]\s*"),
 }
 # 数字编号体系（1 / 1.1 / 1.1.1）的前缀，用于剥掉稿件原有的编号。
@@ -1102,8 +1123,17 @@ def table_snapshot(table):
     return {"borders": borders, "cells": tuple(cells)}
 
 
-def _sdt_blocks(content):
+# sdt 嵌套下钻的深度上限（SDTCAP）：与 parse_docx.SDT_MAX_DEPTH 同一口径，
+# 两边必须一致——解析端到顶不下钻的部分计进 unsupported_content_blocks，
+# 渲染端若继续下钻，sdt_pos 就会与 IR 错位、套版错段
+SDT_MAX_DEPTH = 8
+
+
+def _sdt_blocks(content, depth=1):
     """sdtContent 递归下钻：返回（可处理块元素列表, 未识别叶节点数）。
+
+    depth 是当前内容控件的嵌套层数（顶层 sdt 为 1，SDTCAP）：超过
+    SDT_MAX_DEPTH 的更深 w:sdt 不再下钻，整体计 1 个未识别结构。
 
     w:p / w:tbl 直接收进块列表；内嵌 w:sdt 继续下钻，其块按文档序并入同一
     列表（SDTNEST：批五只下钻一层，外层有直接段落时内嵌 sdt 的段落既不进
@@ -1111,15 +1141,19 @@ def _sdt_blocks(content):
     都没取到、也没有未识别节点（空内容控件）时计 1——整块没有可处理段落/
     表格的对象要报出来（F24 口径，内容原样保留）。
 
-    渲染端必须与 parse_docx._sdt_blocks 保持同一展开顺序：IR 的 sdt_pos 是
-    槽位内序，两边顺序不一致就套错段。
+    渲染端必须与 parse_docx._sdt_blocks 保持同一展开顺序与同一深度上限：
+    IR 的 sdt_pos 是槽位内序，两边顺序不一致就套错段。
     """
     blocks, unknown = [], 0
     for e in (list(content) if content is not None else []):
         if e.tag in (qn("w:p"), qn("w:tbl")):
             blocks.append(e)
         elif e.tag == qn("w:sdt"):
-            sub_blocks, sub_unknown = _sdt_blocks(e.find(qn("w:sdtContent")))
+            if depth >= SDT_MAX_DEPTH:
+                unknown += 1
+                continue
+            sub_blocks, sub_unknown = _sdt_blocks(e.find(qn("w:sdtContent")),
+                                                  depth + 1)
             blocks.extend(sub_blocks)
             unknown += sub_unknown
         else:
@@ -1527,9 +1561,16 @@ def main():
     if missing:
         rid = (rules.get("journal") or {}).get("id") or Path(a.ruleset).stem
         for ref in missing:
-            sec = SECTION_NAMES.get(ref.split(".")[0], ref.split(".")[0])
-            print(f"{RULESET_ERR_PREFIX} 规则集 {rid} 缺少字段 {ref}（章节 {sec}）",
-                  file=sys.stderr)
+            # 形态不符的条目自带「路径 形态不符：期望 X」（F13STR），与
+            # 「缺少字段」分开措辞——键在但类型错了，不是键不在
+            path, sep, expect = ref.partition(" 形态不符：期望 ")
+            sec = SECTION_NAMES.get(path.split(".")[0], path.split(".")[0])
+            if sep:
+                print(f"{RULESET_ERR_PREFIX} 规则集 {rid} 字段 {path} "
+                      f"形态不符：期望 {expect}（章节 {sec}）", file=sys.stderr)
+            else:
+                print(f"{RULESET_ERR_PREFIX} 规则集 {rid} 缺少字段 {ref}"
+                      f"（章节 {sec}）", file=sys.stderr)
         raise SystemExit(1)
 
     src = Path(a.ir).with_suffix("")
@@ -2209,6 +2250,15 @@ def main():
         audit.add(-2, "footnote", "脚注正文套版",
                   note=f"{fn_count} 条脚注改为 {fn_desc}",
                   rule="typography.footnote")
+    if fn_external:
+        # 外部脚注关系没有可解析部件，套版与体检都够不着（EXTFOOT）：
+        # 跳过了多少条必须进审计文件——下游只读 *.audit.json，看不到 stdout
+        # 汇总（EXTFOOTAUD），不能让「这里没处理」只留在屏幕上
+        audit.add(-2, "footnote", "外部脚注关系未处理",
+                  note=f"{fn_external} 条外部脚注关系未处理（TargetMode=External"
+                       f" 的外部超链接式脚注没有可解析部件，套版与体检都够不着，"
+                       f"已原样保留）",
+                  changed=False)
 
     doc.save(str(out))
     # 正文里的作者信息归 anonymize.py 管；这里清掉 Word 看不见的文档属性：
@@ -2254,7 +2304,8 @@ def main():
         # 解析时记数进 IR 的仍未处理的内容控件结构（F24/SDTNEST）：渲染汇总
         # 必须报出来，不能让「这里没处理」变成静默的
         print(f"未处理内容块: {ir['unsupported_content_blocks']} 个"
-              f"（内容控件里未识别的块级节点或取空的内容控件，已原样保留）")
+              f"（内容控件里未识别的块级节点、取空或嵌套超过 "
+              f"{SDT_MAX_DEPTH} 层的内容控件，已原样保留）")
     if fn_external:
         # 外部脚注关系没有可解析部件，套版与体检都够不着（EXTFOOT）：
         # 跳过了多少条必须说明，不能静默

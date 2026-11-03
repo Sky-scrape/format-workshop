@@ -134,7 +134,9 @@ def measure(text, metric):
 
 
 def detect_citation_style(ir):
-    refs = [b.get("text", "") for b in ir["blocks"] if b.get("type", "") == "reference_item"]
+    # 块可能整条不是对象（COMPNOND）：跳过，判定基于其余块照常给出
+    refs = [b.get("text", "") for b in ir["blocks"]
+            if isinstance(b, dict) and b.get("type", "") == "reference_item"]
     if not refs:
         return None, 0
     numbered = sum(1 for r in refs if re.match(r"^\[\d+\]", r))
@@ -160,7 +162,14 @@ def check(ir, rules):
     def _typed(blocks, what):
         out = []
         for i, b in enumerate(blocks):
-            if isinstance(b, dict) and not b.get("type"):
+            if not isinstance(b, dict):
+                # 非 dict 元素（坏文件里出过字符串）同样不能崩：取值处的
+                # b.get/b["type"] 会冒 AttributeError/TypeError——跳过并
+                # 点名，判定基于打了折扣的输入照常给出（COMPNOND）。
+                warnings.append(f"{what}第 {i + 1} 块不是对象"
+                                f"（{type(b).__name__}），已跳过")
+                continue
+            if not b.get("type"):
                 warnings.append(f"{what}第 {i + 1} 块缺 type 键，按未知类型处理")
                 b = {**b, "type": ""}
             out.append(b)

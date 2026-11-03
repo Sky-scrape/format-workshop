@@ -75,7 +75,10 @@ def test_sanitize_survives_transient_replace_denial(tmp_path, monkeypatch):
     monkeypatch.setattr(docx_meta.os, "replace", flaky_replace)
     removed = docx_meta.sanitize_docx(path)
 
-    assert calls["n"] == 2, "首次 PermissionError 后必须重试，而不是放弃落位"
+    # ≥2 而不是 ==2：桩只挡第 1 次，但真 os.replace 在满负荷机器上仍可能
+    # 撞上真实的瞬时占用（杀毒/索引句柄），多退避一轮再落位——FX1 守的是
+    # 「拒绝后必须重试、最终落位」，不是「恰好只拒绝一次」。
+    assert calls["n"] >= 2, "首次 PermissionError 后必须重试，而不是放弃落位"
     assert "core:creator" in removed, "重试成功后清理项必须如实报告"
     assert docx_meta.scan_docx(path) == [], "重试后成品属性必须干净"
     assert Document(str(path)).paragraphs[0].text.startswith("正文段落"), \
