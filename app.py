@@ -9,11 +9,13 @@
 
 其余路由：
     GET  /journals                      期刊规则库
+    GET  /query                         论文格式查询（单刊深查 / 多刊对比）
     GET  /history                       本机最近的转换记录
     GET  /job/<id>/diff?to=<jid>        两本刊的规则差异
     POST /job/<id>/retry                同一稿件换刊重排
     GET  /job/<id>/download/<kind>      带可读文件名的下载
     GET  /journal/<jid>/spec            期刊格式规格页
+    GET  /journal/<jid>/sample(.pdf)    期刊版式样板（docx 下载 / PDF 内联预览）
 """
 
 import argparse
@@ -69,6 +71,7 @@ import ai_assist        # noqa: E402  AI 配置与调用
 import docx_meta        # noqa: E402  DOCX 元数据隐私闸门
 import extract_journal  # noqa: E402  稿约 PDF → 规则集草稿
 import ocr              # noqa: E402  PDF 取文（文字层优先，缺则 OCR）
+import rules_ref        # noqa: E402  审计引用 → 规则集字段解析
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
@@ -1821,6 +1824,541 @@ def journal_spec(jid):
     if not p.exists():
         abort(404)
     return send_from_directory(RULES_DIR, p.name)
+
+
+@app.route("/journal/<jid>/sample.pdf")
+def journal_sample_pdf(jid):
+    """样张 PDF 内联预览：查询页 iframe 直出，浏览器原生缩放翻页。
+
+    只服务 build_journal.py 渲染出的既有产物，不做任何转换——预览即交付物。
+    """
+    if not JID_RE.match(jid or ""):      # 同 spec：..\ 穿透先拦下（F47）
+        abort(404)
+    p = RULES_DIR / f"{jid}.sample.pdf"
+    if not p.exists():
+        abort(404)
+    return send_from_directory(RULES_DIR, p.name)
+
+
+@app.route("/journal/<jid>/sample")
+def journal_sample_docx(jid):
+    """样板 docx 下载：在 Word/WPS 里亲手核对版式（DESIGN §11.2 用途一）。"""
+    if not JID_RE.match(jid or ""):
+        abort(404)
+    p = RULES_DIR / f"{jid}.sample.docx"
+    if not p.exists():
+        abort(404)
+    name = ((rules_of(jid) or {}).get("journal") or {}).get("name_zh") or jid
+    return attachment(p, f"{name}-版式样板.docx", f"{jid}-sample.docx",
+                      "application/vnd.openxmlformats-officedocument"
+                      ".wordprocessingml.document")
+
+
+# ---------------------------------------------------------------- 论文格式查询
+
+# 一次最多并排对比的期刊数。三本并排每列还有 ~200px，再宽就要横向滚了。
+QUERY_MAX = 3
+
+_ALIGN_LABEL = {"both": "两端对齐", "center": "居中", "left": "左对齐", "right": "右对齐"}
+_METRIC_UNIT = {"chars_cn": "字", "words_en": "词", "A": "字符", "B": "字", "C": "字符"}
+_POS_LABEL = {"before_body": "正文之前", "after_body": "正文之后"}
+_ANON_LABEL = {"authors": "作者署名", "affiliations": "作者单位", "acknowledgement": "致谢",
+               "funding_statement": "基金声明", "corresponding_author": "通讯作者"}
+_STATEMENT_LABEL = {"conflict_of_interest": "利益冲突声明", "data_availability": "数据可用性声明",
+                    "ai_declaration": "AI 使用声明", "copyright_transfer": "版权转让协议"}
+
+
+def _style_txt(d):
+    """把 typography 子字典转成「宋体 10pt · 居中」式的短文案；没有可展示项返回 None。"""
+    if not isinstance(d, dict):
+        return None
+    cn, latin = d.get("font_cn"), d.get("font_latin")
+    fonts = [f for f in (cn, latin if latin and latin != cn else None) if f]
+    parts = ([" / ".join(fonts)] if fonts else []) \
+        + ([f'{d["size_pt"]:g}pt'] if d.get("size_pt") else []) \
+        + (["加粗"] if d.get("bold") else []) \
+        + ([_ALIGN_LABEL[d["align"]]] if d.get("align") in _ALIGN_LABEL else
+           ([str(d["align"])] if d.get("align") else [])) \
+        + ([f'标签「{d["label"]}」'] if d.get("label") else []) \
+        + ([f'悬挂缩进 {d["hanging_indent_chars"]:g} 字符'] if d.get("hanging_indent_chars") else []) \
+        + ([f'首行缩进 {d["first_line_indent_chars"]:g} 字符'] if d.get("first_line_indent_chars") else [])
+    return " · ".join(parts) or None
+
+
+def _fmt_line(ls):
+    """行距：与换刊差异页同一口径——倍数行距如实展示倍数并折算磅值。"""
+    if not isinstance(ls, dict):
+        return None
+    if ls.get("mode") == "multiple" and ls.get("value"):
+        eq = ls.get("equivalent_exact_pt")
+        return f'{ls["value"]:g} 倍行距' + (f'（≈{eq:g}pt）' if eq else "")
+    v = ls.get("value_pt")
+    return f"{v:g}pt 行距" if isinstance(v, (int, float)) else None
+
+
+def _fmt_heading_level(d):
+    if not isinstance(d, dict) or d.get("inherit"):
+        base = "同正文" if isinstance(d, dict) and d.get("inherit") else None
+    else:
+        base = _style_txt(d)
+    if not base:
+        return None
+    return base + (" · 随正文接排" if d.get("inline_with_body") else "")
+
+
+def _fmt_limit(lim):
+    """单值上限（摘要等）：单位跟口径走，口径认不出就按「字」，不编。"""
+    v = lim.get("value") if isinstance(lim, dict) else None
+    if v is None:
+        return None
+    unit = _METRIC_UNIT.get(lim.get("metric"), "字")
+    return f"≤ {v:,} {unit}"
+
+
+def _fmt_total(lim):
+    if not isinstance(lim, dict) or lim.get("value") is None:
+        return None
+    v = lim["value"]
+    unit = _METRIC_UNIT.get(lim.get("metric"), "字")
+    lo = lim.get("min")
+    bits = [f"{lo:,}–{v:,} {unit}" if lo else f"≤ {v:,} {unit}"]
+    if lim.get("metric"):
+        bits.append(f"口径 {lim['metric']}")
+    if lim.get("scope"):
+        bits.append(str(lim["scope"]))
+    return " · ".join(bits)
+
+
+def _fmt_count(lim):
+    lo, hi = lim.get("min"), lim.get("max")
+    if lo and hi:
+        return f"{lo}–{hi} 个"
+    if hi:
+        return f"≤ {hi} 个"
+    if lo:
+        return f"≥ {lo} 个"
+    return None
+
+
+def _fmt_highlights(lim):
+    if not isinstance(lim, dict):
+        return None
+    lo, hi = lim.get("min"), lim.get("max")
+    n = f"{lo}–{hi}" if lo and hi else (f"≤ {hi}" if hi else (f"≥ {lo}" if lo else None))
+    parts = [f"{n} 条"] if n else []
+    if lim.get("chars_max"):
+        parts.append(f"每条 ≤ {lim['chars_max']:,} 字符")
+    return " · ".join(parts) or None
+
+
+def _fmt_paper(p):
+    size = p.get("size")
+    mm = p.get("size_mm") or {}
+    if isinstance(mm, dict) and mm.get("width") and mm.get("height"):
+        return f"{size}（{mm['width']:g}×{mm['height']:g} mm）"
+    return size
+
+
+def _fmt_margin(m):
+    return "/".join(f"{m[k]:g}" for k in ("top", "bottom", "left", "right")) + " mm"
+
+
+def _fmt_columns(v):
+    return "单栏" if v == 1 else f"{v:g} 栏"
+
+
+def _fmt_levels(levels):
+    return " / ".join(levels) + f"（{len(levels)} 级）" if levels else None
+
+
+def _fmt_note_layers(layers):
+    kind = {"general": "注", "source": "来源", "data_source": "数据", "cell": "①②"}
+    return "→".join(kind.get(x.get("kind"), x.get("kind")) for x in layers) or None
+
+
+def _fmt_border(b):
+    """ref 直接指向 tables.border_pt 字典本身。"""
+    if not isinstance(b, dict) or not b:
+        return None
+    lab = {"top": "顶", "header_bottom": "表头下", "bottom": "底"}
+    return " / ".join(f"{lab.get(k, k)} {v:g}" for k, v in b.items()) + "pt"
+
+
+def _fmt_table_style(t):
+    if not isinstance(t, dict):
+        return None
+    style = {"three-line": "三线表"}.get(t.get("style"), t.get("style"))
+    if not style:
+        return None
+    if t.get("side_walls"):
+        style += "（带墙线）"
+    return style
+
+
+def _fmt_caption(t):
+    """表/图题：位置 · 对齐 · 字体字号 · 编号样式，有一说一。"""
+    if not isinstance(t, dict):
+        return None
+    pos = {"above": "上方", "below": "下方"}.get(t.get("caption_position"))
+    parts = ([f"题在{pos}"] if pos else [])
+    style = _style_txt({"font_cn": t.get("caption_font_cn") or t.get("font_cn"),
+                        "size_pt": t.get("caption_size_pt"),
+                        "align": t.get("caption_align")})
+    if style:
+        parts.append(style)
+    if t.get("caption_numbering"):
+        parts.append(f'编号「{t["caption_numbering"]}」')
+    return " · ".join(parts) or None
+
+
+def _fmt_equations(eq):
+    if not isinstance(eq, dict):
+        return None
+    parts = (["居中" if eq.get("align") == "center" else _ALIGN_LABEL.get(eq.get("align"))] if eq.get("align") else []) \
+        + ([str(eq["numbering"])] if eq.get("numbering") else []) \
+        + (["字母斜体"] if eq.get("letter_italic") else []) \
+        + (["简单式可行内"] if eq.get("inline_simple") else [])
+    return " · ".join(p for p in parts if p) or None
+
+
+def _fmt_footnote_numbering(n):
+    if not isinstance(n, dict) or not (n.get("footnotes") or n.get("footnotes_scope")):
+        return None
+    scope = {"per_page": "每页重新编号", "continuous": "全文连续编号"}.get(n.get("footnotes_scope"))
+    parts = ([f"脚注标「{n['footnotes']}」"] if n.get("footnotes") else []) \
+        + ([scope] if scope else [])
+    return " · ".join(p for p in parts if p) or None
+
+
+def _fmt_in_text(it):
+    if not isinstance(it, dict):
+        return None
+    pos = {"inline": "行内", "superscript": "上标"}.get(it.get("position"), it.get("position"))
+    parts = ([f"标注位置：{pos}"] if pos else []) \
+        + ([f'括号「{it["bracket"]}」'] if it.get("bracket") else [])
+    return " · ".join(parts) or None
+
+
+def _fmt_cite_system(v):
+    return "编号制" if v == "numbered" else ("作者年制" if v == "author-year" else v)
+
+
+def _fmt_sort(v):
+    return {"by_appearance_order": "按正文引用顺序", "alphabetical": "按作者字母序",
+            "cn-first-by-pinyin-then-en-by-alphabet": "中文按拼音、英文按字母序"}.get(v, v)
+
+
+def _fmt_lang(v):
+    return {"zh": "中文", "en": "英文"}.get(v, v)
+
+
+def _fmt_examples(v):
+    return v[0] if isinstance(v, list) and v and isinstance(v[0], str) else None
+
+
+def _fmt_author_page(ap):
+    if not isinstance(ap, dict):
+        return None
+    parts = (["独立成页"] if ap.get("separate_page") else []) \
+        + (["置于" + _POS_LABEL.get(ap["position"], ap["position"])] if ap.get("position") else []) \
+        + ([f'{len(ap["fields"])} 个字段'] if ap.get("fields") else [])
+    return " · ".join(parts) or None
+
+
+def _fmt_anon_blocks(items):
+    labs = [_ANON_LABEL.get(x, x) for x in items]
+    return f"{len(labs)} 类（{'、'.join(labs)}）" if labs else None
+
+
+def _fmt_statements(sts):
+    if not isinstance(sts, dict) or not sts:
+        return None
+    bits = []
+    for k, v in sts.items():
+        req = v.get("required") if isinstance(v, dict) else None
+        bits.append(f"{_STATEMENT_LABEL.get(k, k)} · " + ("必备" if req else "未要求"))
+    return "；".join(bits)
+
+
+def _fmt_subtitle(blocks):
+    """副标题：独立副标题块优先，其次题名块的 allow_subtitle；两者都没有才算未规定。"""
+    hits = [b for b in blocks if isinstance(b, dict) and b.get("type") == "subtitle"]
+    if hits:
+        req = next((b.get("required") for b in hits if b.get("required") is not None), None)
+        return {True: "必备", False: "可选"}.get(req, "未声明")
+    if any(isinstance(b, dict) and b.get("type") == "title" and b.get("allow_subtitle")
+           for b in blocks):
+        return "允许（随题名）"
+    return None
+
+
+def _block_req(btype):
+    def fmt(blocks):
+        hits = [b for b in blocks if isinstance(b, dict) and b.get("type") == btype]
+        if not hits:
+            return None
+        req = next((b.get("required") for b in hits if b.get("required") is not None), None)
+        base = {True: "必备", False: "可选"}.get(req, "未声明")
+        langs = sorted({b.get("lang") for b in hits if b.get("lang")})
+        return base + ("（中英）" if len(langs) > 1 else "")
+    return fmt
+
+
+def _block_rows(types):
+    return [{"key": t, "label": lab, "ref": "blocks", "fmt": _block_req(t),
+             "missing": "未设"} for t, lab in types]
+
+
+# 每一行 = 一个格式项。ref 用 rules_ref 的引用语法（含 `~` 可缺省后缀），
+# 页面上每个非空取值都必须能解析回规则集——查询页不许出现指不到出处的「规定」。
+QUERY_SECTIONS = [
+    {"key": "identity", "title": "刊物信息", "rows": [
+        {"key": "language", "label": "刊物语言", "ref": "journal.language", "fmt": _fmt_lang},
+        {"key": "sponsor", "label": "主管 · 主办", "ref": "journal.sponsor~"},
+        {"key": "cn", "label": "刊号", "ref": "journal.cn_number~"},
+        {"key": "issn", "label": "ISSN", "ref": "journal.issn~"},
+    ]},
+    {"key": "page", "title": "页面设置", "rows": [
+        {"key": "paper", "label": "纸张", "ref": "page", "fmt": _fmt_paper},
+        {"key": "margin", "label": "页边距（上/下/左/右）", "ref": "page.margin_mm", "fmt": _fmt_margin},
+        {"key": "columns", "label": "分栏", "ref": "page.columns", "fmt": _fmt_columns},
+        {"key": "binding", "label": "订边", "ref": "page.binding_side~",
+         "fmt": lambda v: {"left": "左侧", "right": "右侧"}.get(v, v)},
+    ]},
+    {"key": "body", "title": "正文排版", "rows": [
+        {"key": "font", "label": "字体（中文 / 西文）", "ref": "typography.body", "fmt": _style_txt},
+        {"key": "size", "label": "字号", "ref": "typography.body.size_pt", "fmt": lambda v: f"{v:g}pt"},
+        {"key": "line", "label": "行距", "ref": "typography.body.line_spacing", "fmt": _fmt_line,
+         "note_refs": ["typography.body.measured.note~"]},
+        {"key": "indent", "label": "首行缩进", "ref": "typography.body.first_line_indent_chars~",
+         "fmt": lambda v: f"{v:g} 字符"},
+        {"key": "align", "label": "对齐", "ref": "typography.body.align~",
+         "fmt": lambda v: _ALIGN_LABEL.get(v, v)},
+    ]},
+    {"key": "headings", "title": "标题体系", "rows": [
+        {"key": "numbering", "label": "编号样式", "ref": "headings.levels", "fmt": _fmt_levels,
+         "note_refs": ["headings.numbering_source~"]},
+        {"key": "level1", "label": "一级标题", "ref": "headings.level1~", "fmt": _fmt_heading_level},
+        {"key": "level2", "label": "二级标题", "ref": "headings.level2~", "fmt": _fmt_heading_level},
+        {"key": "level3", "label": "三级标题", "ref": "headings.level3~", "fmt": _fmt_heading_level},
+        {"key": "level4", "label": "四级标题", "ref": "headings.level4~", "fmt": _fmt_heading_level},
+    ]},
+    {"key": "titlepage", "title": "题名与作者区", "rows": [
+        {"key": "doc_title", "label": "文题", "ref": "typography.title~", "fmt": _style_txt},
+        {"key": "subtitle", "label": "副标题", "ref": "blocks", "fmt": _fmt_subtitle, "missing": "未设"},
+        {"key": "authors", "label": "作者署名", "ref": "typography.authors~", "fmt": _style_txt},
+        {"key": "affil", "label": "作者单位", "ref": "typography.affiliations~", "fmt": _style_txt},
+        {"key": "title_en", "label": "英文题名", "ref": "typography.title_en~", "fmt": _style_txt},
+    ]},
+    {"key": "abstract", "title": "摘要与关键词", "rows": [
+        {"key": "abs_style", "label": "摘要版式", "ref": "typography.abstract~", "fmt": _style_txt},
+        {"key": "kw_style", "label": "关键词版式", "ref": "typography.keywords~", "fmt": _style_txt},
+        {"key": "kw_sep", "label": "关键词分隔符", "ref": "blocks:keywords/separator~",
+         "fmt": lambda v: f"「{v}」"},
+        {"key": "en_abs", "label": "英文摘要标签", "ref": "blocks:abstract/en/label~",
+         "fmt": lambda v: f"「{v}」"},
+    ]},
+    {"key": "citation", "title": "引用与参考文献", "rows": [
+        {"key": "system", "label": "引用体系", "ref": "citation.system", "fmt": _fmt_cite_system},
+        {"key": "in_text", "label": "正文标注", "ref": "citation.in_text~", "fmt": _fmt_in_text,
+         "note_refs": ["citation.in_text.note~"]},
+        {"key": "sort", "label": "文献排序", "ref": "citation.reference_list.sort~", "fmt": _fmt_sort},
+        {"key": "style_id", "label": "体例代码", "ref": "citation.style_id~"},
+        {"key": "ref_style", "label": "文献表版式", "ref": "typography.references~", "fmt": _style_txt},
+        {"key": "example", "label": "条目体例示例", "ref": "citation.reference_list.examples~",
+         "fmt": _fmt_examples},
+    ]},
+    {"key": "figure", "title": "图", "rows": [
+        {"key": "caption", "label": "图题", "ref": "figures", "fmt": _fmt_caption},
+        {"key": "notes", "label": "图注层次", "ref": "figures.note_layers", "fmt": _fmt_note_layers},
+        {"key": "border", "label": "图加边框", "ref": "figures.border~",
+         "fmt": lambda v: "不加边框" if v is False else ("加边框" if v else None)},
+        {"key": "resolution", "label": "分辨率下限", "ref": "figures.resolution_dpi_min~",
+         "fmt": lambda v: f"≥ {v:g} dpi"},
+    ]},
+    {"key": "table", "title": "表", "rows": [
+        {"key": "style", "label": "表线", "ref": "tables", "fmt": _fmt_table_style,
+         "note_refs": ["tables.border_pt_source~"]},
+        {"key": "border", "label": "线宽（顶/表头下/底）", "ref": "tables.border_pt", "fmt": _fmt_border},
+        {"key": "cell_size", "label": "表内字号", "ref": "tables.font_size_pt",
+         "fmt": lambda v: f"{v:g}pt"},
+        {"key": "caption", "label": "表题", "ref": "tables", "fmt": _fmt_caption},
+        {"key": "notes", "label": "表注层次", "ref": "tables.note_layers", "fmt": _fmt_note_layers,
+         "note_refs": ["tables.note_order_note~"]},
+        {"key": "repeat", "label": "跨页续表头", "ref": "tables.repeat_header_on_break~",
+         "fmt": lambda v: "续页重复表头" if v else "续页不重复表头"},
+    ]},
+    {"key": "equation", "title": "公式", "rows": [
+        {"key": "eq", "label": "公式体例", "ref": "equations~", "fmt": _fmt_equations,
+         "note_refs": ["equations.note~"]},
+    ]},
+    {"key": "footnote", "title": "脚注", "rows": [
+        {"key": "style", "label": "脚注版式", "ref": "typography.footnote~", "fmt": _style_txt},
+        {"key": "numbering", "label": "脚注编号", "ref": "numbering", "fmt": _fmt_footnote_numbering,
+         "note_refs": ["numbering.rule~"]},
+    ]},
+    {"key": "limits", "title": "字数与数量", "rows": [
+        {"key": "total", "label": "全文篇幅", "ref": "limits.total~", "fmt": _fmt_total,
+         "missing": "不设上限", "note_refs": ["limits.total.note~"]},
+        {"key": "abstract", "label": "摘要上限", "ref": "limits.abstract~", "fmt": _fmt_limit},
+        {"key": "abstract_en", "label": "英文摘要上限", "ref": "limits.abstract_en~", "fmt": _fmt_limit},
+        {"key": "keywords", "label": "关键词个数", "ref": "limits.keywords~", "fmt": _fmt_count},
+        {"key": "title", "label": "题名字数", "ref": "limits.title_chars_max~",
+         "fmt": lambda v: f"≤ {v} 字"},
+        {"key": "highlights", "label": "亮点条目", "ref": "limits.highlights~", "fmt": _fmt_highlights},
+        {"key": "jel", "label": "JEL 分类号", "ref": "limits.jel~", "fmt": _fmt_count},
+        {"key": "vitae", "label": "作者简介", "ref": "limits.author_vitae_words_max~",
+         "fmt": lambda v: f"≤ {v:,} 词"},
+    ]},
+    {"key": "submission", "title": "投稿要求", "rows": [
+        {"key": "anon", "label": "匿名要求", "ref": "submission.anonymous~",
+         "fmt": lambda v: "需要匿名稿" if v else "不要求匿名"},
+        {"key": "anon_scope", "label": "匿名删除范围", "ref": "submission.anonymize_blocks~",
+         "fmt": _fmt_anon_blocks},
+        {"key": "author_page", "label": "作者信息页", "ref": "submission.author_page~",
+         "fmt": _fmt_author_page, "note_refs": ["submission.author_page.note~"]},
+        {"key": "file_format", "label": "提交文件格式", "ref": "submission.file_format~"},
+        {"key": "statements", "label": "声明要件", "ref": "statements", "fmt": _fmt_statements},
+    ]},
+    {"key": "blocks", "title": "篇章结构要件", "rows": _block_rows([
+        ("title", "题名"), ("subtitle", "副标题"), ("highlights", "亮点条目"),
+        ("authors", "作者署名"), ("affiliations", "作者单位"),
+        ("corresponding_author", "通讯作者"), ("abstract", "摘要"), ("keywords", "关键词"),
+        ("classification_code", "分类号"), ("document_code", "文献标识码"),
+        ("article_number", "文章编号"), ("doi", "DOI"),
+        ("body", "正文"), ("references", "参考文献"),
+        ("appendix", "附录"), ("acknowledgement", "致谢"), ("funding_statement", "基金声明"),
+    ])},
+    {"key": "source", "title": "规则来源与核验", "rows": [
+        {"key": "status", "label": "核验状态", "ref": "verification.status",
+         "fmt": lambda v: STATUS_LABEL.get(v, v)},
+        {"key": "authority", "label": "版式依据", "ref": "verification.typography_authority~",
+         "fmt": lambda v: AUTH_LABEL.get(v, v)},
+        {"key": "source", "label": "规则依据", "ref": "verification.source_title~"},
+        {"key": "source_url", "label": "官方来源", "ref": "verification.source_url~", "url": True},
+        {"key": "verified_at", "label": "核验时间", "ref": "verification.verified_at~"},
+        {"key": "verified_by", "label": "核验方式", "ref": "verification.verified_by~"},
+        {"key": "samples", "label": "样张交叉核对", "ref": "verification.cross_check.samples~",
+         "fmt": lambda v: f"{v} 篇已发表论文"},
+    ]},
+]
+
+
+def _qcell(rules, ref, fmt=None):
+    """按 rules_ref 引用取一个展示值；查不到返回 None，页面如实写「未规定」。
+
+    格式化函数抛错同样按查不到处理：查询是只读页面，任何一个值的展示问题
+    都不该把整页拖成 500——但引用本身仍然指回规则集，错了在测试里现形。
+    """
+    try:
+        v = rules_ref.resolve(rules, ref)
+    except KeyError:
+        return None
+    if v is None:
+        return None
+    if fmt is None:
+        return v if isinstance(v, str) else None
+    try:
+        return fmt(v)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _qnotes(rules, refs):
+    """行注：把 *_source / 推定说明 这类伴生键拼成小字，取不到就留空。"""
+    if not refs:
+        return ""
+    bits = []
+    for ref in refs:
+        try:
+            v = rules_ref.resolve(rules, ref)
+        except KeyError:
+            continue
+        if isinstance(v, str) and v.strip():
+            bits.append(v.strip())
+    return "；".join(bits)
+
+
+def journal_query_view(jid):
+    """把一本刊的规则集摊平成查询页的分区视图。
+
+    行的集合是全刊统一的（QUERY_SECTIONS），单本刊缺哪个字段哪格就空——
+    缺席如实写「未规定」，不从同类刊猜、也不替期刊补。
+    """
+    rules = rules_of(jid) or {}
+    j = journal_by_id(jid) or {}
+    sections = []
+    for sec in QUERY_SECTIONS:
+        rows = []
+        for row in sec["rows"]:
+            fmt = row.get("fmt")
+            rows.append({
+                "key": row["key"],
+                "label": row["label"],
+                "cells": [_qcell(rules, row["ref"], fmt)],
+                "notes": _qnotes(rules, row.get("note_refs")),
+                "url": row.get("url", False),
+                "missing": row.get("missing", "未规定"),
+            })
+        sections.append({"key": sec["key"], "title": sec["title"], "rows": rows})
+    ver = rules.get("verification") or {}
+    cc = ver.get("cross_check") or {}
+    return {
+        "id": jid,
+        "name": j.get("name", jid),
+        "en": j.get("en", ""),
+        "status": ver.get("status", "unverified"),
+        "status_label": STATUS_LABEL.get(ver.get("status"), "未知"),
+        "auth_label": j.get("auth_label", "未声明"),
+        "auth_class": j.get("auth_class", "a-pub"),
+        "spec": (RULES_DIR / f"{jid}.spec.html").exists(),
+        "sample": (RULES_DIR / f"{jid}.sample.pdf").exists(),
+        "sections": sections,
+        "assumptions": [a for a in (rules.get("assumptions") or []) if isinstance(a, str)],
+    }
+
+
+def _mark_diffs(views):
+    """对比模式给每行打 same 标记，返回「规定不同」的行数。
+
+    各刊行集合同构（同一份 QUERY_SECTIONS），按位 zip 即可。全空行
+    （各刊都未规定）不算「不同」——没规定的东西不构成差异。
+    """
+    n_diff = 0
+    if len(views) > 1:
+        for cols in zip(*[v["sections"] for v in views]):
+            for rows in zip(*[c["rows"] for c in cols]):
+                cells = [tuple(r["cells"]) for r in rows]
+                same = len(set(cells)) == 1
+                for r in rows:
+                    r["same"] = same
+                if not same and any(any(c is not None for c in t) for t in cells):
+                    n_diff += 1
+    return n_diff
+
+
+@app.route("/query")
+def query():
+    """论文格式查询：选一本深查，勾到两三本自动进入逐项对比。
+
+    选择状态放在 URL（?journals=a,b,c）：查到的结果可以收藏、发给自己，
+    后退键符合直觉。id 先过 JID_RE 再过 rules_of，不合法或不存在的直接忽略。
+    """
+    sel = []
+    for tok in (request.args.get("journals") or "").split(","):
+        if len(sel) >= QUERY_MAX:
+            break
+        tok = tok.strip()
+        if tok and tok not in sel and JID_RE.match(tok) and rules_of(tok):
+            sel.append(tok)
+    views = [journal_query_view(jid) for jid in sel]
+    n_diff = _mark_diffs(views)
+    for v in views:
+        others = [x for x in sel if x != v["id"]]
+        v["remove_url"] = "/query?journals=" + ",".join(others) if others else "/query"
+    return render_template("query.html", views=views, ids=sel,
+                           groups=journal_groups(), journals=load_journals(),
+                           n_diff=n_diff, query_max=QUERY_MAX)
 
 
 # ---------------------------------------------------------------- 错误页

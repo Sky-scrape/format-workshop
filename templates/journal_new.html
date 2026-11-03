@@ -4,28 +4,28 @@
 <style>
 .nj-shell{padding:34px 34px 70px;max-width:860px;margin:auto}
 .nj-head{margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--line)}
-.nj-head h1{font-family:"Songti SC",SimSun,serif;font-size:26px;font-weight:600;margin:0 0 6px;letter-spacing:.8px}
-.nj-head p{font-size:12px;color:var(--ink3);margin:0;line-height:1.9;max-width:620px}
+.nj-head h1{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-page);font-weight:600;margin:0 0 6px;letter-spacing:.8px}
+.nj-head p{font-size:var(--fs-body);color:var(--ink3);margin:0;line-height:1.9;max-width:620px}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:16px}
 .field{margin-bottom:16px}
-.field label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px}
-.field input{width:100%;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;background:#fbfcfb;outline:0}
+.field label{display:block;font-size:var(--fs-body);color:var(--ink2);margin-bottom:6px}
+.field input{width:100%;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:var(--fs-body);background:#fbfcfb;outline:0}
 .field input:focus{border-color:#a9c3b7;background:#fff}
-.field .note{font-size:10.5px;color:var(--ink3);margin-top:6px;line-height:1.7}
+.field .note{font-size:var(--fs-aux);color:var(--ink3);margin-top:6px;line-height:1.7}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .drop{border:1.5px dashed #bdcec5;border-radius:11px;background:var(--soft);padding:26px 20px;text-align:center;cursor:pointer;display:block;transition:.2s}
 .drop:hover,.drop.on{border-color:var(--accent);background:#eff7f2}
 .drop input{display:none}
-.drop strong{font-size:13px;display:block;margin-bottom:4px}
-.drop span{font-size:11px;color:var(--ink3)}
-.drop b{display:block;margin-top:10px;font-size:12px;color:var(--accent);font-weight:500}
-.flash{font-size:12px;border-radius:9px;padding:11px 14px;margin-bottom:16px;line-height:1.8}
+.drop strong{font-size:var(--fs-body);display:block;margin-bottom:4px}
+.drop span{font-size:var(--fs-aux);color:var(--ink3)}
+.drop b{display:block;margin-top:10px;font-size:var(--fs-body);color:var(--accent);font-weight:500}
+.flash{font-size:var(--fs-body);border-radius:9px;padding:11px 14px;margin-bottom:16px;line-height:1.8}
 .flash.bad{background:var(--danger-bg);border:1px solid #efcfc7;color:var(--danger)}
 .flash.warn{background:var(--gold-bg);border:1px solid #e3d4b6;color:var(--gold)}
 .steps{display:grid;gap:10px;margin:0 0 18px}
-.step{display:flex;gap:11px;font-size:11.5px;line-height:1.8;color:var(--ink2)}
-.step b{flex:none;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-family:Georgia,serif;font-size:11px;font-weight:400}
-.ocr-state{display:flex;align-items:center;gap:9px;font-size:11.5px;border-radius:9px;padding:9px 13px;margin-bottom:16px;line-height:1.7}
+.step{display:flex;gap:11px;font-size:var(--fs-aux);line-height:1.8;color:var(--ink2)}
+.step b{flex:none;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-family:Georgia,serif;font-size:var(--fs-aux);font-weight:400}
+.ocr-state{display:flex;align-items:center;gap:9px;font-size:var(--fs-aux);border-radius:9px;padding:9px 13px;margin-bottom:16px;line-height:1.7}
 .ocr-state.on{background:var(--accent-soft);border:1px solid #cfe3d9;color:var(--accent)}
 .ocr-state.off{background:var(--gold-bg);border:1px solid #e3d4b6;color:var(--gold)}
 .ocr-state b{flex:none;font-weight:500}
@@ -35,8 +35,8 @@
 .ov-card{background:#fff;border-radius:17px;padding:30px 36px;width:min(420px,100%);text-align:center;box-shadow:0 25px 70px rgba(12,47,40,.2)}
 .spinner{width:40px;height:40px;border-radius:50%;border:3px solid #e3ede7;border-top-color:var(--accent);animation:spin .8s linear infinite;margin:0 auto 16px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.ov-card h2{font-family:"Songti SC",SimSun,serif;font-size:19px;margin:0 0 7px}
-.ov-card p{font-size:11.5px;color:var(--ink3);margin:0;line-height:1.8}
+.ov-card h2{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-head);margin:0 0 7px}
+.ov-card p{font-size:var(--fs-aux);color:var(--ink3);margin:0;line-height:1.8}
 @media(max-width:700px){.nj-shell{padding:20px 14px 50px}.grid2{grid-template-columns:1fr}}
 </style>
 {% endblock %}
@@ -66,7 +66,7 @@
 
     <div class="ocr-state {{ 'on' if ocr_ok else 'off' }}">
       <b>{{ 'OCR 可用' if ocr_ok else 'OCR 不可用' }}</b>
-      <span>{{ ocr_engine }}{% if ocr_ok %} · 扫描件在本机识别，不上传图像、不联网{% else %} · 扫描件将无法读取，请装 rapidocr-onnxruntime 或改用文字版 PDF{% endif %}</span>
+      <span>{{ ocr_engine }}{% if ocr_ok %}<i class="sep"></i>扫描件在本机识别，不上传图像、不联网{% else %}<i class="sep"></i>扫描件将无法读取，请装 rapidocr-onnxruntime 或改用文字版 PDF{% endif %}</span>
     </div>
 
     <form method="post" action="/journals/extract" enctype="multipart/form-data" id="exForm">
@@ -100,11 +100,11 @@
 
   {% if drafts %}
   <div class="card">
-    <h2 style="font-size:14px;margin:0 0 12px">未发布的草稿</h2>
+    <h2 style="font-size:var(--fs-title);margin:0 0 12px">未发布的草稿</h2>
     {% for d in drafts %}
-    <div style="display:flex;align-items:center;gap:10px;font-size:12px;padding:8px 0;border-top:1px solid var(--line2)">
+    <div style="display:flex;align-items:center;gap:10px;font-size:var(--fs-body);padding:8px 0;border-top:1px solid var(--line2)">
       <a href="/journals/draft/{{ d.id }}" style="color:var(--accent)">{{ d.name }}</a>
-      <span style="color:var(--ink3)">抽取 {{ d.extracted }} 项 · 沿用 {{ d.inherited }} 项</span>
+      <span style="color:var(--ink3)">抽取 {{ d.extracted }} 项<i class="sep"></i>沿用 {{ d.inherited }} 项</span>
       <span class="tag {{ 't-ok' if d.publishable else 't-part' }}" style="margin-left:auto">{{ '可发布' if d.publishable else '待修' }}</span>
     </div>
     {% endfor %}

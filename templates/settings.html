@@ -4,44 +4,44 @@
 <style>
 .set-shell{padding:34px 34px 70px;max-width:920px;margin:auto}
 .set-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--line)}
-.set-head h1{font-family:"Songti SC",SimSun,serif;font-size:26px;font-weight:600;margin:0 0 6px;letter-spacing:.8px}
-.set-head p{font-size:12px;color:var(--ink3);margin:0;line-height:1.9;max-width:560px}
-.state{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink3);border:1px solid var(--line);border-radius:999px;padding:7px 14px;background:#fff}
+.set-head h1{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-page);font-weight:600;margin:0 0 6px;letter-spacing:.8px}
+.set-head p{font-size:var(--fs-body);color:var(--ink3);margin:0;line-height:1.9;max-width:560px}
+.state{display:flex;align-items:center;gap:8px;font-size:var(--fs-body);color:var(--ink3);border:1px solid var(--line);border-radius:999px;padding:7px 14px;background:#fff}
 .state i{width:8px;height:8px;border-radius:50%;background:#c3cec7}
 .state.on i{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
 .state.on{color:var(--accent);border-color:#cfe3d9;background:var(--accent-soft)}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:16px}
-.card h2{font-size:14px;margin:0 0 4px;font-weight:600}
-.card>p.hint{font-size:11.5px;color:var(--ink3);margin:0 0 18px;line-height:1.9}
+.card h2{font-size:var(--fs-title);margin:0 0 4px;font-weight:600}
+.card>p.hint{font-size:var(--fs-aux);color:var(--ink3);margin:0 0 18px;line-height:1.9}
 .field{margin-bottom:16px}
-.field label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px}
+.field label{display:block;font-size:var(--fs-body);color:var(--ink2);margin-bottom:6px}
 .field label small{color:var(--ink3);font-weight:400}
-.field input[type=text],.field input[type=password],.field input[type=number],.field select{width:100%;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;color:var(--ink);background:#fbfcfb;outline:0}
+.field input[type=text],.field input[type=password],.field input[type=number],.field select{width:100%;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:var(--fs-body);color:var(--ink);background:#fbfcfb;outline:0}
 .field input:focus,.field select:focus{border-color:#a9c3b7;background:#fff}
-.field .note{font-size:10.5px;color:var(--ink3);margin-top:6px;line-height:1.7}
+.field .note{font-size:var(--fs-aux);color:var(--ink3);margin-top:6px;line-height:1.7}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .switch{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--soft);margin-bottom:16px}
 .switch input{width:18px;height:18px;accent-color:var(--accent)}
-.switch strong{font-size:12.5px;display:block;font-weight:500}
-.switch span{font-size:11px;color:var(--ink3)}
+.switch strong{font-size:var(--fs-body);display:block;font-weight:500}
+.switch span{font-size:var(--fs-aux);color:var(--ink3)}
 .radios{display:flex;gap:10px;flex-wrap:wrap}
-.radios label{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:12px;cursor:pointer;flex:1;min-width:220px;background:#fbfcfb}
+.radios label{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:var(--fs-body);cursor:pointer;flex:1;min-width:220px;background:#fbfcfb}
 .radios label:has(input:checked){border-color:var(--accent);background:#f4faf6}
 .radios input{margin-top:2px;accent-color:var(--accent)}
 .radios strong{display:block;font-weight:500;margin-bottom:2px}
-.radios span{font-size:10.5px;color:var(--ink3);line-height:1.6}
+.radios span{font-size:var(--fs-aux);color:var(--ink3);line-height:1.6}
 .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px}
-.btn-ghost{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:9px;min-height:42px;padding:0 18px;font-size:12px;cursor:pointer}
+.btn-ghost{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:9px;min-height:42px;padding:0 18px;font-size:var(--fs-body);cursor:pointer}
 .btn-ghost:hover{border-color:#a9c3b7;color:var(--accent)}
-.flash{font-size:12px;border-radius:9px;padding:10px 14px;margin-bottom:16px;line-height:1.7}
+.flash{font-size:var(--fs-body);border-radius:9px;padding:10px 14px;margin-bottom:16px;line-height:1.7}
 .flash.bad{background:var(--danger-bg);border:1px solid #efcfc7;color:var(--danger)}
 .flash.good{background:var(--accent-soft);border:1px solid #cfe3d9;color:var(--accent)}
-#testOut{font-size:11.5px;line-height:1.7;margin-top:12px;padding:10px 13px;border-radius:9px;display:none}
+#testOut{font-size:var(--fs-aux);line-height:1.7;margin-top:12px;padding:10px 13px;border-radius:9px;display:none}
 #testOut.ok{display:block;background:var(--accent-soft);color:var(--accent);border:1px solid #cfe3d9}
 #testOut.bad{display:block;background:var(--danger-bg);color:var(--danger);border:1px solid #efcfc7}
 .boundaries{display:grid;gap:10px;margin-top:4px}
-.boundary{display:flex;gap:10px;font-size:11.5px;line-height:1.8;color:var(--ink2)}
-.boundary b{flex:none;width:56px;font-weight:500;font-size:10.5px;text-align:center;border-radius:5px;padding:2px 0;height:22px}
+.boundary{display:flex;gap:10px;font-size:var(--fs-aux);line-height:1.8;color:var(--ink2)}
+.boundary b{flex:none;width:56px;font-weight:500;font-size:var(--fs-aux);text-align:center;border-radius:5px;padding:2px 0;height:22px}
 .boundary b.yes{background:var(--accent-soft);color:var(--accent)}
 .boundary b.no{background:var(--danger-bg);color:var(--danger)}
 @media(max-width:700px){.set-shell{padding:20px 14px 50px}.grid2{grid-template-columns:1fr}.radios label{min-width:0}}
@@ -141,7 +141,7 @@
     <div class="actions">
       <button class="btn" type="submit">保存设置</button>
       <button class="btn-ghost" type="button" id="testBtn">测试连通</button>
-      <span style="font-size:11px;color:var(--ink3)">配置存在本机 <code>{{ config_path }}</code>，密钥为明文，请勿分享该文件。</span>
+      <span style="font-size:var(--fs-aux);color:var(--ink3)">配置存在本机 <code>{{ config_path }}</code>，密钥为明文，请勿分享该文件。</span>
     </div>
     <div id="testOut"></div>
   </form>

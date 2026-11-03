@@ -3,7 +3,7 @@
 {% block body %}
 <div class="workspace-shell">
   <div class="workspace-heading">
-    <div><h1>格式转换工作台</h1><p>上传稿件、选择期刊、确认转换，三步在同一屏完成</p></div>
+    <div><h1>格式转换工作台</h1></div>
     <div class="flow-steps" aria-label="转换步骤">
       <span class="flow-step on"><b>1</b>上传稿件</span><i class="flow-line"></i>
       <span class="flow-step on"><b>2</b>选择期刊</span><i class="flow-line"></i>
@@ -18,7 +18,7 @@
         <label class="drop" id="dropZone">
           <input type="file" name="file" accept=".docx,.doc" id="fileInput">
           <span class="drop-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5M5 14v5h14v-5"/></svg></span>
-          <strong>将论文拖到这里</strong><span>或者 <u>浏览本地文件</u></span><small>MICROSOFT WORD · .DOCX / .DOC</small>
+          <strong>将论文拖到这里</strong><span>或者 <u>浏览本地文件</u></span><small>MICROSOFT WORD<i class="sep"></i>.DOCX / .DOC</small>
         </label>
         <div class="file-selected" id="fileSelected" hidden>
           <span class="file-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v5h4M9 12h6M9 15.5h6"/></svg></span>
@@ -34,20 +34,20 @@
     </section>
 
     <section class="panel journal-panel" id="journals">
-      <div class="panel-head"><span class="step-no">02</span><div><h2>选择目标期刊</h2><p>点按钮挑一本，右侧立即显示它的版式与门槛</p></div><span class="count" id="journalCount">{{ journals|length }} 本可选 · <a href="/journals" class="spec-link">规则库 ↗</a></span></div>
+      <div class="panel-head"><span class="step-no">02</span><div><h2>选择目标期刊</h2></div><span class="count" id="journalCount">{{ journals|length }} 本可选<i class="sep"></i><a href="/journals" class="spec-link">规则库 ↗</a></span></div>
       <div class="jpicker">
         <button class="jpicker-btn" type="button" id="pickerBtn" aria-haspopup="true" aria-expanded="false">
-          <span class="jp-kicker">目标期刊 · 点击更换</span>
+          <span class="jp-kicker">目标期刊<i class="sep"></i>点击更换</span>
           <strong id="pickName">{{ journals[0].name if journals else '还没有期刊' }}</strong>
           <span class="jp-en" id="pickEn">{{ journals[0].en if journals else '' }}</span>
-          <span class="jp-meta" id="pickMeta">{{ journals[0].body if journals }}{% if journals and journals[0].line %} · {{ journals[0].line }}pt 行距{% endif %}{% if journals %} · {{ journals[0].cite }} · {{ journals[0].levels }} 级标题{% endif %}</span>
+          <span class="jp-meta" id="pickMeta">{{ journals[0].body if journals }}{% if journals and journals[0].line %}<i class="sep"></i>{{ journals[0].line }}pt 行距{% endif %}{% if journals %}<i class="sep"></i>{{ journals[0].cite }}<i class="sep"></i>{{ journals[0].levels }} 级标题{% endif %}</span>
           <svg class="jp-caret" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 8 5 5 5-5"/></svg>
         </button>
         <div class="jp-foot">
           <span class="tag {{ 't-ok' if journals and journals[0].status == 'verified' else 't-part' }}" id="pickStatus">{{ journals[0].status_label if journals }}</span>
           <a class="spec-link" id="pickSpec" href="{% if journals %}/journal/{{ journals[0].id }}/spec{% endif %}" target="_blank" rel="noopener">打开格式规格 ↗</a>
         </div>
-        <p class="jp-hint">不确定投哪家？先按一本排出来，到结果页用「只看两刊差异」对比着选。</p>
+        <p class="jp-hint">不确定投哪家？先排一本，到结果页对比着选。</p>
 
         <div class="jpicker-pop" id="pickerPop" hidden>
           <div class="picker-tools">
@@ -66,9 +66,9 @@
           <div class="jgroup-head"><b>{{ g.title }}</b><em>{{ g.list|length }}</em></div>
           {% for j in g.list %}
           <label class="jcard{% if j.id == default_id %} sel{% endif %}" data-lang="{{ j.lang }}" data-status="{{ j.status }}" data-search="{{ (j.name + ' ' + j.en)|lower }}">
-            <input type="radio" name="journal" form="convertForm" value="{{ j.id }}" data-name="{{ j.name }}" data-en="{{ j.en }}" data-body="{{ j.body }}{% if j.line_label %} · {{ j.line_label }}{% endif %}" data-cite="{{ j.cite }} · {{ j.levels }} 级标题" data-words="{{ j.words or '不限' }}" data-abstract="{{ j.abstract or '未规定' }}" data-status-label="{{ j.status_label }}" data-auth-label="{{ j.auth_label }}" data-status-class="{{ 't-ok' if j.status == 'verified' else 't-part' }}" data-auth-class="{{ j.auth_class }}" {% if j.id == default_id %}checked{% endif %}>
+            <input type="radio" name="journal" form="convertForm" value="{{ j.id }}" data-name="{{ j.name }}" data-en="{{ j.en }}" data-body="{{ j.body }}" data-line="{{ j.line_label or '' }}" data-cite="{{ j.cite }}" data-levels="{{ j.levels }}" data-words="{{ j.words or '不限' }}" data-abstract="{{ j.abstract or '未规定' }}" data-status-label="{{ j.status_label }}" data-auth-label="{{ j.auth_label }}" data-status-class="{{ 't-ok' if j.status == 'verified' else 't-part' }}" data-auth-class="{{ j.auth_class }}" {% if j.id == default_id %}checked{% endif %}>
             <div class="jname"><i class="radio"></i><strong>{{ j.name }}</strong>{% if j.lang != 'en' and j.en %}<span>{{ j.en }}</span>{% endif %}</div>
-            <div class="jspec"><b>{{ j.body }}{% if j.line_label %} · {{ j.line_label }}{% endif %}</b><br>{{ j.cite }} · {{ j.levels }} 级标题</div>
+            <div class="jspec"><b>{{ j.body }}{% if j.line_label %}<i class="sep"></i>{{ j.line_label }}{% endif %}</b><br>{{ j.cite }}<i class="sep"></i>{{ j.levels }} 级标题</div>
             <div class="jmeta"><span class="tag {{ 't-ok' if j.status == 'verified' else 't-part' }}">{{ j.status_label }}</span>{% if j.spec %}<a class="spec-link" href="/journal/{{ j.id }}/spec" target="_blank" rel="noopener">格式规格 ↗</a>{% endif %}</div>
           </label>
           {% endfor %}
@@ -81,7 +81,7 @@
     </section>
 
     <section class="panel confirm-panel">
-      <div class="panel-head"><span class="step-no">03</span><div><h2>确认并转换</h2><p>生成成品、体检与审计报告</p></div></div>
+      <div class="panel-head"><span class="step-no">03</span><div><h2>确认并转换</h2></div></div>
       <div class="confirm-body">
         <div>
           <div class="selected-kicker">SELECTED JOURNAL</div>
@@ -90,8 +90,8 @@
           <div class="selected-tags"><span class="tag {{ 't-ok' if journals and journals[0].status == 'verified' else 't-part' }}" id="selectedStatus">{{ journals[0].status_label if journals else '' }}</span><span class="tag {{ journals[0].auth_class if journals else '' }}" id="selectedAuth">{{ journals[0].auth_label if journals else '' }}</span></div>
         </div>
         <div class="summary-specs">
-          <div class="summary-spec"><span>正文版式</span><strong id="summaryBody">{{ journals[0].body if journals else '' }}{% if journals and journals[0].line_label %} · {{ journals[0].line_label }}{% endif %}</strong></div>
-          <div class="summary-spec"><span>引用与标题</span><strong id="summaryCite">{{ journals[0].cite if journals else '' }} · {{ journals[0].levels if journals else '' }} 级标题</strong></div>
+          <div class="summary-spec"><span>正文版式</span><strong id="summaryBody">{{ journals[0].body if journals else '' }}{% if journals and journals[0].line_label %}<i class="sep"></i>{{ journals[0].line_label }}{% endif %}</strong></div>
+          <div class="summary-spec"><span>引用与标题</span><strong id="summaryCite">{{ journals[0].cite if journals else '' }}<i class="sep"></i>{{ journals[0].levels if journals else '' }} 级标题</strong></div>
           <div class="summary-spec"><span>总字数</span><strong id="summaryWords">{% if journals %}{{ ('≤ ' ~ journals[0].words ~ ' 字') if journals[0].words else '该刊不设上限' }}{% endif %}</strong></div>
           <div class="summary-spec"><span>摘要</span><strong id="summaryAbstract">{% if journals %}{{ (journals[0].abstract ~ ' 字') if journals[0].abstract else '未规定' }}{% endif %}</strong></div>
         </div>
@@ -99,7 +99,7 @@
         <div class="confirm-bottom">
           <div class="file-status" id="fileStatus"><i></i><span>等待上传 DOCX 稿件</span></div>
           <button class="btn" type="submit" id="convertButton" disabled>开始格式转换<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10h13M11 5l5 5-5 5"/></svg></button>
-          <div class="privacy-note">全程本地处理 · 改动逐条可审计</div>
+          <div class="privacy-note">全程本地处理<i class="sep"></i>改动逐条可审计</div>
         </div>
       </div>
     </section>
@@ -114,8 +114,11 @@
 const form=document.getElementById('convertForm'),fileInput=document.getElementById('fileInput'),dropZone=document.getElementById('dropZone'),fileSelected=document.getElementById('fileSelected'),fileName=document.getElementById('fileName'),fileMeta=document.getElementById('fileMeta'),uploadNotes=document.getElementById('uploadNotes'),fileStatus=document.getElementById('fileStatus'),convertButton=document.getElementById('convertButton');
 const cards=[...document.querySelectorAll('.jcard')],maxSize=80*1024*1024;
 const formatSize=bytes=>bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':Math.max(1,Math.round(bytes/1024))+' KB';
+/* 元信息分隔与模板同规约：JS 拼接不用「·」文本，改插 .sep 细竖线 */
+const sepEl=()=>{const i=document.createElement('i');i.className='sep';return i};
+const sepJoin=(el,parts)=>{el.replaceChildren();parts.filter(Boolean).forEach((p,i)=>{if(i)el.appendChild(sepEl());el.appendChild(document.createTextNode(p))})};
 const syncSubmit=()=>{convertButton.disabled=!fileInput.files.length||!document.querySelector('input[name="journal"]:checked')};
-const updateFile=()=>{dropZone.classList.remove('has-error');const f=fileInput.files[0];if(!f){fileSelected.hidden=true;uploadNotes.hidden=false;fileStatus.classList.remove('ready');fileStatus.querySelector('span').textContent='等待上传 DOCX / DOC 稿件';syncSubmit();return}if(!/\.(docx|doc)$/i.test(f.name)){fileInput.value='';dropZone.classList.add('has-error');toast('仅支持 DOCX / DOC 稿件');updateFile();return}if(f.size>maxSize){fileInput.value='';dropZone.classList.add('has-error');toast('文件不能超过 80 MB');updateFile();return}fileName.textContent=f.name;fileName.title=f.name;fileMeta.textContent=formatSize(f.size)+' · '+(/\.doc$/i.test(f.name)?'DOC（将自动转为 DOCX）':'DOCX 文档');fileSelected.hidden=false;uploadNotes.hidden=true;fileStatus.classList.add('ready');fileStatus.querySelector('span').textContent=f.name;syncSubmit()};
+const updateFile=()=>{dropZone.classList.remove('has-error');const f=fileInput.files[0];if(!f){fileSelected.hidden=true;uploadNotes.hidden=false;fileStatus.classList.remove('ready');fileStatus.querySelector('span').textContent='等待上传 DOCX / DOC 稿件';syncSubmit();return}if(!/\.(docx|doc)$/i.test(f.name)){fileInput.value='';dropZone.classList.add('has-error');toast('仅支持 DOCX / DOC 稿件');updateFile();return}if(f.size>maxSize){fileInput.value='';dropZone.classList.add('has-error');toast('文件不能超过 80 MB');updateFile();return}fileName.textContent=f.name;fileName.title=f.name;sepJoin(fileMeta,[formatSize(f.size),(/\.doc$/i.test(f.name)?'DOC（将自动转为 DOCX）':'DOCX 文档')]);fileSelected.hidden=false;uploadNotes.hidden=true;fileStatus.classList.add('ready');fileStatus.querySelector('span').textContent=f.name;syncSubmit()};
 fileInput.addEventListener('change',updateFile);document.getElementById('removeFile').addEventListener('click',()=>{fileInput.value='';updateFile()});
 ['dragover','dragenter'].forEach(type=>dropZone.addEventListener(type,e=>{e.preventDefault();dropZone.classList.add('on')}));['dragleave','drop'].forEach(type=>dropZone.addEventListener(type,e=>{e.preventDefault();dropZone.classList.remove('on')}));dropZone.addEventListener('drop',e=>{if(e.dataTransfer.files.length){fileInput.files=e.dataTransfer.files;updateFile()}});
 const pickerBtn=document.getElementById('pickerBtn'),pickerPop=document.getElementById('pickerPop'),pickName=document.getElementById('pickName'),pickEn=document.getElementById('pickEn'),pickMeta=document.getElementById('pickMeta'),pickStatus=document.getElementById('pickStatus'),pickSpec=document.getElementById('pickSpec');
@@ -128,9 +131,10 @@ pickerPop.addEventListener('click',e=>e.stopPropagation());
 document.addEventListener('click',e=>{if(!pickerPop.hidden&&!pickerPop.contains(e.target)&&!pickerBtn.contains(e.target))closePicker()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closePicker()});
 window.addEventListener('resize',closePicker);
-const syncPicker=radio=>{pickName.textContent=radio.dataset.name;pickEn.textContent=radio.dataset.en;pickMeta.textContent=radio.dataset.body+' · '+radio.dataset.cite;pickStatus.textContent=radio.dataset.statusLabel;pickStatus.className='tag '+radio.dataset.statusClass;pickSpec.href='/journal/'+radio.value+'/spec'};
-const summaryFields={selectedJournal:'name',selectedEn:'en',summaryBody:'body',summaryCite:'cite'};
-cards.forEach(card=>{card.querySelectorAll('.spec-link').forEach(link=>link.addEventListener('click',e=>e.stopPropagation()));const radio=card.querySelector('input');radio.addEventListener('change',()=>{cards.forEach(c=>c.classList.toggle('sel',c===card));Object.entries(summaryFields).forEach(([id,key])=>document.getElementById(id).textContent=radio.dataset[key]);const w=radio.dataset.words,ab=radio.dataset.abstract;document.getElementById('summaryWords').textContent=(w==='不限')?'该刊不设上限':('≤ '+w+' 字');document.getElementById('summaryAbstract').textContent=(ab==='未规定')?'未规定':(ab+' 字');const status=document.getElementById('selectedStatus'),auth=document.getElementById('selectedAuth');status.textContent=radio.dataset.statusLabel;status.className='tag '+radio.dataset.statusClass;auth.textContent=radio.dataset.authLabel;auth.className='tag '+radio.dataset.authClass;syncPicker(radio);closePicker();syncSubmit()})});
+window.addEventListener('scroll',closePicker,{passive:true});
+const syncPicker=radio=>{pickName.textContent=radio.dataset.name;pickEn.textContent=radio.dataset.en;sepJoin(pickMeta,[radio.dataset.body,radio.dataset.line,radio.dataset.cite,radio.dataset.levels&&radio.dataset.levels+' 级标题']);pickStatus.textContent=radio.dataset.statusLabel;pickStatus.className='tag '+radio.dataset.statusClass;pickSpec.href='/journal/'+radio.value+'/spec'};
+const summaryFields={selectedJournal:'name',selectedEn:'en'};
+cards.forEach(card=>{card.querySelectorAll('.spec-link').forEach(link=>link.addEventListener('click',e=>e.stopPropagation()));const radio=card.querySelector('input');radio.addEventListener('change',()=>{cards.forEach(c=>c.classList.toggle('sel',c===card));Object.entries(summaryFields).forEach(([id,key])=>document.getElementById(id).textContent=radio.dataset[key]);sepJoin(document.getElementById('summaryBody'),[radio.dataset.body,radio.dataset.line]);sepJoin(document.getElementById('summaryCite'),[radio.dataset.cite,radio.dataset.levels&&radio.dataset.levels+' 级标题']);const w=radio.dataset.words,ab=radio.dataset.abstract;document.getElementById('summaryWords').textContent=(w==='不限')?'该刊不设上限':('≤ '+w+' 字');document.getElementById('summaryAbstract').textContent=(ab==='未规定')?'未规定':(ab+' 字');const status=document.getElementById('selectedStatus'),auth=document.getElementById('selectedAuth');status.textContent=radio.dataset.statusLabel;status.className='tag '+radio.dataset.statusClass;auth.textContent=radio.dataset.authLabel;auth.className='tag '+radio.dataset.authClass;syncPicker(radio);closePicker();syncSubmit()})});
 const search=document.getElementById('journalSearch'),noResults=document.getElementById('noResults'),langButtons=[...document.querySelectorAll('.filter-btn[data-lang]')],verifiedBtn=document.getElementById('filterVerified');
 let langFilter='all',verifiedOnly=false;
 const filterJournals=()=>{const q=search.value.trim().toLowerCase();let visible=0;cards.forEach(card=>{const show=(!q||card.dataset.search.includes(q))&&(langFilter==='all'||card.dataset.lang===langFilter)&&(!verifiedOnly||card.dataset.status==='verified');card.hidden=!show;if(show)visible++});document.querySelectorAll('.jgroup').forEach(g=>{g.hidden=![...g.querySelectorAll('.jcard')].some(c=>!c.hidden)});noResults.hidden=visible>0;document.getElementById('journalCount').textContent=visible+' / '+cards.length+' 本'};

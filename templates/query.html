@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block title %}论文格式查询 · 格式工坊{% endblock %}
+{% block style %}
+<style>
+.query-shell{padding:26px 34px 70px;max-width:1280px;margin:auto;font-size:var(--fs-body)}
+.query-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.query-head h1{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-page);font-weight:600;margin:0 0 6px;letter-spacing:.8px}
+.query-head p{font-size:var(--fs-body);color:var(--ink3);margin:0;line-height:1.9}
+.q-count{font-size:var(--fs-body);color:var(--ink3)}
+.q-count strong{color:var(--accent);font-size:var(--fs-head);font-family:Georgia,serif;font-weight:400;margin:0 4px}
+
+/* 已选刊条：chips + 添加按钮 */
+.picker-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 14px;background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:18px}
+.pb-label{font-size:var(--fs-aux);color:var(--ink3);letter-spacing:.5px;flex:none}
+.pb-chip{display:inline-flex;align-items:center;gap:8px;border:1px solid #bcd6ca;background:var(--accent-soft);color:var(--dark);border-radius:999px;padding:5px 8px 5px 12px;font-size:var(--fs-body)}
+.pb-chip a{display:grid;place-items:center;width:17px;height:17px;border-radius:50%;color:var(--accent);font-size:var(--fs-body);line-height:1}
+.pb-chip a:hover{background:#d3e6db}
+.pb-add{display:inline-flex;align-items:center;gap:6px;border:1.5px dashed #b9cbc0;background:transparent;color:var(--accent);border-radius:999px;padding:6px 13px;font-size:var(--fs-body);cursor:pointer}
+.pb-add:hover{border-color:var(--accent);background:#f2f8f4}
+.pb-add svg{width:12px;height:12px}
+.pb-clear{font-size:var(--fs-aux);color:var(--ink3);margin-left:auto}
+.pb-clear:hover{color:var(--danger)}
+
+/* 期刊选择列表：空态时内联铺开；已选刊后收进浮层，按需弹出 */
+.jpicker-pop.q-inline{position:static;display:flex;box-shadow:none;border:0;padding:0;max-width:none;background:transparent;margin-bottom:16px}
+.q-empty-tip{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px 30px;margin-bottom:16px;text-align:center}
+.q-empty-tip strong{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-title);font-weight:600;display:block;margin-bottom:6px}
+.q-empty-tip p{font-size:var(--fs-body);color:var(--ink3);margin:0;line-height:1.9}
+
+/* 分区面板 */
+.qsec{background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:16px;overflow:hidden}
+.qsec>h2{font-size:var(--fs-body);font-weight:600;margin:0;padding:13px 18px 11px;border-bottom:1px solid var(--line2);font-family:"Songti SC",SimSun,serif;letter-spacing:.5px}
+.qrows{display:flex;flex-direction:column}
+.qrow{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:9px 18px;border-bottom:1px solid var(--line2);align-items:baseline}
+.qrow:last-child{border-bottom:0}
+.qrows:not(.qcmp) .qrow:hover{background:#fafcfb}
+.qlabel{color:var(--ink3);font-size:var(--fs-aux)}
+.qval{color:var(--ink);line-height:1.85;min-width:0;word-break:break-word}
+.qval a{color:var(--accent);word-break:break-all}
+.qval a:hover{text-decoration:underline}
+.qmissing{color:#9aa89f}
+.qnote{display:block;font-size:var(--fs-aux);color:#8a998f;margin-top:2px;line-height:1.7}
+.qcompare .qval{font-size:var(--fs-aux);line-height:1.8}
+
+/* 对比模式：项目列 + N 个刊列，列数由 --qcols 控制 */
+.qcmp .qrow{grid-template-columns:190px repeat(var(--qcols),1fr);gap:14px}
+.qrow.qhead{padding-top:12px;padding-bottom:11px;background:#fbfcfa;border-bottom:1px solid var(--line)}
+.qrow.qhead .qlabel{color:#9aa89f;font-size:var(--fs-aux);letter-spacing:1px;padding-top:4px}
+.qrow.qhead .qval a{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-title);font-weight:600;color:var(--ink);word-break:normal}
+.qrow.qhead .qval a:hover{color:var(--accent);text-decoration:none}
+.qrow.qhead .single-name{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-head);font-weight:600}
+.qrow.qdiff{background:#fbf7ec}
+.qrow.qdiff .qlabel{color:var(--gold)}
+.jcell-tags{display:flex;gap:5px;margin-top:4px;flex-wrap:wrap}
+
+/* 推定项：披露全量，≥12 条折叠（同 F16NOISE 口径） */
+.q-assume details>summary{cursor:pointer;font-size:var(--fs-aux);color:var(--gold)}
+.q-assume ul{margin:8px 0 0;padding-left:18px}
+.q-assume li{font-size:var(--fs-aux);color:var(--ink2);line-height:1.9}
+.q-assume .q-flat{font-size:var(--fs-aux);color:var(--ink2);line-height:1.9;margin:0 0 4px}
+.q-assume .q-flat b{color:var(--gold);font-weight:600}
+.qsample .qval{display:flex;flex-direction:column}
+.sample-bar{display:flex;gap:16px;align-items:baseline;margin-bottom:8px;font-size:var(--fs-aux);flex-wrap:wrap}
+.sample-bar strong{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-body);font-weight:600}
+.sample-bar .bar-note{font-size:var(--fs-aux);color:#8a998f}
+.sample-frame{width:100%;height:700px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.h2-note{font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:var(--fs-aux);color:#8a998f;font-weight:400;letter-spacing:0;margin-left:10px}
+@media(max-width:850px){.query-shell{padding:18px 14px 50px}.qrow{grid-template-columns:1fr;gap:2px}.qcmp .qrow{grid-template-columns:1fr}.sample-frame{height:520px}}
+</style>
+{% endblock %}
+{% block body %}
+{% set cmp = views|length > 1 %}
+{# 单元格渲染：取值非空就展示（url 行且是 http(s) 才渲染成链接），空则如实写缺席口径 #}
+{% macro show_cell(wrow, is_url=False) -%}
+{%- set c = wrow.cells[0] -%}
+{%- if c is none -%}<span class="qmissing">{{ wrow.missing }}</span>
+{%- elif is_url and (c.startswith('http://') or c.startswith('https://')) -%}<a href="{{ c }}" target="_blank" rel="noopener">{{ c }}</a>
+{%- else -%}{{ c }}{%- endif -%}
+{%- if wrow.notes %}<span class="qnote">{{ wrow.notes }}</span>{% endif -%}
+{%- endmacro %}
+{% macro show_assume(v) -%}
+{%- set n = v.assumptions|length -%}
+{%- if n -%}
+{%- if n >= 12 -%}
+<details><summary>共 {{ n }} 条推定，点击展开</summary>
+  <ul>{% for a in v.assumptions %}<li>{{ a }}</li>{% endfor %}</ul></details>
+{%- else -%}
+<div class="q-flat"><b>{{ n }} 条推定</b>（稿约与样张里都找不到明文依据、按同类惯例推的值）</div>
+<ul>{% for a in v.assumptions %}<li>{{ a }}</li>{% endfor %}</ul>
+{%- endif -%}
+{%- else -%}<span class="qmissing">该刊没有登记推定项</span>{%- endif -%}
+{%- endmacro %}
+<div class="query-shell{% if cmp %} qcompare{% endif %}"{% if cmp %} style="--qcols:{{ views|length }}"{% endif %}>
+  <div class="query-head">
+    <div>
+      <h1>论文格式查询</h1>
+      <p>选一本刊逐项查看它的全部格式要求，再勾一本自动进入逐项对比。<br>每个取值都来自本机规则库并标注依据；该刊没规定的如实写「未规定」，不从同类刊猜。</p>
+    </div>
+    {% if cmp %}<div class="q-count">对比 {{ views|length }} 本刊<strong>{{ n_diff }}</strong>项规定不同</div>{% endif %}
+  </div>
+
+  <div class="picker-bar">
+    <span class="pb-label">查询对象</span>
+    {% for v in views %}
+    <span class="pb-chip">{{ v.name }}<a href="{{ v.remove_url }}" aria-label="移除 {{ v.name }}">×</a></span>
+    {% endfor %}
+    {% if not views %}<span class="qmissing" style="font-size:var(--fs-body)">还没选刊</span>{% endif %}
+    <button class="pb-add" type="button" id="qAdd"{% if not views %} hidden{% endif %}>
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 4v12M4 10h12"/></svg>添加期刊（{{ views|length }}/{{ query_max }}）
+    </button>
+    {% if views %}<a class="pb-clear" href="/query">清空</a>{% endif %}
+  </div>
+
+  {% if not views %}
+  <div class="q-empty-tip">
+    <strong>先选一本刊</strong>
+    <p>单刊展开全部要求与出处；再点选第二本，页面自动切成并排对比，差异行标黄。</p>
+  </div>
+  {% endif %}
+
+  <div class="jpicker-pop{% if not views %} q-inline{% endif %}" id="qPop"{% if views %} hidden{% endif %}>
+    <div class="picker-tools">
+      <label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/></svg><input type="search" id="qSearch" placeholder="搜索刊名，中英文都行" aria-label="搜索期刊"></label>
+      <div class="picker-filters">
+        <button class="filter-btn on" type="button" data-lang="all">全部</button>
+        <button class="filter-btn" type="button" data-lang="zh">中文</button>
+        <button class="filter-btn" type="button" data-lang="en">英文</button>
+      </div>
+    </div>
+    <div class="journal-list" id="qList">
+      {% for g in groups %}
+      <div class="jgroup" data-group="{{ g.key }}">
+        <div class="jgroup-head"><b>{{ g.title }}</b><em>{{ g.list|length }}</em></div>
+        {% for j in g.list %}
+        <label class="jcard" data-qid="{{ j.id }}" data-lang="{{ j.lang }}" data-search="{{ (j.name + ' ' + j.en)|lower }}">
+          <input type="checkbox" class="q-check" value="{{ j.id }}" {% if j.id in ids %}checked{% endif %} style="position:absolute;opacity:0;pointer-events:none">
+          <div class="jname" style="padding-left:0"><strong>{{ j.name }}</strong>{% if j.lang != 'en' and j.en %}<span>{{ j.en }}</span>{% endif %}</div>
+          <div class="jspec"><b>{{ j.body }}{% if j.line_label %}<i class="sep"></i>{{ j.line_label }}{% endif %}</b><br>{{ j.cite }}<i class="sep"></i>{{ j.levels }} 级标题</div>
+          <div class="jmeta"><span class="tag {{ 't-ok' if j.status == 'verified' else 't-part' }}">{{ j.status_label }}</span></div>
+        </label>
+        {% endfor %}
+      </div>
+      {% endfor %}
+      <div class="no-results" id="qNoResults" hidden>没有找到匹配的期刊</div>
+    </div>
+  </div>
+
+  {# 以下全部依赖已选刊：刊名头 → 正文分区 → 推定项披露 #}
+  {% if views %}
+  {# 刊名头：单刊一张卡，对比模式一行对齐的列头（点刊名回到单刊视图） #}
+  {% if not cmp %}
+  <section class="qsec">
+    {% set v = views[0] %}
+    <div class="qrow qhead">
+      <div class="qlabel">SELECTED JOURNAL</div>
+      <div class="qval">
+        <span class="single-name">{{ v.name }}</span>
+        {% if v.en %}<div class="qnote">{{ v.en }}</div>{% endif %}
+        <div class="jcell-tags">
+          <span class="tag {{ 't-ok' if v.status == 'verified' else 't-part' }}">{{ v.status_label }}</span>
+          <span class="tag {{ v.auth_class }}">{{ v.auth_label }}</span>
+        </div>
+        <div style="margin-top:9px;display:flex;gap:14px;font-size:var(--fs-aux)">
+          <a class="spec-link" href="/workspace?journal={{ v.id }}">用这本刊转换 →</a>
+          {% if v.spec %}<a class="spec-link" href="/journal/{{ v.id }}/spec" target="_blank" rel="noopener">打开格式规格 ↗</a>{% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+  {% elif cmp %}
+  <section class="qsec">
+    <div class="qrows qcmp">
+      <div class="qrow qhead">
+        <div class="qlabel">JOURNALS</div>
+        {% for w in views %}
+        <div class="qval"><a href="/query?journals={{ w.id }}" title="只看这一本">{{ w.name }}</a>
+          <div class="jcell-tags"><span class="tag {{ 't-ok' if w.status == 'verified' else 't-part' }}">{{ w.status_label }}</span><span class="tag {{ w.auth_class }}">{{ w.auth_label }}</span></div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {# 样张预览：嵌入 build_journal.py 渲染出的真实样板（DESIGN §11.3——样式呈现
+     必须来自渲染产物，不用 HTML 另绘；「自己操作感受」走 docx 下载 + PDF 翻页） #}
+  {% if views %}
+  <section class="qsec">
+    <h2>样张预览<span class="h2-note">由规则集渲染的真实样板，与转换成品出自同一渲染器——在 Word 里打开它核对版式，比任何截图都可靠</span></h2>
+    <div class="qrows{% if cmp %} qcmp{% endif %}">
+      <div class="qrow qsample">
+        <div class="qlabel">{% if cmp %}版式样板{% else %}SAMPLE{% endif %}</div>
+        {% if cmp %}
+        {% for w in views %}
+        <div class="qval">
+          <div class="sample-bar"><strong>{{ w.name }}</strong>
+            {% if w.sample %}<a class="spec-link" href="/journal/{{ w.id }}/sample">下载 .docx</a>{% endif %}
+          </div>
+          {% if w.sample %}<iframe class="sample-frame" src="/journal/{{ w.id }}/sample.pdf" title="{{ w.name }} 版式样板" loading="lazy"></iframe>
+          {% else %}<span class="qmissing">该刊样张未生成，可在「期刊规则」页重建</span>{% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        {% set v = views[0] %}
+        <div class="qval">
+          <div class="sample-bar">
+            {% if v.sample %}<a class="spec-link" href="/journal/{{ v.id }}/sample">下载样板 .docx，在 Word 里亲手核对 →</a>
+            <a class="spec-link" href="/journal/{{ v.id }}/spec" target="_blank" rel="noopener">逐条规格页 ↗</a>
+            {% endif %}
+          </div>
+          {% if v.sample %}<iframe class="sample-frame" src="/journal/{{ v.id }}/sample.pdf" title="版式样板预览"></iframe>
+          {% else %}<span class="qmissing">该刊样张未生成，可在「期刊规则」页重建</span>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {# 正文分区：行集合各刊同构，多刊时按 (区下标, 行下标) 对齐取各刊自己的值 #}
+  {% for sec in views[0].sections %}
+  {% set si = loop.index0 %}
+  <section class="qsec">
+    <h2>{{ sec.title }}</h2>
+    <div class="qrows{% if cmp %} qcmp{% endif %}">
+      {% for row in sec.rows %}
+      {% set ri = loop.index0 %}
+      <div class="qrow{% if cmp and not row.same %} qdiff{% endif %}">
+        <div class="qlabel">{{ row.label }}</div>
+        {% if cmp %}
+        {% for w in views %}<div class="qval">{{ show_cell(w.sections[si].rows[ri], row.url) }}</div>{% endfor %}
+        {% else %}
+        <div class="qval">{{ show_cell(row, row.url) }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  {# 推定项面板：对比模式逐刊一列，单刊一整行 #}
+  <section class="qsec">
+    <h2>推定项披露</h2>
+    <div class="qrows{% if cmp %} qcmp{% endif %}">
+      <div class="qrow">
+        <div class="qlabel">推定值清单</div>
+        {% if cmp %}
+        {% for w in views %}<div class="qval q-assume">{{ show_assume(w) }}</div>{% endfor %}
+        {% else %}
+        <div class="qval q-assume">{{ show_assume(views[0]) }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+{% block script %}
+<script>
+const MAX={{ query_max }},pop=document.getElementById('qPop'),addBtn=document.getElementById('qAdd');
+let sel={{ ids|tojson }};
+const inlinePop=pop.classList.contains('q-inline');
+/* 选刊会整页跳转：跳走前把搜索词、滚动位置、弹层开合存进 sessionStorage，回来时还原 */
+const QSTATE='qPickerState';
+const go=()=>{sessionStorage.setItem(QSTATE,JSON.stringify({y:scrollY,q:(document.getElementById('qSearch')||{}).value||'',open:!pop.hidden&&!inlinePop}));location.href='/query'+(sel.length?'?journals='+sel.join(','):'')};
+const openPop=()=>{const r=addBtn.getBoundingClientRect(),w=Math.max(340,440);pop.style.width=w+'px';pop.style.left=Math.max(8,Math.min(r.right-w,window.innerWidth-w-8))+'px';pop.style.top=(r.bottom+6)+'px';pop.hidden=false;setTimeout(()=>document.getElementById('qSearch').focus({preventScroll:true}),40)};
+const closePop=()=>{if(inlinePop)return;pop.hidden=true};
+if(!inlinePop&&pop.parentElement!==document.body)document.body.appendChild(pop);
+if(addBtn)addBtn.addEventListener('click',e=>{e.stopPropagation();pop.hidden?openPop():closePop()});
+pop.addEventListener('click',e=>e.stopPropagation());
+document.addEventListener('click',e=>{if(!pop.hidden&&!pop.contains(e.target)&&(!addBtn||!addBtn.contains(e.target)))closePop()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closePop()});
+window.addEventListener('resize',closePop);
+window.addEventListener('scroll',closePop,{passive:true});
+document.querySelectorAll('.q-check').forEach(chk=>chk.addEventListener('change',()=>{
+  const id=chk.value;
+  if(chk.checked){
+    if(sel.includes(id))return;
+    if(sel.length>=MAX){chk.checked=false;toast('一次最多对比 '+MAX+' 本刊');return}
+    sel=[...sel,id];
+  }else sel=sel.filter(x=>x!==id);
+  go();
+}));
+/* 移除单刊 / 清空也是跳转，同样先存现场 */
+document.querySelectorAll('.picker-bar a').forEach(a=>a.addEventListener('click',()=>sessionStorage.setItem(QSTATE,JSON.stringify({y:scrollY,q:(document.getElementById('qSearch')||{}).value||'',open:false}))));
+const search=document.getElementById('qSearch'),noRes=document.getElementById('qNoResults'),langBtns=[...document.querySelectorAll('.picker-filters .filter-btn')];
+let lang='all';
+const filter=()=>{const q=(search.value||'').trim().toLowerCase();let vis=0;document.querySelectorAll('#qList .jcard').forEach(c=>{const show=(!q||c.dataset.search.includes(q))&&(lang==='all'||c.dataset.lang===lang);c.hidden=!show;if(show)vis++});document.querySelectorAll('#qList .jgroup').forEach(g=>{g.hidden=![...g.querySelectorAll('.jcard')].some(c=>!c.hidden)});noRes.hidden=vis>0};
+search.addEventListener('input',filter);
+langBtns.forEach(b=>b.addEventListener('click',()=>{lang=b.dataset.lang;langBtns.forEach(x=>x.classList.toggle('on',x===b));filter()}));
+/* 回到本页：还原跳走前的搜索词与滚动位置，弹层若开着就重新打开 */
+try{const st=JSON.parse(sessionStorage.getItem(QSTATE)||'null');if(st){sessionStorage.removeItem(QSTATE);if(st.q&&search){search.value=st.q;filter()}if(st.y)scrollTo(0,st.y);if(st.open&&!inlinePop)openPop()}}catch(e){}
+</script>
+{% endblock %}
