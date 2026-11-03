@@ -197,8 +197,11 @@ def test_f61_erratum_facts_hold_in_data():
     assert not failures
     unknown = sum(r["provenance"]["unknown"] for r in rows)
     total = sum(r["size_fields"] for r in rows)
-    assert f"{unknown}/{total}" == "107/469", \
-        f"出处计数漂成 {unknown}/{total}——勘误第 3 条的口径要跟着对齐"
+    assert f"{unknown}/{total}" == "0/469", \
+        f"出处计数漂成 {unknown}/{total}——勘误第 4 条的口径要跟着对齐"
+    # 推定类单独成桶：纯推定项有出处，但必须与官方/实测区分开、可追踪复核
+    assert sum(r["provenance"]["inferred"] for r in rows) == 26, \
+        "inferred 桶漂移——勘误第 4 条的推定计数要跟着对齐"
 
 
 # ---------------------------------------------------------------- F62
@@ -289,3 +292,41 @@ def test_readmeit_italic_loss_disclosed():
     bullet = m.group(0).split("\n- ")[0]
     assert "重排后的条目为纯文本" in bullet and "斜体（如英文刊名）不保留" in bullet, \
         f"已知限制未声明重排条目的斜体损失：{bullet[-120:]}"
+
+
+# ---------------------------------------------------------------- PROVCLS
+
+def test_size_provenance_classes():
+    """字号出处四级判定的契约（2026-11-04 P1 闭合时落地）。
+
+    - official：出处文本含官方词（模板/体例/指南/…）且无实测词
+    - official+measured：两者都在（互证或冲突并存，如「体例 9pt、成品 10.3pt」）
+    - measured：measured 块 / *_source 写实测
+    - inferred：纯「推定」标记（不含官方/实测词）也算有出处，但单独成桶
+    - font_size_source 与 font_size_pt_source 一样被认（gjjryj 在用的拼写）
+    """
+    sys.path.insert(0, str(TOOLS))
+    import audit_rulesets as ar
+
+    R = {
+        "typography": {
+            "a": {"size_pt": 10.5, "source": "官方模板：正文五号"},
+            "b": {"size_pt": 9.0, "note": "推定：按五号处理"},
+            "c": {"size_pt": 12.0, "source": "体例明文五号；成品读数 11.8 相符"},
+            "d": {"size_pt": 10.0, "measured": {"line_pt": 15.2}},
+            "e": {"size_pt": 7.5, "size_source": "实测：表注读数 7.2"},
+            "f": {"font_size_pt": 9.0, "font_size_source": "推定：暂按正文五号处理"},
+            "g": {"size_pt": 11.0},
+            "h": {"size_pt": 12.0, "source": "推定：官方未规定此项"},
+        },
+    }
+    P = ar.size_provenance
+    assert P(R, ("typography", "a", "size_pt")) == "official"
+    assert P(R, ("typography", "b", "size_pt")) == "inferred"
+    assert P(R, ("typography", "c", "size_pt")) == "official+measured"
+    assert P(R, ("typography", "d", "size_pt")) == "measured"
+    assert P(R, ("typography", "e", "size_pt")) == "measured"
+    assert P(R, ("typography", "f", "font_size_pt")) == "inferred"
+    assert P(R, ("typography", "g", "size_pt")) == "unknown"
+    # 「推定」与官方词并存时按现有优先级归 official（历史行为，不悄悄翻类）
+    assert P(R, ("typography", "h", "size_pt")) == "official"

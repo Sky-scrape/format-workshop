@@ -196,7 +196,8 @@
       "size_pt": 10.5,
       "line_spacing": {
         "mode": "exact",
-        "value_pt": 17.0
+        "value_pt": 17.0,
+        "source": "实测：行距固定 17pt（typography.body.measured.line_pt，3 篇一致）"
       },
       "first_line_indent_chars": 2,
       "align": "both",
@@ -237,7 +238,8 @@
       "label_font_cn": "黑体",
       "line_spacing": {
         "mode": "exact",
-        "value_pt": 15
+        "value_pt": 15,
+        "source": "实测：行距 15pt（typography.abstract.note：实测 9pt、行距 15pt）"
       },
       "measured": true,
       "note": "实测 9pt、行距 15pt；标签「内容提要：」为黑体，正文为宋体"
@@ -248,7 +250,8 @@
       "size_pt": 9,
       "line_spacing": {
         "mode": "exact",
-        "value_pt": 15
+        "value_pt": 15,
+        "source": "实测：行距 15pt，与摘要行距一致（typography.abstract.note）"
       },
       "measured": true,
       "note": "整行黑体 9pt（含关键词文字），与摘要行距一致"
@@ -282,7 +285,8 @@
       "size_pt": 9,
       "line_spacing": {
         "mode": "exact",
-        "value_pt": 15
+        "value_pt": 15,
+        "source": "实测：行距 15pt，与中文摘要区一致（typography.abstract.note）"
       },
       "measured": true,
       "note": "标签 Abstract: 加粗，正文常规"
@@ -294,7 +298,8 @@
       "line_spacing": {
         "mode": "exact",
         "value_pt": 12.5,
-        "size_pt_raw": 12.3
+        "size_pt_raw": 12.3,
+        "source": "实测：行距 12.3pt（size_pt_raw），归整半磅取 12.5（typography.references.note）"
       },
       "measured": true,
       "note": "实测 7.5pt、行距 12.3pt；中文条目为仿宋，外文为 Times New Roman"
@@ -314,7 +319,8 @@
       "line_spacing": {
         "mode": "exact",
         "value_pt": 12.5,
-        "size_pt_raw": 12.3
+        "size_pt_raw": 12.3,
+        "source": "实测：行距 12.3pt（size_pt_raw），归整半磅取 12.5"
       },
       "heading_align": "left",
       "heading_indent_chars": 2,

@@ -45,6 +45,9 @@ COMMON_BLOCKS = [
 
 OFFICIAL_MARKERS = ("官方", "明文", "模板", "体例", "指南", "须知", "规范", "稿约")
 MEASURED_MARKERS = ("实测", "measured", "成品", "实物")
+# 纯推定标记（不含官方/实测词）也算有出处——docstring 的「source / measured /
+# 推定标记」三分口径在此落地；单独计成 inferred 桶，便于追踪待复核项。
+INFERRED_MARKERS = ("推定", "inferred")
 
 # headings 的已知键（levelN 按「level+数字」通配）。规则集里出现未知键一律
 # warning：键写错了没有任何效果，死键与拼写漂移就是这么混进来的（F60，
@@ -120,7 +123,11 @@ def get_path(node, path):
 
 
 def size_provenance(rules, path):
-    """判断某个字号值的出处等级：official / measured / inferred / unknown。"""
+    """判断某个字号值的出处等级：official / measured / inferred / unknown。
+
+    推定（inferred）在这里落地：纯「推定」标记（不含官方/实测词）的字段
+    不再计成无出处，但单独成桶，便于与已核实项区分、追踪复核。
+    """
     parent_path = path[:-1]
     try:
         parent = get_path(rules, parent_path)
@@ -130,16 +137,20 @@ def size_provenance(rules, path):
         return "unknown"
     text = " ".join(
         str(parent.get(k) or "") for k in ("source", "note", "size_source",
-                                           "caption_size_source", "font_size_pt_source")
+                                           "caption_size_source", "font_size_pt_source",
+                                           "font_size_source")
     )
     has_official = any(m in text for m in OFFICIAL_MARKERS)
     has_measured = bool(parent.get("measured")) or any(m in text for m in MEASURED_MARKERS)
+    has_inferred = any(m in text for m in INFERRED_MARKERS)
     if has_official and not has_measured:
         return "official"
     if has_official and has_measured:
         return "official+measured"
     if has_measured:
         return "measured"
+    if has_inferred:
+        return "inferred"
     return "unknown"
 
 
@@ -155,7 +166,8 @@ def audit_one(path: Path):
                  walk_string_sizes({k: rules.get(k) for k in
                                     ("typography", "headings", "tables", "figures", "numbering")})]
     off_grid = []
-    prov = {"official": 0, "official+measured": 0, "measured": 0, "unknown": 0}
+    prov = {"official": 0, "official+measured": 0, "measured": 0,
+            "inferred": 0, "unknown": 0}
     for sub_path, val in sizes:
         if abs(val * 2 - round(val * 2)) > 1e-9:
             off_grid.append((".".join(str(p) for p in sub_path), val))
@@ -221,12 +233,13 @@ def render_md(rows):
            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         prov = r["provenance"]
-        known = prov["official"] + prov["official+measured"] + prov["measured"]
+        known = (prov["official"] + prov["official+measured"]
+                 + prov["measured"] + prov["inferred"])
         out.append(
             f"| {r['name']}（{r['id']}） | {r['status']} | {r['authority'] or '—'} | "
             f"{'有' if r['has_official_source'] else '无'} | {r['size_fields']} | "
             f"{len(r['off_grid'])} | {len(r['string_sizes'])} | {known}/{r['size_fields']} | "
-            f"{prov['measured']} | {len(r['missing_blocks'])} | "
+            f"{prov['measured'] + prov['inferred']} | {len(r['missing_blocks'])} | "
             f"{len(r['stale_artifacts'])} | {len(r['warnings'])} |"
         )
     return "\n".join(out)

@@ -50,7 +50,8 @@
     "表注层序（注在前、资料来源在后）：三篇论文中仅一篇含表注，样本不足，按常见惯例处理",
     "中图分类号与文献标识码：须知未提及，但三篇已发表论文均含「中图分类号＋文献标识码＋文章编号」四件套，据此列为必备",
     "正文字号实测为 9.9pt，疑因 PDF 整体缩放约 1%，规则集按 10pt 记录",
-    "页边距为已发表实物估算值，未见官方明文（2026-11-01 体检认定），实测原值 26.7/26.0/30.0/29.0"
+    "页边距为已发表实物估算值，未见官方明文（2026-11-01 体检认定），实测原值 26.7/26.0/30.0/29.0",
+    "图注字号：三篇样本均无图注实例，按表注 7.5pt（六号）同号处理"
   ],
   "blocks": [
     {
@@ -165,7 +166,8 @@
       "size_pt": 10,
       "line_spacing": {
         "mode": "exact",
-        "value_pt": 15.5
+        "value_pt": 15.5,
+        "source": "实测：三篇论文行距 15.2–16.4pt，三篇一致取 15.5pt（typography.body.measured.line_pt）"
       },
       "first_line_indent_chars": 2,
       "align": "both",
@@ -201,9 +203,10 @@
     "title_en": {
       "font_cn": "黑体",
       "font_latin": "Times New Roman",
-      "size_pt": 14,
+      "size_pt": 16,
       "bold": true,
-      "align": "center"
+      "align": "center",
+      "source": "实测：三篇样本文末英文标题 16pt（作者行 14pt）；原记 14pt 系误取作者行字号，2026-11-04 更正"
     },
     "abstract": {
       "font_cn": "楷体",
@@ -224,7 +227,8 @@
     },
     "footnote": {
       "font_cn": "宋体",
-      "size_pt": 9
+      "size_pt": 7.5,
+      "source": "实测：首页脚注 7.5pt（基金项目行，三篇一致）；原记 9pt 系误录，2026-11-04 更正"
     }
   },
   "headings": {
@@ -331,7 +335,8 @@
         "position": "below",
         "align": "left",
         "font_cn": "宋体",
-        "size_pt": 7.5
+        "size_pt": 7.5,
+        "source": "实测：表注 7.5pt（六号），三篇一致（tables.note_order_note、verification.cross_check.confirmed）"
       },
       {
         "kind": "source",
@@ -340,7 +345,8 @@
         "position": "below_general",
         "align": "left",
         "font_cn": "宋体",
-        "size_pt": 7.5
+        "size_pt": 7.5,
+        "source": "实测：表注 7.5pt（六号），三篇一致（tables.note_order_note、verification.cross_check.confirmed）"
       }
     ],
     "note_order_note": "表注字号实测为 7.5pt（六号）；层序为推定值",
@@ -361,7 +367,8 @@
         "position": "below_caption",
         "align": "left",
         "font_cn": "宋体",
-        "size_pt": 7.5
+        "size_pt": 7.5,
+        "source": "推定：三篇样本均无图注实例，按表注 7.5pt 同号处理（见 assumptions）"
       },
       {
         "kind": "source",
@@ -370,10 +377,12 @@
         "position": "below_general",
         "align": "left",
         "font_cn": "宋体",
-        "size_pt": 7.5
+        "size_pt": 7.5,
+        "source": "推定：三篇样本均无图注实例，按表注 7.5pt 同号处理（见 assumptions）"
       }
     ],
-    "prefer_vector": true
+    "prefer_vector": true,
+    "caption_size_source": "实测：图题 9pt 黑体（样本「图 1」题注，三篇一致；论文A/B/C 均核）"
   },
   "limits": {
     "total": {
