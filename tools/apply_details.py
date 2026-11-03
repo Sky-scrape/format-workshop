@@ -26,6 +26,11 @@ from docx.oxml.ns import qn
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
 
+# embeddable Python（_pth 模式）不会把脚本所在目录放进 sys.path——
+# 这是它和常规解释器唯一的行为差异，绿色包里所有同目录 import 都会
+# 因此失败。显式挂上，两种启动方式行为一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from docx_meta import sanitize_docx
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"

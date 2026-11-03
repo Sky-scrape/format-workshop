@@ -10,20 +10,15 @@
 import re
 
 import pytest
-from docx import Document
 
-from conftest import RULES, run_tool
+from conftest import RULES, minimal_doc, run_tool
 
 
 def build_doc(path, title="数字金融发展与企业融资约束",
               abstract="内容提要：本文考察数字金融对企业融资约束的影响。",
               keywords="关键词：数字金融；融资约束；企业创新"):
-    doc = Document()
-    doc.add_paragraph(title)
-    doc.add_paragraph(abstract)
-    doc.add_paragraph(keywords)
-    doc.add_paragraph("正文段落。")
-    doc.save(str(path))
+    minimal_doc(path, title=title, abstract=abstract, keywords=keywords,
+                extra_paragraphs=["正文段落。"])
     return path
 
 

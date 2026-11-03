@@ -7,33 +7,23 @@ AI 使用声明（6 本必填）。作者不会自己知道「这本刊要 AI �
 只做 C 档：列出要求，判断稿件里提没提到，不代写、不代补。
 """
 
-import json
 import re
 
 import pytest
-from docx import Document
 
-from conftest import RULES, run_tool
+from conftest import RULES, minimal_doc, mutated_rules, run_tool
 
 
 def build_doc(path, extra=None):
-    doc = Document()
-    doc.add_paragraph("数字金融与企业融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融对企业融资约束的影响。")
-    doc.add_paragraph("关键词：数字金融；融资约束；企业创新")
-    doc.add_paragraph("正文段落。")
-    for line in (extra or []):
-        doc.add_paragraph(line)
-    doc.save(str(path))
+    minimal_doc(path, title="数字金融与企业融资约束",
+                abstract="内容提要：本文考察数字金融对企业融资约束的影响。",
+                keywords="关键词：数字金融；融资约束；企业创新",
+                extra_paragraphs=["正文段落。", *(extra or [])])
     return path
 
 
 def alt_rules(tmp_path, name, statements):
-    rules = json.loads((RULES / "tjyj.json").read_text(encoding="utf-8"))
-    rules["statements"] = statements
-    path = tmp_path / name
-    path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
-    return path
+    return mutated_rules(tmp_path, "tjyj", name, statements=statements)
 
 
 def report(tmp_path, docx_path, rules_path, out_name="triage.html"):

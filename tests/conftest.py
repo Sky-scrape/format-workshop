@@ -31,6 +31,10 @@ RULES = ROOT / "rules" / "journal"
 SOURCE_JOURNAL = "gjjryj"  # 国际金融研究
 TARGET_JOURNAL = "tjyj"    # 统计研究
 
+# 入库示例刊（F58 收口：原先 test_audit_traceable / test_manuscript_matrix
+# 各抄一份）。换刊矩阵、规则引用全库测试都只跑这三本——其余刊不入库，CI 没有。
+SHIPPED_JOURNALS = ["cjyj", "tjyj", "gjjryj"]
+
 
 def run_tool(script, *args):
     """调 tools/ 下的命令行脚本；失败时把尾部输出带进异常，便于定位。"""
@@ -61,6 +65,54 @@ def body_texts(docx_path):
     return out
 
 
+def minimal_doc(path, title="数字金融与企业融资约束",
+                abstract="内容提要：本文考察数字金融对企业融资约束的影响。",
+                keywords=None, extra_paragraphs=()):
+    """最小稿件的公共骨架（F58）：标题＋摘要（＋关键词），再逐段追加附加段落。
+
+    各承诺测试起稿的两三段原先各抄一份，这里收成一个入口。文字全部由调用方
+    逐字给定（本函数不悄悄换任何字）；keywords 为 None 表示这一版没有关键词段。
+    需要拿到段落实体续造的（脚注引用、公式、图片），拿返回的 Document 接着
+    add_paragraph、再 save 一次即可。骨架顺序固定为标题→摘要→关键词→附加段——
+    匿名稿那类「作者行必须排第二段」的稿件不适用（front_matter 按位置判定，
+    只有第一段保留，见 tools/anonymize.py 的 fm_seen 逻辑），保持手拼。
+    """
+    doc = Document()
+    doc.add_paragraph(title)
+    doc.add_paragraph(abstract)
+    if keywords is not None:
+        doc.add_paragraph(keywords)
+    for line in extra_paragraphs:
+        doc.add_paragraph(line)
+    doc.save(str(path))
+    return doc
+
+
+def mutated_rules(tmp_path, base, name="mutated.json", **keys):
+    """复制一份入库规则集、按点路径改键，落到 tmp 下（F58）。
+
+    「复制 tjyj 改一键」在承诺测试里有六处，各自 load→改→dump。收成入口后：
+    base 是 rules/journal 下的刊 id；keys 的键名是点路径（"citation.system"），
+    数值段表示列表下标（"headings.levels.1"），值为 None 表示整键删除。
+    只动点名的键，其余逐字保留原刊内容——值与出处都不碰。
+    """
+    rules = json.loads((RULES / f"{base}.json").read_text(encoding="utf-8"))
+    for dotted, value in keys.items():
+        parts = dotted.split(".")
+        node = rules
+        for part in parts[:-1]:
+            node = node[int(part)] if isinstance(node, list) else node.setdefault(part, {})
+        if isinstance(node, list):
+            node[int(parts[-1])] = value
+        elif value is None:
+            node.pop(parts[-1], None)
+        else:
+            node[parts[-1]] = value
+    path = Path(tmp_path) / name
+    path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 # ---- 白名单口径（DESIGN §4.1 的实现口径，2026-11-02）----
 # 渲染器真正落地的字符级归一只有：段首缩进删除（N-01 段首＋N-08，只对
 # body/abstract/keywords）；标题编号前缀按规则集重写、未编号节的标题文字整段
@@ -71,9 +123,17 @@ INDENT_LEADING_TYPES = {"body", "abstract", "keywords"}
 HEADING_TYPES = {"heading1", "heading2", "heading3"}
 CAPTION_TYPES = {"table_caption", "figure_caption"}
 
-HEADING_NUMBER_PREFIXES = (re.compile(r"^[一二三四五六七八九十]{1,3}、"),
-                           re.compile(r"^[（(][一二三四五六七八九十]{1,3}[）)]"),
-                           re.compile(r"^\d{1,2}(?:\.\d{1,2})*[.．]?"))
+# 编号前缀的合法形态（23 本规则库实有的体例，F43 全库矩阵补齐）：中文数字＋
+# 顿号（一、）、中文数字加括号（（一））、阿拉伯数字加括号（（1）——ciejournal/
+# jjgl/nkglpl 的三级体例）、中文数字＋空白分隔（「一　」——sjjj 的一级体例）、
+# 阿拉伯数字加点（1.／1.2.）。空白分隔形态要求分隔符处真有空白，否则「一带一路
+# 研究」这类以数字开头的标题会被剥掉第一个字；括号与点号两侧的空白可容忍
+# （剥前缀在塌缩留白之前进行，见 normalize）。
+HEADING_NUMBER_PREFIXES = (re.compile(r"^[一二三四五六七八九十]{1,3}\s*[、]"),
+                           re.compile(r"^[（(]\s*[一二三四五六七八九十]{1,3}\s*[）)]"),
+                           re.compile(r"^[（(]\s*\d{1,2}\s*[）)]"),
+                           re.compile(r"^[一二三四五六七八九十]{1,3}\s+"),
+                           re.compile(r"^\d{1,2}(?:\s*[.．]\s*\d{1,2})*[.．]?"))
 CAPTION_PREFIX = re.compile(r"^(表|图)\s*\d+")
 REF_NUMBER_PREFIX = re.compile(
     r"^\s*[\[［〔【(（]?\s*\d{1,3}\s*[\]］〕】)）]?\s*[.．、]?\s*")
@@ -93,9 +153,13 @@ def normalize(text, btype=""):
     if btype in INDENT_LEADING_TYPES:
         s = s.lstrip("\t \u3000")
     if btype in HEADING_TYPES:
-        s = re.sub(r"\s+", "", s.strip())
+        # 先剥编号前缀、再塌留白（F43）：编号与标题之间的空白是分隔符
+        # （「一　文献综述」），先塌缩会把编号粘进标题，前缀就再也剥不下来；
+        # 剥完剩下的空白才是版式，按原口径塌平。
+        s = s.strip()
         for pat in HEADING_NUMBER_PREFIXES:
-            s = pat.sub("", s)
+            s = pat.sub("", s).strip()
+        s = re.sub(r"\s+", "", s)
     elif btype in CAPTION_TYPES:
         s = CAPTION_PREFIX.sub("", s.strip()).strip()
     elif btype == "reference_item":
@@ -103,7 +167,7 @@ def normalize(text, btype=""):
     return s
 
 
-def content_of(text, btype):
+def content_of(text, btype, label=None):
     """标签块只比对冒号之后的正文。
 
     「内容摘要：」→「摘  要：」这类属于标签归一（B 档，规则集明确定义），改的是
@@ -112,11 +176,18 @@ def content_of(text, btype):
     冒号要同时认半角——真实稿件里「内容摘要:」很常见，标签归一顺带把它改成全角，
     这是允许的，不该被判成改字。
 
+    label 是目标刊规则集 blocks[type].zh.label 的值（F43：与渲染器读同一字段，
+    守卫不硬编码标签样式——承诺④）。它整段替换源稿标签且可以不带冒号
+    （「【摘要】」「内容提要　」「关  键  词　」），冒号启发式够不着，所以
+    前缀对得上时直接剥；对不上（源稿是投稿人自己的标签）时退回冒号口径。
+
     文献表标题是纯标签（「参考文献」本身没有正文），一律比对为空——它改成
     「参考文献：」属于 `文献表标题归一`，有独立审计条目管着。
     """
     if btype not in ("abstract", "keywords", "references_heading"):
         return text
+    if label and btype != "references_heading" and text.startswith(label):
+        return text[len(label):]
     m = re.search(r"[:：]", text)
     # 标签很短（"内容摘要:" 6 个字），指望号出现在前 12 个字内才算标签分隔
     if m and m.start() <= 12:
@@ -138,17 +209,19 @@ def keyword_terms(body, sep=None):
     return [t for t in re.split(pattern, body or "") if t.strip()]
 
 
-def signature(text, btype, kw_sep=None):
+def signature(text, btype, kw_sep=None, label=None):
     """块的可比对指纹。
 
     关键词单独处理：分隔符从全角空格换成「；」属于规则集定义的归一
     （`关键词分隔符归一`），所以按目标刊的分隔符口径拆成词条再比，词条
     本身逐字比（kw_sep 是目标刊 blocks:keywords/zh/separator 的值）。
 
+    标签块按目标刊规则集的 label 剥标签（F43，见 content_of）。
+
     参考文献条目剥掉编号前缀（见 normalize）：`[1]`→`〔1〕` 这类改写法属
     N-07 白名单，但条目正文必须逐字不变，所以只比前缀之后的部分。
     """
-    body = content_of(text, btype)
+    body = content_of(text, btype, label)
     if btype == "keywords":
         return tuple(normalize(t) for t in keyword_terms(body, kw_sep))
     return (normalize(body, btype),)
@@ -172,12 +245,15 @@ def sample_docx(tmp_path_factory):
 class Pipeline:
     """一次「解析 → 渲染 → 审计」的结果，以及常用派生数据。"""
 
-    def __init__(self, workdir, docx, audit, ir, keyword_sep=None):
+    def __init__(self, workdir, docx, audit, ir, keyword_sep=None, labels=None):
         self.dir = workdir
         self.docx = docx
         self.audit = audit
         self.ir = ir
         self.keyword_sep = keyword_sep
+        # 目标刊规则集的标签（blocks[type].zh.label，F43）：标签归一把源稿标签
+        # 整段换成这个值，守卫比对时按它剥标签（content_of）。
+        self.labels = labels or {}
         self.items = audit.get("items", [])
         self.source_texts = body_texts(workdir / "manuscript.docx")
         self.output_texts = body_texts(docx)
@@ -237,6 +313,9 @@ def render_into(workdir, source_docx, target=TARGET_JOURNAL, rejects=None, rules
     rules = json.loads(Path(ruleset).read_text(encoding="utf-8"))
     kw_sep = next((b.get("separator") for b in rules.get("blocks", [])
                    if b.get("type") == "keywords" and b.get("lang") == "zh"), None)
+    labels = {b["type"]: b["label"] for b in rules.get("blocks", [])
+              if b.get("lang") == "zh" and b.get("type") in ("abstract", "keywords")
+              and b.get("label")}
     cmd = ["render_from_ir.py", d / "manuscript.ir.json", ruleset, "-o", outdocx]
     if rejects:
         (d / "reject.json").write_text(
@@ -250,7 +329,7 @@ def render_into(workdir, source_docx, target=TARGET_JOURNAL, rejects=None, rules
     return Pipeline(d, outdocx,
                     json.loads(audit_path.read_text(encoding="utf-8")),
                     json.loads((d / "manuscript.ir.json").read_text(encoding="utf-8")),
-                    keyword_sep=kw_sep)
+                    keyword_sep=kw_sep, labels=labels)
 
 
 NS_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -328,6 +407,38 @@ def unaudited_changes(p):
     return sorted(p.changed_idx - recorded - note_reorder_blocks(p))
 
 
+def text_snapshot_violations(p):
+    """审计「文字快照」登记的双向对账（F54），返回问题清单。
+
+    TEXT_ACTIONS 登记了会真正改写文字的动作，承诺测试对它们做逐字校验；旧的
+    版式条目测试是同义反复（用 before/after 为空筛条目、再断言 before/after
+    为空），真正的静默缺口在反方向：渲染器新增改文字动作而没登记进
+    TEXT_ACTIONS 时，逐字校验整类漏掉。这里双向对账：
+
+    - 已登记（TEXT_ACTIONS ∪ 引用改写，后者另有 rule 对账）的条目必须带
+      非空 before/after；
+    - 未登记的条目不得携带「与源稿/成品逐字一致」的快照对——新文字动作
+      未登记即红，逼它先进 TEXT_ACTIONS 再谈逐字。
+
+    版式条目记录的格式目标值（悬挂缩进的「2.3 字符」）与层序名词（表注／图注
+    层序调整的「source / general」）不是文字快照，不在后一条之列。
+    """
+    registered = TEXT_ACTIONS | set(CITATION_REWRITE_RULES)
+    bad = []
+    for it in p.items:
+        action = (it.get("action") or "").strip()
+        before, after = it.get("before") or "", it.get("after") or ""
+        idx = it.get("idx")
+        if action in registered:
+            if not before or not after:
+                bad.append((it.get("id"), action, "登记为文字动作，快照却缺了半边"))
+        elif (before and after
+              and before == p.source_texts.get(idx)
+              and after == p.output_texts.get(idx)):
+            bad.append((it.get("id"), action, "携带逐字文字快照却未登记进 TEXT_ACTIONS"))
+    return bad
+
+
 def whitelist_violations(p):
     """超出白名单的文字改动 [(idx, 块类型, before, after)]。
 
@@ -338,8 +449,10 @@ def whitelist_violations(p):
     offenders = []
     for idx in sorted(p.changed_idx - note_reorder_blocks(p)):
         btype = p.block_type.get(idx, "")
-        if (signature(p.source_texts[idx], btype, getattr(p, "keyword_sep", None))
-                == signature(p.output_texts[idx], btype, getattr(p, "keyword_sep", None))):
+        label = getattr(p, "labels", {}).get(btype)
+        if (signature(p.source_texts[idx], btype, getattr(p, "keyword_sep", None), label)
+                == signature(p.output_texts[idx], btype, getattr(p, "keyword_sep", None),
+                             label)):
             continue
         if idx in exempt:
             continue
@@ -358,7 +471,8 @@ def fingerprint_delta(p, exclude=frozenset()):
     sep = getattr(p, "keyword_sep", None)
 
     def prints(texts):
-        return Counter(signature(t, p.block_type.get(i, ""), sep)
+        return Counter(signature(t, p.block_type.get(i, ""), sep,
+                                 getattr(p, "labels", {}).get(p.block_type.get(i, "")))
                        for i, t in texts.items() if i not in exclude)
 
     before, after = prints(p.source_texts), prints(p.output_texts)

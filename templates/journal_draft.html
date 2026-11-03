@@ -28,6 +28,9 @@ td.q em{color:#8a6626;font-style:normal;background:var(--gold-bg);padding:1px 4p
 .flash.good{background:var(--accent-soft);border:1px solid #cfe3d9;color:var(--accent)}
 ul.plain{margin:0;padding-left:18px;font-size:11.5px;line-height:1.9;color:var(--ink2)}
 details summary{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:10px}
+.badge{display:inline-block;min-width:14px;text-align:center;font-size:10px;font-weight:600;
+color:var(--gold);background:var(--gold-bg);border-radius:999px;padding:1px 7px;margin:0 4px;
+vertical-align:1px}
 .publish{display:flex;gap:12px;align-items:flex-start;font-size:12px;line-height:1.8;margin-bottom:14px}
 .publish input{margin-top:3px;accent-color:var(--accent);width:16px;height:16px}
 .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -120,12 +123,15 @@ details summary{cursor:pointer;font-size:12px;color:var(--accent);margin-bottom:
 
   <div class="card">
     <details>
-      <summary>{{ inherited|length }} 项未从稿约抽到，逐字段沿用结构基线《{{ ext.baseline or '基线刊' }}》</summary>
+      <summary>{{ inherited|length }} 项未从稿约抽到，逐字段沿用结构基线《{{ ext.baseline or '基线刊' }}》
+        <span class="badge">{{ inherited|length }}</span>
+        （事实字段 {{ inherited|selectattr('fact')|list|length }} 项 +
+        结构字段 {{ inherited|rejectattr('fact')|list|length }} 项，按区块折叠，逐条可达）</summary>
       <p class="hint">下面是基线规则集里全部未被本次抽取覆写的字段——不只是上面的事实键，还包括 blocks
         区块清单、statements 声明、personal_fields、表格边框等。它们只保证产物能渲染，不代表本刊。发布前请按区块逐组过一遍。</p>
       {% for section, items in inherited|groupby('section') %}
       <details {{ 'open' if inherited|length < 12 }}>
-        <summary>{{ section }} · {{ items|length }} 项 ← 来自基线刊</summary>
+        <summary>{{ section }} <span class="badge">{{ items|length }}</span> ← 来自基线刊</summary>
         <table>
           <thead><tr><th>字段</th><th>当前值</th></tr></thead>
           <tbody>

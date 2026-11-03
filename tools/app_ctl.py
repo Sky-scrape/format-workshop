@@ -60,14 +60,24 @@ def spawn_keepalive():
     )
 
 
-def run_ps1(name, *args):
+def run_ps1_full(name, *args):
+    """跑 tools/ 下的 PowerShell 脚本，返回 (stdout, 退出码)。
+
+    kill_by_cmdline.ps1 的约定：无匹配进程时 exit 1 且无输出。stop() 需要
+    真实退出码才能如实报「未找到匹配进程」，不能拿空输出当成功（F48）。
+    """
     cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-File", str(TOOLS / name), *args]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=60).stdout
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60)
+        return r.stdout, r.returncode
     except Exception:                       # noqa: BLE001
-        return ""
+        return "", 1
+
+
+def run_ps1(name, *args):
+    return run_ps1_full(name, *args)[0]
 
 
 def start(open_browser=True):
@@ -92,11 +102,21 @@ def start(open_browser=True):
 
 def stop():
     print("正在停止格式工坊……")
-    if run_ps1("kill_by_cmdline.ps1", "-Pattern", "keepalive", "-Quiet").strip() == "":
-        pass
-    print("  守护进程已处理")
-    run_ps1("kill_by_cmdline.ps1", "-Pattern", r"app\.py", "-Quiet")
-    print("  服务进程已处理")
+    for label, pattern in (("守护进程", "keepalive"), ("服务进程", r"app\.py")):
+        # -Root 把匹配限定在本仓库路径：命令行里带 app.py 字样的**别的项目**
+        # python 进程不再被误杀（F48）。ps1 无匹配 exit 1，如实报「未找到」，
+        # 不再像旧版那样无论成败都打印「已处理」。
+        out, rc = run_ps1_full("kill_by_cmdline.ps1", "-Pattern", pattern,
+                               "-Root", str(ROOT))
+        killed = [ln.split()[1] for ln in out.splitlines()
+                  if ln.strip().startswith("killed ")]
+        if killed:
+            print(f"  {label}已停止（pid {'、'.join(killed)}）")
+        elif rc == 0:
+            # 找到了进程但结束失败，ps1 的 failed 行带着原因
+            print(f"  {label}结束失败：{out.strip()}")
+        else:
+            print(f"  {label}未找到匹配进程")
     time.sleep(1)
     if port_alive():
         # 兜底：还有监听者就直接按端口结束

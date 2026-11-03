@@ -215,14 +215,14 @@ def test_alphabetical_scheme_sorts_by_full_text():
     assert rf.sort_key(e_adams, "alphabetical")[0] < rf.sort_key(e_wang, "alphabetical")[0]
 
 
-def test_cn_alphabet_scheme_uses_name_codepoint_order():
-    """cn-first-by-alphabet 类：中文组(0)在前、组内按码位字母序；英文组(1)在后。"""
+def test_cn_alphabet_scheme_uses_gb_pinyin_order():
+    """cn-first-by-alphabet 类：中文组(0)在前、组内按 GB 近似拼音序；英文组(1)在后。"""
     e_zhou = {"authors": ["周一"], "year": "2021", "lang": "cn", "raw": REF_ZHOU}
     e_zhang = {"authors": ["张三"], "year": "2020", "lang": "cn", "raw": REF_ZHANG}
     e_en = {"authors": ["Adams J"], "year": "2019", "lang": "en", "raw": ""}
     keys = [rf.sort_key(e, "cn-first-by-alphabet-then-en-by-alphabet")
             for e in (e_zhou, e_zhang, e_en)]
-    assert keys[0] < keys[1]               # 周 U+5468 < 张 U+5F20
+    assert keys[1] < keys[0], "张三（zhang）应排在周一（zhou）前，而非按 Unicode 码位排序"
     assert keys[0][0] == 0 and keys[2][0] == 1
 
 

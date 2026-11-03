@@ -181,13 +181,17 @@ def _break_ir(d):
     (d / "manuscript.ir.json").write_text("{ 这不是 JSON", encoding="utf-8")
 
 
-def test_failed_rerender_keeps_deliverables(client, delivered_job):
+def test_failed_rerender_keeps_deliverables(app_module, client, delivered_job, monkeypatch):
     """复现 F36：重渲染失败后，旧成品与审计必须原封不动，结果页仍可下载。"""
     d = delivered_job
     docx_before = (d / "manuscript.tjyj.docx").read_bytes()
     audit_before = (d / "manuscript.tjyj.audit.json").read_bytes()
-    _break_ir(d)
 
+    def fail_render(_args):
+        # 不能再靠破坏 IR 注入失败：details 现在会先识别截断 IR 并自动重解析。
+        raise app_module.ConvertError("渲染失败", "测试注入的故障")
+
+    monkeypatch.setattr(app_module, "run", fail_render)
     r = client.post(f"/job/{d.name}/details", data={})
     assert r.status_code == 200, "失败要走错误页，而不是 500"
 

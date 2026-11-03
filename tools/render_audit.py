@@ -15,7 +15,15 @@ import json
 import re
 from pathlib import Path
 
+import sys
+
+# embeddable Python（_pth 模式）不会把脚本所在目录放进 sys.path——
+# 这是它和常规解释器唯一的行为差异，绿色包里所有同目录 import 都会
+# 因此失败。显式挂上，两种启动方式行为一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from report_theme import BASE
+import assume_groups
 
 KIND = {
     "页面设置": "A",
@@ -34,8 +42,8 @@ KIND = {
     "参考文献缩进": "A",
     "补录块套版": "A",
     "图片段解除固定行距": "A",
+    "图片段套版": "A",
     "公式段行距": "A",
-    "公式（伪表格）原样保留": "A",
     "脚注正文套版": "A",
     "表格重设为三线表": "A",
     "参考文献悬挂缩进": "A",
@@ -51,7 +59,10 @@ KIND = {
     "正文引用改作者-年份": "B",
     "条目按目标刊体例重排": "B",
     "文献表排序": "A",
-    # 说明条目（N 档）：渲染器只写了 note，before/after 为空，什么都没改
+    # 说明条目（N 档）：什么都没改，只说明「这里我看过了、为什么不动」
+    "公式（伪表格）原样保留": "N",
+    "含域，文字未改": "N",
+    "条目重排（含域，已跳过）": "N",
     "引用体系转换（已跳过）": "N",
     "编号样文本未转换": "N",
 }
@@ -103,6 +114,11 @@ def render(d, job=None):
     items = d["items"]
     for it in items:
         it["grade"] = KIND.get(it["action"], "A")
+        # 渲染器显式标了 changed=False 的，一律按说明条目处理。
+        # KIND 是动作名白名单，漏登一个新动作就会把「没改」算成「改了」；
+        # changed 是渲染器亲手写的权威口径，优先于查表。
+        if it.get("changed") is False:
+            it["grade"] = "N"
 
     # N 档是说明条目（转换跳过的原因、可疑编号样文本的提示）：什么都没改，
     # 不计入「共 N 处调整」与 A/B 档 KPI——把「跳过」算成一处调整，
@@ -117,6 +133,41 @@ def render(d, job=None):
                              and it["before"] != it["after"])]
 
     n_rejected = sum(1 for it in items if it.get("rejected"))
+    # 覆盖率：只列改动项，用户无从判断「没改的块是看过还是漏了」。
+    # 核对数、改动数、本来就合规数三个一起给，报告才谈得上可审计。
+    checked = d.get("checked_blocks")
+    changed_b = d.get("changed_blocks")
+    cov_bits = []
+    if checked:
+        cov_bits.append(f"逐块核对 <b>{checked}</b> 个块")
+        if changed_b is not None:
+            cov_bits.append(f"其中 <b>{changed_b}</b> 个块有改动")
+            noop = max(checked - changed_b, 0)
+            if noop:
+                cov_bits.append(f"<b>{noop}</b> 个块本来就合规、未改动")
+    if note_items:
+        cov_bits.append(f"另有 <b>{len(note_items)}</b> 条说明项，未计为改动")
+    coverage_html = f'<p class="cov">{" · ".join(cov_bits)}</p>' if cov_bits else ""
+
+    # 域提示：文献管理域是「文字不归本工具改」的区域，必须让用户看见边界。
+    # 不然他发现文献表没被重排，只会以为工具漏了。
+    fld = d.get("fields") or {}
+    field_html = ""
+    if fld.get("total"):
+        kinds = fld.get("by_kind") or {}
+        KIND_ZH = {"citation": "文献管理域", "seq": "自动编号域",
+                   "ref": "交叉引用域", "toc": "目录域", "page": "页码域",
+                   "eq": "公式域", "date": "日期域", "other": "其他域"}
+        desc = "、".join(f"{KIND_ZH.get(k, k)} {v} 个"
+                        for k, v in sorted(kinds.items(), key=lambda x: -x[1]))
+        cit = kinds.get("citation") or 0
+        extra = ("<br>其中文献管理域的文字由文献库生成，本工具只调版式、不改文字——"
+                 "改了会与文献库脱钩，你在 Word 里按 F9 更新即回滚。"
+                 "如需按本刊体例重排，请先在 EndNote/Zotero 里改好输出样式再插入。"
+                 if cit else "")
+        field_html = (f'<div class="fieldnote"><b>本文档含 {fld["total"]} 个 Word 域</b>'
+                      f'（{html.escape(desc)}），分布在 {fld.get("blocks_with_fields", 0)} 个块。'
+                      f'{extra}</div>')
     col = (5 if job else 4)
 
     def reject_cell(it):
@@ -191,19 +242,51 @@ def render(d, job=None):
 
     # 推定项：这些值没有官方明文或实测样本支撑，是本工具按同类惯例推的。
     # 藏着不说，等于把"推定"当"规范"卖给用户——这正是本产品不该做的事。
+    # 大批量（F16NOISE，AI 建库草稿 48+ 条）按区块分组折叠：披露一条不删，
+    # 但平铺会把复核重点淹没。区块归属优先读渲染器写进 JSON 的
+    # assumption_sections（与 assumptions 同源产出）；旧 JSON 没这个键时按
+    # 规则集同款口径兜底自算，手写假设照常进「其他推定」。
     assumptions = d.get("assumptions") or []
     assume_html = ""
     if assumptions:
-        rows = "".join(f"<li>{html.escape(a)}</li>" for a in assumptions)
-        assume_html = (f'<section id="assumeSection"><h2>本刊的推定项（{len(assumptions)} 条）</h2>'
-                       f'<p class="meta">下列值在稿约与样张里都找不到依据，是按同类期刊惯例推的。'
-                       f'投稿前请人工确认——这类地方推错了，责任在工具，不在期刊。</p>'
-                       f'<ul class="anon">{rows}</ul></section>')
+        sec_map = d.get("assumption_sections")
+        if not isinstance(sec_map, dict) or not sec_map:
+            sec_map = assume_groups.section_map(assumptions)
+        groups = {}
+        for a in assumptions:
+            groups.setdefault(str(sec_map.get(a, assume_groups.OTHER)),
+                              []).append(a)
+        if assume_groups.should_group(groups.items()):
+            ordered = list(groups.items())
+            blocks = []
+            for sec, rows in ordered:
+                lis = "".join(f"<li>{html.escape(x)}</li>" for x in rows)
+                blocks.append(
+                    f'<details class="agroup"><summary>{html.escape(sec)} '
+                    f'<span class="badge kN">{len(rows)} 条</span></summary>'
+                    f'<ul class="anon">{lis}</ul></details>')
+            assume_html = (f'<section id="assumeSection"><h2>本刊的推定项（{len(assumptions)} 条）</h2>'
+                           f'<p class="meta">下列值在稿约与样张里都找不到依据，是按同类期刊惯例推的。'
+                           f'共 {len(assumptions)} 条，按区块折叠，逐条可达。'
+                           f'投稿前请人工确认——这类地方推错了，责任在工具，不在期刊。</p>'
+                           + "".join(blocks) + '</section>')
+        else:
+            rows = "".join(f"<li>{html.escape(a)}</li>" for a in assumptions)
+            assume_html = (f'<section id="assumeSection"><h2>本刊的推定项（{len(assumptions)} 条）</h2>'
+                           f'<p class="meta">下列值在稿约与样张里都找不到依据，是按同类期刊惯例推的。'
+                           f'投稿前请人工确认——这类地方推错了，责任在工具，不在期刊。</p>'
+                           f'<ul class="anon">{rows}</ul></section>')
 
     out = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>审计报告 · {html.escape(d['target'])}</title>
 <style>{BASE}
+.cov{{margin:9px 0 0;font-size:12.5px;color:var(--ink3);line-height:1.7}}
+.cov b{{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}}
+.fieldnote{{margin:0 0 20px;padding:13px 16px;font-size:12.5px;line-height:1.75;
+background:var(--warnbg,#FDF6E3);border:1px solid var(--warnline,#E8D9A8);
+border-radius:11px;color:var(--ink)}}
+.fieldnote b{{font-weight:600}}
 .kpi{{display:flex;gap:0;margin:0 0 20px;background:var(--surface);
 border:1px solid var(--line);border-radius:14px;overflow:hidden}}
 .kpi div{{flex:1;padding:15px 18px;border-left:1px solid var(--line2)}}
@@ -238,6 +321,14 @@ details.group>summary::-webkit-details-marker{{display:none}}
 details.group>summary:before{{content:"▸";color:var(--ink3);margin-right:9px;
 font-size:11px;transition:transform .15s}}
 details.group[open]>summary:before{{transform:rotate(90deg)}}
+details.agroup{{margin:6px 0 2px}}
+details.agroup>summary{{cursor:pointer;font-size:13px;color:var(--ink2);
+list-style:none}}
+details.agroup>summary::-webkit-details-marker{{display:none}}
+details.agroup>summary:before{{content:"▸";color:var(--ink3);margin-right:8px;
+font-size:11px;transition:transform .15s}}
+details.agroup[open]>summary:before{{transform:rotate(90deg)}}
+details.agroup .anon{{margin:2px 0 10px}}
 .gname{{font-weight:500}}
 .gcount{{margin-left:auto;color:var(--ink3);font-size:12px;font-variant-numeric:tabular-nums}}
 table.inner{{margin:0 0 8px 20px;width:calc(100% - 20px)}}
@@ -282,7 +373,9 @@ tr.rejected .new{{color:var(--ink3);text-decoration:line-through}}
   <h1>审计报告</h1>
   <p class="sub">{html.escape(d['source'].replace('.docx', ''))} → <strong>{html.escape(d['target'])}</strong></p>
   <p class="meta">共 {len(items) - len(note_items)} 处调整 · {html.escape(summary) if summary else '无'}{f' · 已驳回 {n_rejected} 条' if n_rejected else ''}</p>
+  {coverage_html}
 </header>
+{field_html}
 
 <div class="kpi">
   <div class="hl"><b>{len(text_items)}</b><span>字符级改动（B 档）</span></div>

@@ -7,13 +7,11 @@
 夹具只能用仓库自带的期刊；要测别的写法，就临时改一份规则集（rules_path）。
 """
 
-import json
 import sys
 
 import pytest
-from docx import Document
 
-from conftest import RULES, ROOT, render_into
+from conftest import ROOT, minimal_doc, mutated_rules, render_into
 
 sys.path.insert(0, str(ROOT / "tools"))
 from render_from_ir import format_ref_number, ref_number_prefix  # noqa: E402
@@ -26,24 +24,18 @@ ITEMS = [
 
 
 def build_reference_doc(path, items=None):
-    doc = Document()
-    doc.add_paragraph("数字金融与企业融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融对企业融资约束的影响。")
-    doc.add_paragraph("正文段落，用于确认参考文献之前的内容不受影响。" * 3)
-    doc.add_paragraph("参考文献")
-    for item in (items or ITEMS):
-        doc.add_paragraph(item)
-    doc.save(str(path))
+    minimal_doc(path, title="数字金融与企业融资约束",
+                abstract="内容提要：本文考察数字金融对企业融资约束的影响。",
+                extra_paragraphs=["正文段落，用于确认参考文献之前的内容不受影响。" * 3,
+                                  "参考文献", *(items or ITEMS)])
     return path
 
 
 def with_numbering(tmp_path, name, **overrides):
     """基于统计研究改一份规则集，用来测仓库里没有的编号写法。"""
-    rules = json.loads((RULES / "tjyj.json").read_text(encoding="utf-8"))
-    rules["citation"]["reference_list"].update(overrides)
-    path = tmp_path / name
-    path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
-    return path
+    return mutated_rules(tmp_path, "tjyj", name,
+                         **{f"citation.reference_list.{k}": v
+                            for k, v in overrides.items()})
 
 
 def ref_texts(pipeline):

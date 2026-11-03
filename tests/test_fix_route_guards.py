@@ -150,7 +150,9 @@ def test_details_post_persists_details_then_reaches_result(app_module, client,
 
     seen = {}
 
-    def fake_render(dd, jid, original):
+    def fake_render(dd, jid, original, prepare=None):
+        if prepare is not None:
+            prepare()  # 与真实 stage_render 一致：持锁后先提交本轮输入
         saved = json.loads((dd / "details.json").read_text(encoding="utf-8"))
         assert saved.get("english_abstract") == "This paper studies digital finance.", \
             "stage_render 启动时补录内容还没落盘（F11 顺序契约）"

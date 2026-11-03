@@ -43,6 +43,39 @@ COMMON_BLOCKS = [
 OFFICIAL_MARKERS = ("官方", "明文", "模板", "体例", "指南", "须知", "规范", "稿约")
 MEASURED_MARKERS = ("实测", "measured", "成品", "实物")
 
+# headings 的已知键（levelN 按「level+数字」通配）。规则集里出现未知键一律
+# warning：键写错了没有任何效果，死键与拼写漂移就是这么混进来的（F60，
+# intro_numbered 无消费者存活了六轮体检）。新键入数据时同步补这里。
+KNOWN_HEADINGS_KEYS = {
+    "numbering", "max_level", "levels", "unnumbered_sections",
+    "intro_title_text", "intro_number", "rules", "numbered",
+    "abstract_numbered", "in_paragraph_markers", "numbering_source",
+}
+# numbering.footnotes_scope 的合法枚举（journal-schema.md §13.2）。
+# page 是历史同义拼写（与 per_page 同义），已迁移统一，再出现即建议改写。
+FOOTNOTES_SCOPES = {"per_page", "document"}
+FOOTNOTES_SCOPE_SYNONYMS = {"page": "per_page"}
+
+
+def check_known_keys(rules):
+    """已知键校验：未知 headings.* 键、footnotes_scope 非枚举值 → warning 列表。"""
+    warnings = []
+    headings = rules.get("headings") or {}
+    for k in headings:
+        if k.startswith("level") and k[len("level"):].isdigit():
+            continue
+        if k not in KNOWN_HEADINGS_KEYS:
+            warnings.append(f"headings.{k} 不是已知键（无任何代码消费，确认拼写或补登记）")
+    scope = (rules.get("numbering") or {}).get("footnotes_scope")
+    if scope is not None:
+        if scope in FOOTNOTES_SCOPE_SYNONYMS:
+            std = FOOTNOTES_SCOPE_SYNONYMS[scope]
+            warnings.append(f"numbering.footnotes_scope={scope!r} 与 {std!r} 同义，建议改写为 {std!r}")
+        elif scope not in FOOTNOTES_SCOPES:
+            warnings.append(
+                f"numbering.footnotes_scope={scope!r} 不在枚举 {sorted(FOOTNOTES_SCOPES)} 内")
+    return warnings
+
 
 def walk_sizes(node, path=()):
     """产出 (路径, 值) —— 只含字号类字段。"""
@@ -176,12 +209,13 @@ def audit_one(path: Path):
         "has_conflict": bool(ver.get("cross_check", {}).get("discrepancies")
                              or ver.get("conflict")),
         "assumptions": len(rules.get("assumptions", []) or []),
+        "warnings": check_known_keys(rules),
     }
 
 
 def render_md(rows):
-    out = ["| 期刊 | 状态 | 字号权威 | 官方原件 | 字号字段 | 非半磅 | 字符串字号 | 有出处 | 实测/推定 | 缺构件 | 产物过期 |",
-           "|---|---|---|---|---|---|---|---|---|---|---|"]
+    out = ["| 期刊 | 状态 | 字号权威 | 官方原件 | 字号字段 | 非半磅 | 字符串字号 | 有出处 | 实测/推定 | 缺构件 | 产物过期 | 已知键告警 |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         prov = r["provenance"]
         known = prov["official"] + prov["official+measured"] + prov["measured"]
@@ -190,7 +224,7 @@ def render_md(rows):
             f"{'有' if r['has_official_source'] else '无'} | {r['size_fields']} | "
             f"{len(r['off_grid'])} | {len(r['string_sizes'])} | {known}/{r['size_fields']} | "
             f"{prov['measured']} | {len(r['missing_blocks'])} | "
-            f"{len(r['stale_artifacts'])} |"
+            f"{len(r['stale_artifacts'])} | {len(r['warnings'])} |"
         )
     return "\n".join(out)
 
@@ -229,6 +263,11 @@ def main():
         print(f"\n{len(bad_type)} 处字号是字符串（无法参与刻度检查）：")
         for jid, (path, val) in bad_type:
             print(f"  {jid}: {path} = {val!r}")
+    warned = [(r["id"], w) for r in rows for w in r["warnings"]]
+    if warned:
+        print(f"\n{len(warned)} 处已知键告警（死键/拼写漂移，见 journal-schema.md）：")
+        for jid, w in warned:
+            print(f"  {jid}: {w}")
     if stale:
         print("产物过期：", "、".join(stale))
 

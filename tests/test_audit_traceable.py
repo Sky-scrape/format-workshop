@@ -8,10 +8,9 @@ import json
 
 import pytest
 
-from conftest import RULES, TARGET_JOURNAL, change_items_without_rule, render_into, run_sizes
+from conftest import (RULES, SHIPPED_JOURNALS, TARGET_JOURNAL,
+                      change_items_without_rule, render_into, run_sizes)
 from rules_ref import resolvable
-
-SHIPPED_JOURNALS = ["cjyj", "tjyj", "gjjryj"]
 
 
 def test_audit_is_always_produced(baseline):

@@ -106,7 +106,7 @@
   </form>
 </div>
 <div class="processing-overlay" id="processingOverlay" hidden role="status" aria-live="polite">
-  <div class="processing-card"><div class="spinner"></div><h2>正在为稿件重排版式</h2><p id="processingText">正在解析文档结构，请稍候</p><div class="processing-note">转换期间请保持此页面打开，正文内容不会被改写</div></div>
+  <div class="processing-card"><div class="spinner"></div><h2 id="procTitle">正在处理</h2><p id="procHint">正在处理，可在历史页查看进度</p><div class="processing-note" id="procNote">转换期间请保持此页面打开，正文内容不会被改写，完成后自动跳转</div></div>
 </div>
 {% endblock %}
 {% block script %}
@@ -115,7 +115,7 @@ const form=document.getElementById('convertForm'),fileInput=document.getElementB
 const cards=[...document.querySelectorAll('.jcard')],maxSize=80*1024*1024;
 const formatSize=bytes=>bytes>=1048576?(bytes/1048576).toFixed(1)+' MB':Math.max(1,Math.round(bytes/1024))+' KB';
 const syncSubmit=()=>{convertButton.disabled=!fileInput.files.length||!document.querySelector('input[name="journal"]:checked')};
-const updateFile=()=>{dropZone.classList.remove('has-error');const f=fileInput.files[0];if(!f){fileSelected.hidden=true;uploadNotes.hidden=false;fileStatus.classList.remove('ready');fileStatus.querySelector('span').textContent='等待上传 DOCX 稿件';syncSubmit();return}if(!/\.(docx|doc)$/i.test(f.name)){fileInput.value='';dropZone.classList.add('has-error');toast('仅支持 DOCX / DOC 稿件');updateFile();return}if(f.size>maxSize){fileInput.value='';dropZone.classList.add('has-error');toast('文件不能超过 80 MB');updateFile();return}fileName.textContent=f.name;fileName.title=f.name;fileMeta.textContent=formatSize(f.size)+' · '+(/\.doc$/i.test(f.name)?'DOC（将自动转为 DOCX）':'DOCX 文档');fileSelected.hidden=false;uploadNotes.hidden=true;fileStatus.classList.add('ready');fileStatus.querySelector('span').textContent=f.name;syncSubmit()};
+const updateFile=()=>{dropZone.classList.remove('has-error');const f=fileInput.files[0];if(!f){fileSelected.hidden=true;uploadNotes.hidden=false;fileStatus.classList.remove('ready');fileStatus.querySelector('span').textContent='等待上传 DOCX / DOC 稿件';syncSubmit();return}if(!/\.(docx|doc)$/i.test(f.name)){fileInput.value='';dropZone.classList.add('has-error');toast('仅支持 DOCX / DOC 稿件');updateFile();return}if(f.size>maxSize){fileInput.value='';dropZone.classList.add('has-error');toast('文件不能超过 80 MB');updateFile();return}fileName.textContent=f.name;fileName.title=f.name;fileMeta.textContent=formatSize(f.size)+' · '+(/\.doc$/i.test(f.name)?'DOC（将自动转为 DOCX）':'DOCX 文档');fileSelected.hidden=false;uploadNotes.hidden=true;fileStatus.classList.add('ready');fileStatus.querySelector('span').textContent=f.name;syncSubmit()};
 fileInput.addEventListener('change',updateFile);document.getElementById('removeFile').addEventListener('click',()=>{fileInput.value='';updateFile()});
 ['dragover','dragenter'].forEach(type=>dropZone.addEventListener(type,e=>{e.preventDefault();dropZone.classList.add('on')}));['dragleave','drop'].forEach(type=>dropZone.addEventListener(type,e=>{e.preventDefault();dropZone.classList.remove('on')}));dropZone.addEventListener('drop',e=>{if(e.dataTransfer.files.length){fileInput.files=e.dataTransfer.files;updateFile()}});
 const pickerBtn=document.getElementById('pickerBtn'),pickerPop=document.getElementById('pickerPop'),pickName=document.getElementById('pickName'),pickEn=document.getElementById('pickEn'),pickMeta=document.getElementById('pickMeta'),pickStatus=document.getElementById('pickStatus'),pickSpec=document.getElementById('pickSpec');
@@ -137,8 +137,21 @@ const filterJournals=()=>{const q=search.value.trim().toLowerCase();let visible=
 search.addEventListener('input',filterJournals);
 langButtons.forEach(button=>button.addEventListener('click',()=>{langFilter=button.dataset.lang;langButtons.forEach(b=>b.classList.toggle('on',b===button));filterJournals()}));
 verifiedBtn.addEventListener('click',()=>{verifiedOnly=!verifiedOnly;verifiedBtn.classList.toggle('on',verifiedOnly);filterJournals()});
-form.addEventListener('submit',event=>{if(!fileInput.files.length){event.preventDefault();toast('请先选择一份 DOCX 稿件');dropZone.classList.add('has-error');dropZone.scrollIntoView({behavior:'smooth',block:'center'});return}convertButton.disabled=true;convertButton.textContent='正在转换';document.getElementById('processingOverlay').hidden=false;const messages=['正在解析文档结构，请稍候','正在对照期刊规则进行投稿体检','正在应用目标期刊版式','正在生成逐条审计报告'];const text=document.getElementById('processingText'),note=document.querySelector('.processing-note');let stage=0,sec=0;window.processTimer=setInterval(()=>{sec+=1;if(sec%3===0)stage=Math.min(stage+1,messages.length-1);text.textContent=messages[stage]+'（已用 '+sec+' 秒）';if(sec===40)note.textContent='稿件较大时解析会久一些，处理完会自动跳转，请不要关闭页面'},1000)});
-window.addEventListener('pageshow',event=>{if(event.persisted){clearInterval(window.processTimer);document.getElementById('processingOverlay').hidden=true;convertButton.textContent='开始格式转换';syncSubmit()}});
+/* 等待遮罩：只写「此刻真的在做什么」，不轮播阶段（F57）。
+   .doc 走的是本机 Office 的 COM 转换，5–15 秒，比 docx 多一整步；
+   不说清楚的话用户会以为卡死了。这是静态说明而不是假进度：
+   我们确实知道这一步存在、也确实知道它慢。 */
+const procTitle=document.getElementById('procTitle'),procHint=document.getElementById('procHint'),procNote=document.getElementById('procNote');
+const PROC_TEXT={
+  doc:['正在转换 .doc',
+       '这份稿子是 Word 97-2003 的 .doc 格式，设备上需要先调用 Word / WPS 把它转成 .docx，通常 5–15 秒。',
+       '转换在本机完成，稿子不会传到任何服务器；期间 Word 窗口可能闪一下，属正常现象，请不要关闭它。'],
+  def:['正在处理','正在处理，可在历史页查看进度',
+       '转换期间请保持此页面打开，正文内容不会被改写，完成后自动跳转']
+};
+const setProcCopy=isDoc=>{const t=isDoc?PROC_TEXT.doc:PROC_TEXT.def;procTitle.textContent=t[0];procHint.textContent=t[1];procNote.textContent=t[2]};
+form.addEventListener('submit',event=>{if(!fileInput.files.length){event.preventDefault();toast('请先选择一份 DOCX / DOC 稿件');dropZone.classList.add('has-error');dropZone.scrollIntoView({behavior:'smooth',block:'center'});return}const legacyDoc=/\.doc$/i.test(fileInput.files[0].name);setProcCopy(legacyDoc);convertButton.disabled=true;convertButton.textContent=legacyDoc?'正在转换 .doc':'正在转换';document.getElementById('processingOverlay').hidden=false});
+window.addEventListener('pageshow',event=>{if(event.persisted){document.getElementById('processingOverlay').hidden=true;convertButton.textContent='开始格式转换';syncSubmit()}});
 const preselect={{ (preselect or '')|tojson }};
 if(preselect){const r=document.querySelector('input[name="journal"][value="'+preselect+'"]');if(r){r.checked=true;r.dispatchEvent(new Event('change'));r.closest('.jcard').scrollIntoView({block:'nearest'})}}
 </script>

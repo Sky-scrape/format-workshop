@@ -20,7 +20,8 @@
 ```json
 {
   "schema_version": "0.1",
-  "journal":       { "id", "name_zh", "name_en", "language", "verification" },
+  "journal":       { "id", "name_zh", "name_en", "language" },
+  "verification":  { ... },          // 出处与核验状态（顶层键，不在 journal 内）
   "page":          { "size", "margin_mm", "columns" },
   "blocks":        [ ... ],          // 有序的必备块序列
   "typography":    { ... },          // 字体字号行距
@@ -44,6 +45,7 @@
 | type（中立） | 中文经管期刊叫法 | 英文经管期刊叫法 | 关键属性 |
 |---|---|---|---|
 | `title` | 标题 | Title | `lang` |
+| `subtitle` | 副标题 | Subtitle | `lang`；两个渲染器按 `typography.subtitle` 渲染，规则集未声明该构件则不渲染 |
 | `authors` | 作者 | Authors | |
 | `affiliations` | 作者单位 | Affiliations | |
 | `corresponding_author` | 通讯作者 | Corresponding author | `mark` 标记方式 |
@@ -51,6 +53,10 @@
 | `keywords` | 关键词 | Keywords | `lang`、`count_min/max` |
 | `classification_code` | 中图分类号 / JEL 分类号 | JEL codes | **`scheme`：`CLC` 或 `JEL`** |
 | `document_code` | 文献标识码 | —（不使用） | `scheme` |
+| `doi` | DOI 号 | DOI | `label`、`sample_value`；样板渲染为号段行，取 `typography.classification` 样式 |
+| `article_number` | 文章编号 | —（不使用） | `label`、`fixed_value` / `sample_value`；样板与中图分类号、文献标识码连排一行 |
+| `column_name` | 栏目名 | —（不使用） | `sample_value`；编辑部加的栏目标识，声明才渲染（§20.2） |
+| `endnotes` | 文末注／尾注 | Endnotes | `label`、`position`（如 `before_references`）；管理世界在用 |
 | `author_note` | 作者简介 | Author notes | `placement`：`footnote` 或 `section` |
 | `funding_statement` | 基金项目 | Funding | `placement` |
 | `received_date` | 收稿日期 | Received | |
@@ -162,6 +168,18 @@
 | `dropped` | 值无效，或引文在原文中找不到（判编造），整条丢弃 |
 | `unverified` | 有值但无引文，被「无引文不落盘」主闸拦下，待人工核对 |
 
+`inherited` 每项含 `key`（点路径）/ `label`（中文标签，无登记时退化为点路径）/
+`value` / `section`（取点路径首段，即区块名）/ `fact`（是否 FACTS 事实键）。顶层
+`assumptions` 数组由它派生：事实键逐条生成「`{label} = {value}（未从稿约抽到，
+沿用基线值，须人工核对）`」格式的字符串，结构字段收成一条汇总（逐字段清单仍在
+`extraction.inherited` 可查）——assumptions 是纯字符串数组，渲染器逐条转义。
+
+**推定项的展示分组**（F16NOISE，2026-11-03）：派生假设的文本以 `{label} = ` 开头、
+以固定的继承尾注结尾，据此可逐条对回 `inherited` 的 `section`；复核页、规格页与
+审计页对 ≥12 条的批量推定项按区块分组折叠（默认收起、计数徽标、逐条仍可达），
+对不上号的归入「其他推定」组。落盘 JSON 的 assumptions 条数不因展示分层而减少；
+手工维护的规则集推定项通常少于阈值，保持平铺。共享实现在 `tools/assume_groups.py`。
+
 ---
 
 ## 7. 新增一本期刊的操作清单
@@ -250,7 +268,7 @@
 |---|---|---|
 | `scope` | `paper` / `author` | 全篇一个值，还是每个作者各一份 |
 | `required` | 布尔 | 必需项阻断交付，非必需项不阻断 |
-| `placement` | `byline` / `footnote` / `section` | 影响稿件哪个位置，用于向用户说明改动范围 |
+| `placement` | `byline` / `footnote` / `section` / `author_page` / `back_matter` / `system` | 影响稿件哪个位置，用于向用户说明改动范围。`author_page`＝作者信息页构件；`back_matter`＝文末要件；`system`＝投稿系统填写、不出现在稿件 |
 | `prefill_from_paper` | 布尔 | 为真时先从稿件提取，已有值不询问 |
 | `hint` | 字符串 | 填写提示，用于降低返工 |
 
@@ -492,7 +510,7 @@
 
 ### 13.2 结论二：暴露了四处表达不足（已补）
 
-1. `numbering.footnotes_scope` — 需要区分 `per_page` 与 `document`，两刊相反。
+1. `numbering.footnotes_scope` — 需要区分 `per_page` 与 `document`，两刊相反。枚举：`per_page`（每页重新编号，**推荐写法**）、`document`（全文连续）；历史数据里出现过的 `page` 与 `per_page` 同义，2026-11-03 起统一写作 `per_page`（死键 `intro_numbered` 的废弃说明见 §22.3）。体检对非枚举值与未知 `headings.*` 键出 warning（`tools/audit_rulesets.py`）。
 2. `citation.reference_list.hanging_indent_chars` — 悬挂缩进是版式参数，不能只写在文字说明里。
 3. `citation.in_text` 需容纳作者年制的多种表述（括注式、叙述式、`et al.` 触发条件），原有字段是照着编号制设计的。
 4. **新增顶层字段 `assumptions`** — 官方未规定项的推定值必须显式登记（见 13.3）。
@@ -1054,6 +1072,8 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 
 新增 `headings.intro_number`（默认 1）。两个渲染器的一级计数器初值改为 `intro_number - 1`，第一个一级标题即得该值。实测：管理科学学报出「0 引言→1 文献综述」，其余刊仍从 1 起，无一处特判。
 
+曾同时存在的 `headings.intro_numbered`（布尔）自 2026-11-03 起**废弃**：渲染器只读 `intro_number`（缺省 1），该键从未被任何代码消费；曾在 12 本规则集里声明的 `intro_numbered: true`（「从引言起编」）已全部删除，语义由缺省值表达，渲染版式零漂移（管理科学学报的非 1 起编由其活键 `intro_number: 0` 表达，不受影响）。
+
 ### 22.4 文档与实物冲突时以实物为准
 
 官网写「1 引言」，实物写「0 引言」。这不是官网写错——指南可能滞后于 2020 年前后的版式调整。按 §14.6「有实物时实物优先」处理，并把这个差异写进 `cross_check.confirmed`，让读者知道我们是**故意**与官网不一致。
@@ -1070,4 +1090,4 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 
 管理科学学报严格说是"guide + published"混合：结构有官方明文，版式靠实物。`typography_authority` 记 `guide`（版式依据来自同族刊与实物混合），`status` 记 `verified`（有 3 篇实物互证）。
 
-至此中文 17 本、英文 6 本。管理学方向 7 本，含工商管理与运筹决策两支。
+至此中文 17 本、英文 6 本。管理学方向 6 本（工商管理与运筹决策两支），会计研究单列 1 本——分类口径与 `coverage.md`、`gaps.md` 一致（会计不折入管理学）。

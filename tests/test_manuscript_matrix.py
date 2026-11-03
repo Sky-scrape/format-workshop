@@ -12,9 +12,7 @@ import pytest
 from docx import Document
 from docx.shared import Pt
 
-from conftest import invariant_failures, render_into
-
-SHIPPED_JOURNALS = ["cjyj", "tjyj", "gjjryj"]
+from conftest import SHIPPED_JOURNALS, invariant_failures, render_into
 
 PNG_1PX = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="

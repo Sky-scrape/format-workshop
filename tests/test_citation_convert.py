@@ -13,7 +13,7 @@ import sys
 import pytest
 from docx import Document
 
-from conftest import RULES, TOOLS
+from conftest import TOOLS, minimal_doc, mutated_rules
 
 sys.path.insert(0, str(TOOLS))
 import citation_ref as cr  # noqa: E402
@@ -30,33 +30,27 @@ TEMPLATES = {
 
 def rules_with_templates(tmp_path, name="cite.json"):
     """基于统计研究改一份带条目模板的规则集（仓库自带的刊没这字段）。"""
-    rules = json.loads((RULES / "tjyj.json").read_text(encoding="utf-8"))
-    rules["citation"]["system"] = "author-year"
-    rules.setdefault("citation", {})["in_text"] = {"en_three_plus": True}
-    rl = rules["citation"].setdefault("reference_list", {})
-    rl["templates"] = TEMPLATES
-    rl["must_require_bidirectional_match"] = True
-    path = tmp_path / name
-    path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
-    return path
+    return mutated_rules(tmp_path, "tjyj", name,
+                         **{"citation.system": "author-year",
+                            "citation.in_text": {"en_three_plus": True},
+                            "citation.reference_list.templates": TEMPLATES,
+                            "citation.reference_list.must_require_bidirectional_match":
+                                True})
 
 
 def build_doc(path, items=None, body=None):
-    doc = Document()
-    doc.add_paragraph("数字金融与融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融对企业融资约束的影响。")
-    for line in (body or [
+    default_body = [
         "正文第一段，引用了文献一[1]和文献二[2]。",
         "正文第二段，用区间写法引用了[1-2]。",
-    ]):
-        doc.add_paragraph(line)
-    doc.add_paragraph("参考文献")
-    for it in (items or [
+    ]
+    default_items = [
         "[1] 张三. 数字金融与企业融资[J]. 经济研究, 2020, 55(3): 1-10.",
         "[2] Smith J. Digital finance and constraints[J]. Journal of Finance, 2021, 76(2): 20-40.",
-    ]):
-        doc.add_paragraph(it)
-    doc.save(str(path))
+    ]
+    minimal_doc(path, title="数字金融与融资约束",
+                abstract="内容提要：本文考察数字金融对企业融资约束的影响。",
+                extra_paragraphs=[*(body or default_body), "参考文献",
+                                  *(items or default_items)])
     return path
 
 

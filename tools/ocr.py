@@ -34,6 +34,10 @@ DEFAULT_DPI = 300
 # 一页有效字符（去空白）少于此数，判为"正文是图"，该页走 OCR。
 # 20 是经验值：页眉页脚通常十几个字，不足以拼出稿约要求。
 MIN_CHARS_PER_PAGE = 20
+# 文字层「异常少」的下限（F51）：介于 20 与它之间的页不会触发 OCR（20 字
+# 阈值的旁路——正文是图、只有页眉页码有文字层的扫描页会静默丢内容）。
+# 不强行 OCR，只按页记录字符数供复核，CLI 打警告让人工核对。
+LOW_TEXT_CHARS = 200
 
 _ENGINE = None
 _ENGINE_TRIED = False
@@ -212,19 +216,41 @@ def failure_warnings(meta):
     return msgs
 
 
+def low_text_warnings(meta):
+    """把「文字层异常少的页」转成人读的警告句（F51）。
+
+    与 failure_warnings 分开：低文字层不等于失败——扫描页可能已由 OCR 补上，
+    也可能真是页眉页码凑数的旁路，只能提示人工核对，不能替人下结论。
+    """
+    low = (meta or {}).get("ocr_low_text_pages") or []
+    if not low:
+        return []
+    shown = "、".join(f"第 {p['page']} 页文字层仅 {p['chars']} 字"
+                      for p in low[:10])
+    more = f"（等共 {len(low)} 页）" if len(low) > 10 else ""
+    return [f"警告：{shown}{more}，低于 {LOW_TEXT_CHARS} 字，"
+            f"若为扫描页请人工核对。"]
+
+
 def extract_pdf_text(path, *, dpi=DEFAULT_DPI, max_chars=24000, log=None):
     """返回 (text, meta)。meta.method: text_layer / ocr / mixed。
 
     meta.ocr_failed_pages 逐页记录识别失败（含原因）——失败页的内容是静默
     丢失的，上游必须有机会知道并报警，而不是拿到一份看似完整的文本。
+    meta.ocr_low_text_pages 逐页记录文字层字符数 < LOW_TEXT_CHARS 的页
+    （F51）：20 字阈值之上有旁路（正文是图、页眉页码凑够了 20 字的扫描页
+    会跳过 OCR），这些页列出来供复核，不强行 OCR。
     """
     import fitz
 
     doc = fitz.open(str(path))
-    pages, ocr_pages, chars, failed = [], [], 0, []
+    pages, ocr_pages, chars, failed, low_text = [], [], 0, [], []
     try:
         for i, page in enumerate(doc):
             raw = (page.get_text("text") or "").strip()
+            n_layer = len(re.sub(r"\s", "", raw))
+            if n_layer < LOW_TEXT_CHARS:
+                low_text.append({"page": i + 1, "chars": n_layer})
             used = "text_layer"
             if _page_needs_ocr(raw):
                 txt, n, why = _ocr_page(page, dpi)
@@ -262,6 +288,7 @@ def extract_pdf_text(path, *, dpi=DEFAULT_DPI, max_chars=24000, log=None):
 
     meta = {"method": method, "pages": len(pages), "chars": chars,
             "ocr_pages": ocr_pages, "ocr_failed_pages": failed,
+            "ocr_low_text_pages": low_text,
             "truncated": trunc, "dpi": dpi,
             "engine": engine_name() if (ocr_pages or failed) else "文字层"}
     if log and ocr_pages:
@@ -286,6 +313,8 @@ def main():
         return 1
 
     for m in failure_warnings(meta):
+        print(m, file=sys.stderr)
+    for m in low_text_warnings(meta):
         print(m, file=sys.stderr)
 
     if a.out:

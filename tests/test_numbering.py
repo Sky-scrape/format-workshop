@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from conftest import RULES, TARGET_JOURNAL, body_texts, render_into
+from conftest import RULES, TARGET_JOURNAL, body_texts, mutated_rules, render_into
 from docx import Document
 
 import importlib.util
@@ -44,16 +44,20 @@ def build_headings_docx(path, sections=3, subs_per_section=2, style="cn"):
 
     style="cn" 用「一、／（一）」，style="num" 用「1 ／（1）」——后者用来
     制造源稿与目标刊编号体系不一致的场面，编号重排才会真的发生。
+
+    中文数字用字面量清单（F59）：夹具数据不能经过被测函数 cn_numeral，
+    否则它错了夹具跟着错，「照着实现抄数据」的用例永远绿。
     """
-    cn = render.cn_numeral
+    cn = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"]
+    assert max(sections, subs_per_section) <= len(cn), "字面量清单只备到十二"
     doc = Document()
     doc.add_paragraph("标题编号测试稿")
     for s in range(1, sections + 1):
-        head = f"{cn(s)}、第{s}章" if style == "cn" else f"{s} 第{s}章"
+        head = f"{cn[s - 1]}、第{s}章" if style == "cn" else f"{s} 第{s}章"
         doc.add_paragraph(head)
         doc.add_paragraph(f"第{s}章的正文。")
         for t in range(1, subs_per_section + 1):
-            sub = (f"（{cn(t)}）第{s}章第{t}节" if style == "cn"
+            sub = (f"（{cn[t - 1]}）第{s}章第{t}节" if style == "cn"
                    else f"（{t}）第{s}章第{t}节")
             doc.add_paragraph(sub)
             doc.add_paragraph(f"第{s}章第{t}节的正文。")
@@ -108,9 +112,10 @@ def test_arabic_level2_template_numbers_increment(tmp_path):
     """二级标题模板是「1.」时，编号必须 1、2、3 递增，而不是全印成 1.。"""
     ruleset = json.loads((RULES / f"{TARGET_JOURNAL}.json").read_text(encoding="utf-8"))
     assert ruleset["headings"]["numbering"] == "cn-hierarchical"
-    ruleset["headings"]["levels"][1] = "1."          # 经济管理 / 南开管理评论 的写法
-    rules_path = tmp_path / "arabic-level2.json"
-    rules_path.write_text(json.dumps(ruleset, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 二级标题改阿拉伯数字（经济管理 / 南开管理评论 的写法）；复制规则集改一键
+    # 走公共入口（F58），列表下标用数值段表示
+    rules_path = mutated_rules(tmp_path, TARGET_JOURNAL, "arabic-level2.json",
+                               **{"headings.levels.1": "1."})
 
     src = build_headings_docx(tmp_path / "src.docx", sections=2, subs_per_section=3)
     p = render_into(tmp_path / "run", src, target=TARGET_JOURNAL, rules_path=rules_path)

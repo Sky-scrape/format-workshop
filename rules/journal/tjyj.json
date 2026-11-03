@@ -339,7 +339,6 @@
     ],
     "unnumbered_sections": [],
     "intro_title_text": "引言",
-    "intro_numbered": true,
     "level1": {
       "font_cn": "仿宋",
       "size_pt": 14,
@@ -381,7 +380,7 @@
     "figures": "图1",
     "equations": "（1）",
     "footnotes": "①②③",
-    "footnotes_scope": "page",
+    "footnotes_scope": "per_page",
     "title_note_mark": "*",
     "rule": "脚注为当页下注、每页重新编号；对标题的说明（基金项目、通讯作者）用星号 *，星号标在标题末字右上角"
   },

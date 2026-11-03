@@ -4,7 +4,8 @@
 """
 
 from conftest import (TEXT_ACTIONS, block_count_mismatch, fingerprint_delta,
-                      note_reorder_blocks, unaudited_changes, whitelist_violations)
+                      note_reorder_blocks, text_snapshot_violations,
+                      unaudited_changes, whitelist_violations)
 
 
 def test_every_changed_block_has_an_audit_record(baseline):
@@ -70,8 +71,23 @@ def test_block_structure_is_preserved(baseline):
 
 
 def test_layout_items_do_not_touch_text(baseline):
-    """A 档（纯版式）条目的 before/after 必须都是空——它们本就不该碰文字。"""
+    """A 档（纯版式）条目不得携带文字快照——双向对账（F54）。
+
+    旧版用 before/after 为空筛出「版式条目」、再断言它们的 before/after 为空——
+    同义反复，验证力≈0。真正的静默缺口在反方向：渲染器新增了改文字动作却没
+    登记进 TEXT_ACTIONS 时，上面的逐字校验会整类漏掉它。所以这里按
+    conftest.text_snapshot_violations 双向对账：
+    ① 登记为文字动作的条目必须带非空 before/after；
+    ② 未登记的条目不得携带与源稿/成品逐字一致的快照对（未登记即红，逼它
+       先进 TEXT_ACTIONS 再谈逐字）。
+    版式条目记的格式目标值（悬挂缩进的「2.3 字符」）与层序名词（表注层序
+    调整的「source / general」）不是文字快照，不在 ② 之列。
+    """
     layout = [it for it in baseline.items if not (it["before"] or it["after"])]
     assert layout, "没有采集到任何纯版式条目，夹具可能没跑到渲染"
-    for it in layout:
-        assert it["before"] == "" and it["after"] == ""
+    bad = text_snapshot_violations(baseline)
+    assert not bad, "审计快照与动作登记对不上：\n" + "\n".join(map(str, bad))
+
+
+# F54 的三条复现用例（未登记快照红／登记缺快照红／格式值不算快照）在
+# tests/test_fix_f54_snapshot_reconciliation.py——回归测试放新建独立文件。

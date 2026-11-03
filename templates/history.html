@@ -17,6 +17,10 @@ padding:11px 16px;background:var(--soft);border-bottom:1px solid var(--line)}
 .hist-table td.dim{color:var(--ink3);font-size:11.5px}
 .hist-table a.act{color:var(--accent);font-size:11.5px;margin-right:12px}
 .hist-table a.act:hover{text-decoration:underline}
+.hist-table form.del{display:inline;margin-left:12px}
+.hist-table button.act{background:none;border:0;padding:0;color:var(--danger);
+font-size:11.5px;cursor:pointer}
+.hist-table button.act:hover{text-decoration:underline}
 .empty{padding:60px;text-align:center;color:var(--ink3);font-size:13px}
 </style>
 {% endblock %}
@@ -44,6 +48,10 @@ padding:11px 16px;background:var(--soft);border-bottom:1px solid var(--line)}
           {% else %}
           <a class="act" href="/job/{{ r.job }}/details">继续补录</a>
           {% endif %}
+          <form class="del" method="post" action="/job/{{ r.job }}/delete"
+                onsubmit="return confirm('删除这条记录？稿件名、成品与审计会一并删除，不可恢复。')">
+            <button class="act" type="submit">删除</button>
+          </form>
         </td>
       </tr>
       {% endfor %}

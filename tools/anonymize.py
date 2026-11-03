@@ -27,6 +27,13 @@ from docx.text.paragraph import Paragraph
 
 from lxml import etree
 
+import sys
+
+# embeddable Python（_pth 模式）不会把脚本所在目录放进 sys.path——
+# 这是它和常规解释器唯一的行为差异，绿色包里所有同目录 import 都会
+# 因此失败。显式挂上，两种启动方式行为一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from docx_meta import assert_clean, parse_part_xml, sanitize_docx
 
 # 脚注/尾注的作者信息判定，三档（用在 apply 第 4 步）：

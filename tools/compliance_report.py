@@ -13,6 +13,11 @@ import re
 import sys
 from pathlib import Path
 
+# embeddable Python（_pth 模式）不会把脚本所在目录放进 sys.path——
+# 这是它和常规解释器唯一的行为差异，绿色包里所有同目录 import 都会
+# 因此失败。显式挂上，两种启动方式行为一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from report_theme import BASE
 
 # 期刊 block 类型 → IR block 类型的映射
@@ -93,7 +98,7 @@ def count_words(blocks, scope="all"):
     「全文（含图表）」的刊必须把表格内文字算进去，否则标注与计算自相矛盾；
     取值来自规则集 limits.total.scope 经 SCOPE_FILTER 归一后的结果。"""
     if scope == "body":
-        texts = [b.get("text", "") for b in blocks if b["type"] == "body"]
+        texts = [b.get("text", "") for b in blocks if b.get("type", "") == "body"]
     else:
         texts = []
         for b in blocks:
@@ -129,7 +134,7 @@ def measure(text, metric):
 
 
 def detect_citation_style(ir):
-    refs = [b["text"] for b in ir["blocks"] if b["type"] == "reference_item"]
+    refs = [b.get("text", "") for b in ir["blocks"] if b.get("type", "") == "reference_item"]
     if not refs:
         return None, 0
     numbered = sum(1 for r in refs if re.match(r"^\[\d+\]", r))
@@ -148,9 +153,24 @@ def check(ir, rules):
     rows_raw = []
     ir_blocks = _need(ir, "blocks", "稿件 IR")
     rules_blocks = _need(rules, "blocks", "规则集")
+    # 缺 type 键的块不再冒 KeyError（F26 坏文件隔离没盖到的同类残留）：
+    # 按未知类型处理，并把缺在哪份数据的第几块记进 warnings 点名。
+    warnings = []
+
+    def _typed(blocks, what):
+        out = []
+        for i, b in enumerate(blocks):
+            if isinstance(b, dict) and not b.get("type"):
+                warnings.append(f"{what}第 {i + 1} 块缺 type 键，按未知类型处理")
+                b = {**b, "type": ""}
+            out.append(b)
+        return out
+
+    ir_blocks = _typed(ir_blocks, "稿件 IR ")
+    rules_blocks = _typed(rules_blocks, "规则集 ")
     cite_cfg = _need(rules, "citation", "规则集")
     want = _need(cite_cfg, "system", "规则集 citation")
-    present = {b["type"] for b in ir_blocks}
+    present = {b.get("type", "") for b in ir_blocks}
     present |= {"front_matter"} if "front_matter" in present else set()
 
     fm = [b.get("text", "") for b in ir_blocks if b["type"] == "front_matter"]
@@ -164,7 +184,7 @@ def check(ir, rules):
                  for b in ir_blocks)
 
     for blk in rules_blocks:
-        t = blk["type"]
+        t = blk.get("type", "")
         lang = blk.get("lang")
         if t == "classification_code":
             ok = cls_en if lang == "en" else cls_zh
@@ -303,6 +323,9 @@ def check(ir, rules):
     return {
         "rows": rows,
         "rows_raw": rows_raw,
+        # 数据本身可疑之处的点名（块缺 type 键这类，COMPSUB）——工具不崩，
+        # 但读报告的人要知道判定是在打了折扣的输入上做出的
+        "warnings": warnings,
         "words": w_res,
         # 本次统计实际用的口径与规则集原话：「统计范围」一格必须照实展示，
         # 没声明总字数上限时数字照常统计，标注也不能与计算相反
@@ -463,6 +486,12 @@ def render(ir, rules, res):
         if s["required"] and not s["found"]:
             manual.append(f"该刊要求{s['label']}，稿件中未检出相关文字——"
                           f"若该声明由投稿系统单独收集，可忽略此条")
+    data_warns = res.get("warnings") or []
+    warn_html = ""
+    if data_warns:
+        warn_html = ('<section class="warn"><h2>数据提示（判定基于有缺口的输入）</h2><ul>'
+                     + "".join(f"<li>{html.escape(w)}</li>" for w in data_warns)
+                     + "</ul></section>")
     st_html = ""
     if st_rows:
         st_html = (
@@ -633,6 +662,8 @@ border:1px solid var(--line);color:var(--ink2)}}
 
 {st_html}
 
+{warn_html}
+
 <section><h2>图表</h2><table>
 <tr><td class="k">表格</td><td>{res['tables']} 个（含伪表格形式的公式 {res['equations_text']} 处已剔除）</td></tr>
 <tr><td class="k">插图</td><td>{res['figures']} 个</td></tr>
@@ -689,6 +720,8 @@ def main():
         return 1
     Path(a.out).write_text(out_html, encoding="utf-8")
     print("已生成:", a.out)
+    for w in res.get("warnings") or []:
+        print("  提示:", w)
     print("  结构缺失:", [n for n, v, r in res["rows"] if v == "缺" and r] or "无")
     print("  引用体系:", res["citation"]["actual"], "→", res["citation"]["want"],
           "一致" if res["citation"]["ok"] else "需重排")

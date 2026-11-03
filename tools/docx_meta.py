@@ -293,7 +293,7 @@ def sanitize_docx(path, scrub_people=False):
                 dst.writestr(info, data)
         # Windows 瞬时文件占用（杀毒/索引/预览句柄，WinError 5）会让 replace
         # 偶发 PermissionError——这不是真失败，稍候重试即可（FX1）。同款姿势见
-        # app.py details.json 的原子写：5 次递增退避，共约 0.44s。
+        # app.py details.json 的原子写：4 次退避共约 0.24s，最后一次直接抛出。
         for attempt in range(5):
             try:
                 os.replace(tmp, path)

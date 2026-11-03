@@ -58,3 +58,24 @@ def test_radios_are_tied_to_the_form(client):
     radios = RADIO.findall(html)
     assert radios, "工作台没有渲染出期刊单选"
     assert all('form="convertForm"' in r for r in radios)
+
+
+def test_legacy_doc_gets_its_own_waiting_copy(client):
+    """.doc 要多走一步本机 Office 转换，等待遮罩必须说清此刻在做什么。
+
+    这不是文案洁癖：.doc 的 COM 转换要 5–15 秒，比 docx 多一整步。遮罩上
+    如果只有「正在处理」，用户会以为卡死，然后刷新页面把整轮白等掉。
+
+    文案的边界仍是 F57 那条：只写**此刻真的在发生什么**，不轮播「正在解析／
+    正在体检」这种按秒编排的假进度——我们确实知道 .doc 要先转格式、也
+    确实知道它慢，这属于事实，不属于编造。
+    """
+    html = client.get("/workspace").data.decode("utf-8")
+
+    # 三个槽位必须能被脚本取到，否则 setProcCopy 是空转
+    for el in ('id="procTitle"', 'id="procHint"', 'id="procNote"'):
+        assert el in html, f"等待遮罩缺少 {el}"
+    assert "PROC_TEXT" in html, "没有按文件类型切换等待文案的分支"
+    assert "正在转换 .doc" in html
+    # 默认分支不能被顶掉：传 docx 时不该出现 .doc 字样
+    assert "正在处理，可在历史页查看进度" in html

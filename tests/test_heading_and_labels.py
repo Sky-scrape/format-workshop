@@ -69,6 +69,113 @@ def test_short_heading_survives_digit_ratio():
     assert parse.classify_heading("1 引言") is not None
 
 
+def test_single_level_arabic_heading_is_ambiguous():
+    """「1.标题」是二级还是三级，文本本身说了不算。
+
+    《经济管理》体例：一、／1.／（1）—— 「1.」是二级。
+    「一、／（一）／1.」体系里它是三级。
+    硬编码成三级会让前一类刊的合规稿整篇二级标题被降级保护打成正文，
+    所以这里只给候选标记，由 parse() 按文档已出现的层级定级。
+    """
+    assert parse.classify_heading("1.目标责任制下的增长承诺") == (parse.AMBIGUOUS_H3, "medium")
+    assert parse.classify_heading("2.两种对立的理论预期") == (parse.AMBIGUOUS_H3, "medium")
+
+
+def test_bracketed_number_is_unambiguously_level4():
+    """有中文括号包着的「（1）」不受歧义影响，仍是四级。"""
+    assert parse.classify_heading("（1）模型设定与变量说明") == (4, "high")
+
+
+def test_ambiguous_level_is_decided_once_per_document(tmp_path):
+    """全文只定一次级：同一份稿子里「1.」不会一会儿二级一会儿三级。"""
+    doc = Document()
+    doc.add_paragraph("一、研究背景")          # 一级：中文顿号
+    doc.add_paragraph("1.第一小节")            # 「1.」首次出现，此前无「（一）」
+    doc.add_paragraph("正文内容一段。")
+    doc.add_paragraph("1.第二小节")            # 同一章下重新从 1 起
+    doc.add_paragraph("2.第三小节")
+    path = tmp_path / "amb.docx"
+    doc.save(str(path))
+
+    ir = parse.parse(str(path), ai_cfg={"enabled": False})
+    h2 = [b["text"] for b in ir["blocks"] if b["type"] == "heading2"]
+    assert h2 == ["1.第一小节", "1.第二小节", "2.第三小节"], h2
+
+
+def test_bracketed_second_level_wins_over_arabic(tmp_path):
+    """稿子里先出现过「（一）」，说明二级另有写法，「1.」就该是三级。"""
+    doc = Document()
+    doc.add_paragraph("一、研究背景")
+    doc.add_paragraph("（一）问题提出")        # 二级：中文括号
+    doc.add_paragraph("1.第一点说明")          # 此时「1.」只能是三级
+    path = tmp_path / "amb2.docx"
+    doc.save(str(path))
+
+    ir = parse.parse(str(path), ai_cfg={"enabled": False})
+    assert [b["text"] for b in ir["blocks"] if b["type"] == "heading3"] == ["1.第一点说明"]
+    assert [b["text"] for b in ir["blocks"] if b["type"] == "heading2"] == ["（一）问题提出"]
+
+
+def test_bracket_second_level_appearing_later_still_wins(tmp_path):
+    """「（一）」出现在第一个「1.」之后，全文仍按三级体系判。
+
+    这条守的是「全文预扫 vs 边扫边判」的差别：边扫会把第一个「1.」定成
+    二级，从此整篇级别错位。引言章直接进正文章节、二级标题晚于三级出现，
+    在真实稿件里并不罕见。
+
+    结构本身异常（三级早于二级）时宁可把那个降成正文——不套错样式，
+    原文一个字不动。
+    """
+    doc = Document()
+    doc.add_paragraph("一、研究背景")
+    doc.add_paragraph("1.早出现的节")          # 位置异常：此时还没有任何二级
+    doc.add_paragraph("（一）问题提出")
+    doc.add_paragraph("1.具体做法")            # 二级之后的三级
+    path = tmp_path / "amb3.docx"
+    doc.save(str(path))
+
+    ir = parse.parse(str(path), ai_cfg={"enabled": False})
+    assert [b["text"] for b in ir["blocks"] if b["type"] == "heading2"] == ["（一）问题提出"]
+    assert [b["text"] for b in ir["blocks"] if b["type"] == "heading3"] == ["1.具体做法"]
+    early = next(b for b in ir["blocks"] if b["text"] == "1.早出现的节")
+    assert early["type"] == "body", "三级早于二级时不套标题样式，降成正文更安全"
+
+
+def test_no_second_level_trace_marks_inference(tmp_path):
+    """全文只有「一、」和「1.」时，判二级是推断，置信度必须标出来。
+
+    报告里要能看出「这一级是猜的」，不能把推断混进「期刊要求」。
+    """
+    doc = Document()
+    doc.add_paragraph("一、研究背景")
+    doc.add_paragraph("1.第一小节")
+    doc.add_paragraph("正文内容一段。")
+    doc.add_paragraph("1.第二小节")
+    path = tmp_path / "amb4.docx"
+    doc.save(str(path))
+
+    ir = parse.parse(str(path), ai_cfg={"enabled": False})
+    h2 = [b for b in ir["blocks"] if b["type"] == "heading2"]
+    assert [b["text"] for b in h2] == ["1.第一小节", "1.第二小节"]
+    assert all(b.get("confidence") == "ambiguous" for b in h2), \
+        [b.get("confidence") for b in h2]
+
+
+def test_arabic_third_marker_makes_level_certain(tmp_path):
+    """出现「（1）」说明是《经济管理》体，判二级有依据，不再标推断。"""
+    doc = Document()
+    doc.add_paragraph("一、研究背景")
+    doc.add_paragraph("1.第一小节")
+    doc.add_paragraph("（1）具体做法")          # 阿拉伯三级编号，反证「1.」是二级
+    path = tmp_path / "amb5.docx"
+    doc.save(str(path))
+
+    ir = parse.parse(str(path), ai_cfg={"enabled": False})
+    h2 = [b for b in ir["blocks"] if b["type"] == "heading2"]
+    assert [b["text"] for b in h2] == ["1.第一小节"]
+    assert h2[0].get("confidence") == "medium", h2[0].get("confidence")
+
+
 def test_label_rewrite_keeps_body_unbold():
     """标签归一只能改前缀：标签仍是粗体，正文必须保持原字重。
 

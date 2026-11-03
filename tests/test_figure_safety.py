@@ -10,7 +10,7 @@ from io import BytesIO
 from docx import Document
 from docx.shared import Pt
 
-from conftest import NS_W, render_into
+from conftest import NS_W, minimal_doc, render_into
 
 # 1x1 透明 PNG，用来构造真实的图片段落
 PNG_1PX = base64.b64decode(
@@ -20,9 +20,8 @@ PNG_1PX = base64.b64decode(
 
 def build_manuscript_with_figure(path):
     """造一份最小稿件：标题 + 一张图（原稿带固定行距）+ 图注 + 正文。"""
-    doc = Document()
-    doc.add_paragraph("经济增长与企业创新研究")
-    doc.add_paragraph("内容提要：本文考察企业创新产出的影响因素。")
+    doc = minimal_doc(path, title="经济增长与企业创新研究",
+                      abstract="内容提要：本文考察企业创新产出的影响因素。")
 
     fig = doc.add_paragraph()
     fig.add_run().add_picture(BytesIO(PNG_1PX))

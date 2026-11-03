@@ -108,7 +108,7 @@ ENUM_HINT = """
 - body_align / heading_level1_align: both（两端对齐）/ left / center
 - heading_numbering: cn-hierarchical（一、（一）1.）/ arabic（1 / 1.1 / 1.1.1）/ none
 - citation_system: numbered（顺序编码制，正文标 [1]）/ author-year（作者年制，正文标（张三，2020））
-- limit_total_metric: A（字符数不计空格）/ B（中文汉字数）/ C（字符数计空格）
+- limit_total_metric: A（字符数不计空格）/ B（中文字符数+英文单词数，对应 Word 中文版『字数』）/ C（字符数计空格）
 """
 
 EXTRACT_PROMPT = """你是期刊投稿规范的抽取器。输入是一篇期刊稿约（投稿须知）的正文，输出是一张事实清单。
@@ -128,6 +128,14 @@ EXTRACT_PROMPT = """你是期刊投稿规范的抽取器。输入是一篇期刊
 
 只输出 JSON，不要 markdown 代码块，形如：
 {{"facts":{{"body_size_pt":10.5}},"evidence":{{"body_size_pt":"正文用小五号宋体"}},"notes":"稿约未提及页边距"}}"""
+
+# 截断后的降级重试提示（F52）：只要 facts、不要 evidence。没有引文的值走
+# F15 的无引文通道进 unverified、不进规则集——宁缺勿编，也不整链报废。
+DEGRADE_HINT = """
+
+注意：上一次输出被截断，没有得到完整 JSON。这次改用最简格式，只输出
+{{"facts":{{...}}}} 一个对象：每个键一个取值，不要 evidence、不要 notes、
+不要任何解释文字。没有把握的键直接不要输出。"""
 
 
 # ---------------------------------------------------------------- PDF
@@ -199,7 +207,13 @@ def _get_path(root, path):
 
 
 def ai_facts(text, cfg, log=None):
-    """让模型抽事实。返回 (facts, evidence, notes, raw)。"""
+    """让模型抽事实。返回 (facts, evidence, notes, raw)。
+
+    事实抽取要求 49+3 个键逐个输出值和逐字引文，输出体量大，默认的
+    max_tokens 会把 JSON 截成半截——而这条链路原本没有重试，一次即失败
+    （F52）。截断/非法 JSON 时降级重试一次：只要取值、不要引文，没有引文
+    的值经 build() 进 unverified，不会混进规则集。
+    """
     keys = "\n".join(f"- {k}: {meta[2]}" for k, meta in FACTS.items())
     keys += "\n- body_line_mode: exact（固定行距，给磅值）或 multiple（倍数行距）\n"
     keys += "- body_line_value: 行距数值（固定值给磅，倍数给倍数）\n"
@@ -210,8 +224,16 @@ def ai_facts(text, cfg, log=None):
         {"role": "system", "content": prompt},
         {"role": "user", "content": "以下是稿约正文：\n\n" + text},
     ]
-    content = ai_assist._chat(cfg, messages)
-    obj = json.loads(_json_blob(content))
+    try:
+        content = ai_assist._chat(cfg, messages, max_tokens=8192)
+        obj = json.loads(_json_blob(content))
+    except ValueError:
+        # JSONDecodeError 是 ValueError 子类；_json_blob 找不到花括号也抛 ValueError
+        if log:
+            log("事实抽取的输出被截断或不是合法 JSON，降级重试一次：只要取值，不要引文")
+        degrade = [dict(messages[0], content=prompt + DEGRADE_HINT), messages[1]]
+        content = ai_assist._chat(cfg, degrade, max_tokens=8192)
+        obj = json.loads(_json_blob(content))
     facts = obj.get("facts") or {}
     ev = obj.get("evidence") or {}
     if not isinstance(facts, dict):
@@ -407,6 +429,9 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
             "ocr_pages": (meta or {}).get("ocr_pages") or [],
             # 哪些页识别失败必须留痕——整页内容静默丢失比读错更严重
             "ocr_failed_pages": (meta or {}).get("ocr_failed_pages") or [],
+            # 文字层异常少的页（F51）：20 字阈值的旁路可能让扫描页静默跳过
+            # OCR，复核时要知道哪些页可疑
+            "ocr_low_text_pages": (meta or {}).get("ocr_low_text_pages") or [],
             "ocr_engine": (meta or {}).get("engine", ""),
             "ai_model": None,
             "used": {k: v for k, v in used.items()},
@@ -520,6 +545,8 @@ def main():
     ext_meta = rules["verification"]["extraction"]
     # OCR 丢页与未证实项都必须在命令行里喊出来，不能只在 JSON 里躺着
     for m in ocr.failure_warnings(ext_meta):
+        print(m, file=sys.stderr)
+    for m in ocr.low_text_warnings(ext_meta):
         print(m, file=sys.stderr)
     s = report["stats"]
     if s.get("unverified"):

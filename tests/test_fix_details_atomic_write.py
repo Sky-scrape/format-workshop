@@ -59,7 +59,12 @@ def _post_details(client, job, abstract, monkeypatch):
     """提交补录表单；渲染被桩掉，焦点只在 details.json 的落盘。"""
     import app as app_module
 
-    monkeypatch.setattr(app_module, "stage_render", lambda *a, **k: None)
+    def fake_render(*args, **kwargs):
+        prepare = kwargs.get("prepare")
+        if prepare is not None:
+            prepare()
+
+    monkeypatch.setattr(app_module, "stage_render", fake_render)
     return client.post(f"/job/{job}/details",
                        data={"english_abstract": abstract, "classification": "F06"})
 

@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import docx_meta  # noqa: E402
 
-from conftest import render_into  # noqa: E402
+from conftest import minimal_doc, render_into  # noqa: E402
 
 CUSTOM_NS = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 CUSTOM_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties"
@@ -41,12 +41,10 @@ def poison_metadata(path, with_revision=False):
     """给普通 DOCX 装上作者、公司、WPS 账号与可选的修订作者。"""
     path = Path(path)
     if not path.exists():
-        doc = Document()
-        doc.add_paragraph("数字金融与企业融资约束")
-        doc.add_paragraph("内容摘要：本文考察数字金融对企业融资约束的影响。")
-        doc.add_paragraph("关键词：数字金融；融资约束")
-        doc.add_paragraph("正文段落，用于确认清元数据不会动内容。")
-        doc.save(str(path))
+        minimal_doc(path, title="数字金融与企业融资约束",
+                    abstract="内容摘要：本文考察数字金融对企业融资约束的影响。",
+                    keywords="关键词：数字金融；融资约束",
+                    extra_paragraphs=["正文段落，用于确认清元数据不会动内容。"])
 
     doc = Document(str(path))
     cp = doc.core_properties

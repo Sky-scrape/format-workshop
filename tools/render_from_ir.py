@@ -25,8 +25,14 @@ from lxml import etree
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
+# embeddable Python（_pth 模式）不会把脚本所在目录放进 sys.path——
+# 这是它和常规解释器唯一的行为差异，绿色包里所有同目录 import 都会
+# 因此失败。显式挂上，两种启动方式行为一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from docx_meta import sanitize_docx
 import xmlsafe
+import assume_groups
 
 ALIGN = {
     "left": WD_ALIGN_PARAGRAPH.LEFT,
@@ -55,16 +61,26 @@ SECTION_NAMES = {
     "figures": "图", "citation": "引用",
 }
 
+# 字符串项查「键存在」；元组项是深一层断言（F13DEEP）——批五只查键存在性，
+# line_spacing={"mode":"multiple"} 缺 value 子键照样在渲染中途裸 KeyError，
+# note_layers 条目缺 kind 也是 reorder_notes 里的裸下标。三种断言形态：
+#   (路径, "dict")                     键存在且为 dict（渲染器要下钻消费它）
+#   (路径, "keys_when", 条件, *子键)    是 dict，且条件全满足时必须含这些子键
+#   (路径, "each_keys", *子键)          是 list，每项都是 dict 且含这些子键；
+#                                      键缺失或不是 list 时按路径本身报缺
 REQUIRED_RULE_KEYS = [
     "journal.name_zh",
     "typography.body.font_cn",
     "typography.body.size_pt",
     "typography.body.line_spacing",
+    # value 只在倍数行距声明下消费（固定值行距走 value_pt，可落到代码缺省），
+    # 条件断言避免误杀 exact 模式的规则集
+    ("typography.body.line_spacing", "keys_when", {"mode": "multiple"}, "value"),
     "typography.body.first_line_indent_chars",
-    "typography.title",
-    "headings.level1",
+    ("typography.title", "dict"),
+    ("headings.level1", "dict"),
     "headings.levels",
-    "blocks",
+    ("blocks", "each_keys", "type"),
     "page.size",
     "page.size_mm.width",
     "page.size_mm.height",
@@ -75,22 +91,56 @@ REQUIRED_RULE_KEYS = [
     "tables.border_pt.top",
     "tables.border_pt.header_bottom",
     "tables.border_pt.bottom",
-    "tables.note_layers",
-    "figures.note_layers",
-    "citation",
+    ("tables.note_layers", "each_keys", "kind"),
+    ("figures.note_layers", "each_keys", "kind"),
+    ("citation", "dict"),
 ]
 
 
+def _required_walk(rules, path):
+    """沿点路径取节点；中途断掉或落成显式 null 返回 None。"""
+    node = rules
+    for key in path.split("."):
+        if not isinstance(node, dict) or key not in node:
+            return None
+        node = node[key]
+    return node
+
+
 def missing_required_keys(rules):
-    """返回规则集缺失的必填键（点路径列表），一次报全。"""
+    """返回规则集缺失的必填键（点路径列表），一次报全。
+
+    字符串项查「键存在」；元组项是深一层断言（形态见 REQUIRED_RULE_KEYS），
+    缺子键报成「路径.子键」，list 条目缺子键报成「路径[].子键」——与
+    存在性缺口在同一份清单里一次报全。
+    """
     missing = []
-    for ref in REQUIRED_RULE_KEYS:
-        node = rules
-        for key in ref.split("."):
-            if not isinstance(node, dict) or key not in node:
-                missing.append(ref)
-                break
-            node = node[key]
+    for item in REQUIRED_RULE_KEYS:
+        if isinstance(item, str):
+            path, kind, args = item, "exists", ()
+        else:
+            path, kind, args = item[0], item[1], item[2:]
+        node = _required_walk(rules, path)
+        if node is None:
+            missing.append(path)
+            continue
+        if kind == "exists":
+            continue
+        if kind == "dict":
+            if not isinstance(node, dict):
+                missing.append(path)
+        elif kind == "keys_when":
+            cond, subkeys = args[0], args[1:]
+            if isinstance(node, dict) and all(node.get(k) == v for k, v in cond.items()):
+                missing.extend(f"{path}.{s}" for s in subkeys if s not in node)
+        elif kind == "each_keys":
+            if not isinstance(node, list):
+                missing.append(path)
+                continue
+            for e in node:
+                absent = args if not isinstance(e, dict) \
+                    else tuple(s for s in args if s not in e)
+                missing.extend(f"{path}[].{s}" for s in absent)
     return missing
 
 
@@ -166,6 +216,48 @@ def fill_level_template(tpl, n):
     return re.sub(r"\d+", str(n), tpl, count=1)
 
 
+def tpl_prefix_rx(tpl):
+    """把目标刊的编号模板变成「剥除已有前缀」的正则。
+
+    `1.` → `^\\d{1,3}\\.(?!\\d)`；`（1）` → `^[（(]\\d{1,3}[）)](?!\\d)`；
+    `一、` → `^[一二三四五六七八九十]{1,3}、`。
+
+    为什么需要这条：NUM_PREFIX / NUM_PREFIX_NUM 覆盖的是「稿件原本可能是什么
+    编号」，不含目标刊自己的写法。于是同一份成品重跑时——比如《经济管理》
+    二级标题已经是「1.标题」——通用正则只认「1.1」不认「1.」，剥不掉，
+    新编号叠加上去就成了「1.1.标题」。一次重跑叠一层，成品被彻底毁掉。
+    渲染器写出的形式必须能被自己读回来，这是幂等的前提。
+    """
+    if not tpl:
+        return None
+    # 先把「数字」「中文数字」两类占位符抽出来，其余字符一律转义，
+    # 免得模板里的括号、顿号被当成正则元字符
+    marks = re.sub(r"[一二三四五六七八九十]+", "\x01", re.sub(r"\d+", "\x00", tpl))
+    pat = re.escape(marks)
+    pat = pat.replace(re.escape("\x00"), r"\d{1,3}")
+    pat = pat.replace(re.escape("\x01"), r"[一二三四五六七八九十]{1,3}")
+    # 中文刊里全角/半角括号混用很常见，模板写全角时也要认半角
+    pat = pat.replace("（", "[（(]").replace("）", "[）)]")
+    # (?!\d) 防「1.5亿元」这类数字开头的正文被剥成「5亿元」
+    return re.compile("^" + pat + r"\s*(?!\d)")
+
+
+def strip_number_prefix(core, level, hd):
+    """剥掉标题里已有的编号前缀，返回（正文, 是否剥掉了）。
+
+    候选顺序：通用中文编号 → 通用数字编号 → 目标刊自己的模板形状。
+    前两条处理「稿件原本的体系」，第三条处理「本工具自己上一轮的输出」。
+    """
+    for rx in (NUM_PREFIX.get(level), NUM_PREFIX_NUM.get(level),
+               tpl_prefix_rx((hd.get("levels") or [None] * 4)[level - 1])):
+        if rx is None:
+            continue
+        stripped = rx.sub("", core).strip()
+        if stripped != core:
+            return stripped, True
+    return core, False
+
+
 NUM_PREFIX = {
     1: re.compile(r"^[一二三四五六七八九十]{1,3}、\s*"),
     2: re.compile(r"^[（(][一二三四五六七八九十]{1,3}[）)]\s*"),
@@ -203,18 +295,26 @@ class Audit:
         # 驳回记录用「块序号|动作」定位：同一稿件、同一规则集重跑时该键恒定，
         # 因此驳回可以跨次复用，不需要依赖易变的数组下标
         self.rejects = set(rejects or [])
+        # 逐块核对过的块数。报告要能回答「你没改的那些块，是看过还是漏了」——
+        # 只列改动项，用户无从判断覆盖率；把核对总数报出来，才谈得上可审计。
+        self.blocks_seen = 0
 
     def blocked(self, idx, action):
         return f"{idx}|{action}" in self.rejects
 
-    def add(self, idx, btype, action, before="", after="", note="", rejected=False, rule=""):
+    def add(self, idx, btype, action, before="", after="", note="", rejected=False, rule="",
+            changed=True):
         """rule 是本条改动的依据，指向规则集里的具体字段（见 rules_ref.py）。
 
         结尾带 `~` 表示该键在部分规则集里可缺省，缺省时按代码内约定取值。
+
+        changed=False 表示本条是「说明」而非「改动」（跳过、原样保留、域锁定）：
+        它必须出现在报告里——「这里看过、但没动」和「这里漏了」是两件事——
+        但不能计入改动数，否则报告自己就在虚报。
         """
         self.items.append({"id": f"{idx}|{action}", "idx": idx, "sec": self.sec, "block": btype,
                            "action": action, "before": before, "after": after, "note": note,
-                           "rule": rule, "rejected": bool(rejected)})
+                           "rule": rule, "rejected": bool(rejected), "changed": bool(changed)})
 
 
 def fmt_snapshot(p):
@@ -312,14 +412,18 @@ def set_run(run, cn=None, latin=None, size=None, bold=None, letter_spacing=None)
         run.font.size = Pt(round(size * 2) / 2)
     if bold is not None:
         run.font.bold = bold
-    if letter_spacing:
-        # 字间距按 twips 写入（1pt = 20twips）；《经济研究》标题每字加宽约 1.3pt
+    if letter_spacing is not None:
+        # 字间距按 twips 写入（1pt = 20twips）；《经济研究》标题每字加宽约 1.3pt。
+        # 只有 None 才是「规则集未声明」——此时不动 run 上已有的字间距；数值
+        # （含 0）都生效：声明 0 时移除已有的 w:spacing，否则从带字间距模板
+        # 切到 0pt 的刊，成品残留旧字间距（SETRUN0）
         old = rpr.find(qn("w:spacing"))
         if old is not None:
             rpr.remove(old)
-        sp = OxmlElement("w:spacing")
-        sp.set(qn("w:val"), str(int(round(letter_spacing * 20))))
-        rpr.append(sp)
+        if letter_spacing:
+            sp = OxmlElement("w:spacing")
+            sp.set(qn("w:val"), str(int(round(letter_spacing * 20))))
+            rpr.append(sp)
 
 
 def clear_para_formatting(p, keep_numbering=True):
@@ -460,6 +564,39 @@ def block_text(el):
     return para_full_text(el)
 
 
+# 文字归域所有、本工具不动的域类型：
+#   citation —— EndNote/Zotero 等插入的引文与文献表，文字归文献库
+#   seq      —— Word 自动编号（图表序号、章节号），改了就与编号指令脱钩
+#   toc      —— 目录域，条目由 Word 生成
+# page / ref 类不在此列：页码与交叉引用不参与本工具的文本改写分支。
+TEXT_OWNED_KINDS = {"citation", "seq", "toc"}
+
+
+def text_locked(blk):
+    """该块的文字是否归 Word 域所有，本工具只改版式、不改文字。
+
+    这些块里的可见文字是域的「结果」，不是作者敲的 run。改了不会报错，
+    但后果比格式不对严重：作者返修时在 EndNote 里加一篇文献，按 F9 更新，
+    工具改过的文字被域重新生成覆盖回去，而条目与文献库的对应关系已经断了。
+    """
+    return any(f.get("kind") in TEXT_OWNED_KINDS for f in blk.get("fields") or ())
+
+
+def locked_note(audit, blk, action, rule=""):
+    """含域块的「没改」说明：把边界写进报告，别让用户以为工具漏了。
+
+    这是 N 档条目（未改动任何内容）：不计入改动数，但必须出现——
+    「这里我看见了、但我不能动」和「这里我没看见」是两件事。
+    """
+    kinds = sorted({f["kind"] for f in blk.get("fields") or ()
+                    if f.get("kind") in TEXT_OWNED_KINDS})
+    audit.add(blk["idx"], blk["type"], "含域，文字未改",
+              note=f"原计划「{action}」；本段文字是 {'/'.join(kinds)} 类 Word 域的"
+                   f"显示结果，改动会与域指令脱钩（Word 里按 F9 更新即回滚），"
+                   f"故保留原样。版式仍按本刊要求套用",
+              rule=rule, changed=False)
+
+
 def _write_t(node, text):
     """写 w:t 文字；带首尾空白时补 xml:space，否则 Word 渲染时会修掉它。"""
     node.text = text
@@ -560,16 +697,26 @@ def style_footnotes(doc, rules):
 
     只统计**真的变了**的脚注：本来就合规的不进报告，否则"改为 7.5pt"这种话
     会出现在什么都没变的稿子上。
+
+    返回 (改动条数, 目标描述, 未处理的外部脚注关系数)：TargetMode="External"
+    的脚注关系没有可解析部件（访问 target_part 抛 ValueError，EXTFOOT），
+    跳过并把数量交给调用方写进汇总。
     """
     tp = (rules.get("typography") or {}).get("footnote") or {}
     size, cn = tp.get("size_pt"), tp.get("font_cn")
     latin = tp.get("font_latin") or "Times New Roman"
     if not (size or cn):
-        return 0, ""
+        # 没声明脚注样式时也数一下外部关系，汇总照样要报（渲染不崩、有说明）
+        return 0, "", sum(1 for rel in doc.part.rels.values()
+                          if rel.reltype.endswith("/footnotes") and rel.is_external)
 
     changed = 0
+    external = 0
     for rel in list(doc.part.rels.values()):
         if not rel.reltype.endswith("/footnotes"):
+            continue
+        if rel.is_external:
+            external += 1
             continue
         try:
             blob = rel.target_part.blob
@@ -606,7 +753,7 @@ def style_footnotes(doc, rules):
                 root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
     desc = f"{cn or ''} {size:g}pt".strip() if size else (cn or "")
-    return changed, desc
+    return changed, desc, external
 
 
 def replace_prefix(p, old_len, new_prefix):
@@ -761,7 +908,12 @@ def ref_number_prefix(text):
     after = text[m.end("num"):m.end("num") + 1]
     if not (bracketed or tail or after.isspace()):
         return None, None
-    return m.group(0), int(m.group("num"))
+    # 编号与其后正文之间的空白也算前缀区：目标刊的 space_after 会重新给出
+    # 这段空白。不计入的话，`replace_prefix` 只删掉 `[1]` 三个字符再写回
+    # `[1] `，而原文本里那个空格还在——每重跑一次多叠一个空格，条目越跑
+    # 越松。这是幂等的前提，不是格式洁癖。
+    trailing = re.match(r"\s*", text[m.end():]).group(0)
+    return m.group(0) + trailing, int(m.group("num"))
 
 
 def format_ref_number(fmt, num, space_after=None):
@@ -778,6 +930,80 @@ def format_ref_number(fmt, num, space_after=None):
     if space_after:
         out += " "
     return out
+
+
+def _grid_span(tc):
+    """横向合并占几列（w:gridSpan 缺省为 1）。"""
+    tcPr = tc.find(qn("w:tcPr"))
+    if tcPr is None:
+        return 1
+    el = tcPr.find(qn("w:gridSpan"))
+    if el is None:
+        return 1
+    try:
+        return max(1, int(el.get(qn("w:val"))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _vmerge_state(tc):
+    """纵向合并状态：restart（起始）/ continue（续行空壳）/ None（不合并）。
+
+    `w:vMerge` 没有 val 时按 OOXML 规范就是 continue——直接写 `<w:vMerge/>`
+    的稿子很常见，漏了这条会把续行当成一个独立单元格。
+    """
+    tcPr = tc.find(qn("w:tcPr"))
+    if tcPr is None:
+        return None
+    el = tcPr.find(qn("w:vMerge"))
+    if el is None:
+        return None
+    return "restart" if (el.get(qn("w:val")) or "").lower() == "restart" else "continue"
+
+
+def _table_grid(tbl):
+    """把表格铺成 grid[row][col] = tc，纵向合并的续行回填成起始 tc。
+
+    为什么必须铺开：三线表的栏目线是「表头区与表体区的分界」，而经管论文的
+    表头经常跨两行（「变量类型」跨行、分组标题跨列）。按 row.cells 逐行判断
+    `ri == 0` 时，跨行单元格的 tc 在第 0 行，而它的底边落在合并区底部——
+    于是同一张表里一部分列的线画在第 0 行下、一部分画在合并区底部，线是断开的。
+    """
+    grid, starts = [], {}
+    for r, tr in enumerate(tbl.findall(qn("w:tr"))):
+        row, col = [], 0
+        for tc in tr.findall(qn("w:tc")):
+            span = _grid_span(tc)
+            if _vmerge_state(tc) == "continue":
+                # 回溯上一行同列的起始 tc；拿不到就用自己的（异常稿兜底）
+                tc = starts.get((r - 1, col), tc)
+            for k in range(span):
+                starts[(r, col + k)] = tc
+            row.extend([tc] * span)
+            col += span
+        grid.append(row)
+    return grid
+
+
+def _header_rows(grid):
+    """表头区占几行。
+
+    vMerge 的续行已在 _table_grid 里回填成起始 tc，所以「相邻两行出现同一个
+    元素」就等价于「这里有一个跨行单元格」——这是判断表头跨几行最干净的依据，
+    不必去猜字号或空行。
+
+    上限取 len-1：栏目线是「表头与表体的分界」，全表都算表头的话这条线没有
+    分隔对象，画出来只会和表格底线重叠。
+    """
+    if not grid:
+        return 0
+    n = 1
+    for r in range(1, len(grid)):
+        if set(grid[r - 1]) & set(grid[r]):
+            n = r + 1
+        else:
+            break
+    return min(n, max(1, len(grid) - 1))
 
 
 def apply_table(table, bp, size_pt, cn, latin):
@@ -799,12 +1025,30 @@ def apply_table(table, bp, size_pt, cn, latin):
         borders.append(el)
     tblPr.append(borders)
 
-    for ri, row in enumerate(table.rows):
-        for cell in row.cells:
-            tcPr = cell._tc.get_or_add_tcPr()
+    # 栏目线按「逻辑单元格的底边落在哪一行」来画，而不是按 ri == 0。
+    # 合并单元格的边框只有起始 tc 上的算数（续行空壳的边框 Word 直接忽略），
+    # 所以必须先铺成 grid、把续行回填成起始 tc，再判断底边位置。
+    grid = _table_grid(tbl)
+    n_header = _header_rows(grid)
+    # 每个逻辑单元格占的行区间
+    extent = {}
+    for r, row in enumerate(grid):
+        for tc in row:
+            lo, hi = extent.get(tc, (r, r))
+            extent[tc] = (min(lo, r), max(hi, r))
+
+    seen = set()
+    for row in grid:
+        for tc in row:
+            if tc in seen:
+                continue
+            seen.add(tc)
+            tcPr = tc.get_or_add_tcPr()
             for el in tcPr.findall(qn("w:tcBorders")):
                 tcPr.remove(el)
-            if ri == 0:
+            # 底边正好落在表头区最后一行的，才画栏目线：跨行表头的单元格
+            # 底边在合并区底部，正是"表头与表体之间"那条线该在的位置
+            if extent[tc][1] == n_header - 1:
                 tcb = OxmlElement("w:tcBorders")
                 b = OxmlElement("w:bottom")
                 b.set(qn("w:val"), "single")
@@ -813,8 +1057,8 @@ def apply_table(table, bp, size_pt, cn, latin):
                 b.set(qn("w:color"), "000000")
                 tcb.append(b)
                 tcPr.append(tcb)
-            for p in cell.paragraphs:
-                for run in p.runs:
+            for p_el in tc.findall(qn("w:p")):
+                for run in Paragraph(p_el, table).runs:
                     set_run(run, cn=cn, latin=latin, size=size_pt)
 
 
@@ -836,18 +1080,53 @@ def table_snapshot(table):
                                                      child.get(qn("w:sz")),
                                                      child.get(qn("w:space")),
                                                      child.get(qn("w:color")))
-    cells = []
-    for row in table.rows:
-        for cell in row.cells:
-            tcpr = cell._tc.find(qn("w:tcPr"))
+    # 与 apply_table 同一套 grid 口径：合并单元格只按起始 tc 记一次。
+    # 两边口径不一致的话，快照会记到 apply_table 根本没碰的续行空壳上，
+    # 「已完全合规」的表格每次重跑都被判成改动（F28 的老毛病换了个位置复发）。
+    grid = _table_grid(table._tbl)
+    cells, seen = [], set()
+    for row in grid:
+        for tc in row:
+            if tc in seen:
+                continue
+            seen.add(tc)
+            tcpr = tc.find(qn("w:tcPr"))
             tcb = tcpr.find(qn("w:tcBorders")) if tcpr is not None else None
             cb = tuple(sorted((etree.QName(c).localname, c.get(qn("w:val")), c.get(qn("w:sz")),
                                c.get(qn("w:space")), c.get(qn("w:color")))
                               for c in tcb)) if tcb is not None else ()
             fonts = tuple((run_style(r), run_hansi(r))
-                          for pp in cell.paragraphs for r in para_runs(pp))
+                          for p_el in tc.findall(qn("w:p"))
+                          for r in para_runs(Paragraph(p_el, table)))
             cells.append((cb, fonts))
     return {"borders": borders, "cells": tuple(cells)}
+
+
+def _sdt_blocks(content):
+    """sdtContent 递归下钻：返回（可处理块元素列表, 未识别叶节点数）。
+
+    w:p / w:tbl 直接收进块列表；内嵌 w:sdt 继续下钻，其块按文档序并入同一
+    列表（SDTNEST：批五只下钻一层，外层有直接段落时内嵌 sdt 的段落既不进
+    IR 也不计数，无声丢失）；其余子节点是不认识的叶节点，逐个计数。一个块
+    都没取到、也没有未识别节点（空内容控件）时计 1——整块没有可处理段落/
+    表格的对象要报出来（F24 口径，内容原样保留）。
+
+    渲染端必须与 parse_docx._sdt_blocks 保持同一展开顺序：IR 的 sdt_pos 是
+    槽位内序，两边顺序不一致就套错段。
+    """
+    blocks, unknown = [], 0
+    for e in (list(content) if content is not None else []):
+        if e.tag in (qn("w:p"), qn("w:tbl")):
+            blocks.append(e)
+        elif e.tag == qn("w:sdt"):
+            sub_blocks, sub_unknown = _sdt_blocks(e.find(qn("w:sdtContent")))
+            blocks.extend(sub_blocks)
+            unknown += sub_unknown
+        else:
+            unknown += 1
+    if not blocks and not unknown:
+        unknown = 1
+    return blocks, unknown
 
 
 def elem_of(blk, elems):
@@ -874,6 +1153,11 @@ def footnote_texts(doc):
     texts = []
     for rel in list(doc.part.rels.values()):
         if not rel.reltype.endswith("/footnotes"):
+            continue
+        if rel.is_external:
+            # TargetMode="External" 的脚注关系（外部超链接式）没有可解析部件，
+            # 访问 target_part 抛 ValueError（EXTFOOT 实测崩溃路径）——它也不
+            # 可能藏编号引用，直接跳过
             continue
         try:
             blob = rel.target_part.blob
@@ -964,26 +1248,27 @@ def reorder_notes(elems, ir, rules, audit):
 # 声明不认识（或没声明）就宁可不排，note 如实说明——不再内置「中文在前、
 # 英文在后」却冒用 citation.reference_list.sort 之名出审计。
 APPEARANCE_SCHEMES = ("by_appearance_order", "by-appearance")
+# 两种「中文优先」声明的中文键统一用 GB 序（一级字库即拼音序）实现：声明里的
+# 「拼音序/字母序」对中文的可行实现就是它——码位序会把「周一」排到「张三」
+# 前面，与声明的字面意思相反（JRYJNOTE：note 描述的排序必须真的发生，F21/F22
+# 措辞与实现一致的原则不变，这里改的是实现而不是措辞迁就实现）
 SORT_NOTE = {
     "cn-first-by-pinyin-then-en-by-alphabet":
-        "中文按 GB 序（近似拼音）在前、英文按字母在后",
+        "中文按 GB 序（近似拼音）在前、英文按字母序在后",
     "cn-first-by-alphabet-then-en-by-alphabet":
-        # 字母类声明的中文键是名字裸比较＝Unicode 码位序（sort_key），对中文
-        # 不是拼音序（「周一」U+5468 排在「张三」U+5F20 前）——note 必须照实
-        # 说，不得冒用「字母序」（F21/F22：措辞必须描述实际发生的排序）
-        "中文按码位序（非拼音序）在前、英文按字母序在后",
+        "中文按字母序（GB 序，近似拼音）在前、英文按字母序在后",
     "alphabetical": "条目按字母序排列",
 }
 
 
 def sort_key(entry, scheme):
-    """按目标刊声明的排序体例给条目一个比较键（F21/F22）。
+    """按目标刊声明的排序体例给条目一个比较键（F21/F22/JRYJNOTE）。
 
-    排序键完全由 scheme 决定，这里不内置「中文在前」的默认。拼音类声明的
-    中文键用 GB2312 序近似（citation_ref.gb_sort_key）——环境里没有拼音库，
-    旧做法 except 吞掉 ImportError 后用码位序冒充拼音序，会把「周一」排到
-    「张三」前面；GB 序的一级字库本身就是拼音序。审计措辞见 SORT_NOTE，
-    必须描述实际发生的排序。
+    排序键完全由 scheme 决定，这里不内置「中文在前」的默认。中文键统一用
+    GB2312 序近似（citation_ref.gb_sort_key）——环境里没有拼音库，码位序
+    会把「周一」排到「张三」前面；GB 序的一级字库本身就是拼音序，两种
+    「中文优先」声明的「拼音序/字母序」对中文都由它实现。英文键是姓氏的
+    str.lower 键序。审计措辞见 SORT_NOTE，必须描述实际发生的排序。
     """
     name = entry["authors"][0] if entry["authors"] else ""
     if scheme == "alphabetical":
@@ -991,12 +1276,8 @@ def sort_key(entry, scheme):
         import citation_ref as cr
         return (cr.NUMBERED_PREFIX.sub("", entry["raw"]).lower(), entry["year"])
     if entry["lang"] == "cn":
-        if scheme == "cn-first-by-alphabet-then-en-by-alphabet":
-            key = name                          # 字母类声明：中文按码位字母序
-        else:                                   # 拼音类声明：GB 序近似拼音
-            import citation_ref as cr
-            key = cr.gb_sort_key(name)
-        return (0, key, entry["year"])
+        import citation_ref as cr
+        return (0, cr.gb_sort_key(name), entry["year"])
     return (1, re.split(r"[\s,，]", name)[0].lower(), entry["year"])
 
 
@@ -1086,6 +1367,20 @@ def apply_citation(doc, elems, ir, rules, audit):
     # 条目文字按聚合口径取：整条藏在超链接或修订插入里的条目 p.text 看不见
     refs = [(i, p) for i, p in refs if p is not None and block_text(p).strip()]
     if not refs:
+        return
+
+    # EndNote 插入的文献表是一整个 EN.REFLIST 域，条目的作者、年份、编号全在
+    # 域结果里。重排它等于绕过文献库另写一份：作者返修时按 F9 更新，整表
+    # 会按库里的旧数据重新生成，重排白做，还可能把已改的条目变成死文本。
+    by_idx = {b["idx"]: b for b in ir["blocks"]}
+    locked_refs = [i for i, _p in refs if text_locked(by_idx.get(i) or {})]
+    if locked_refs:
+        audit.add(-3, "citation", "条目重排（含域，已跳过）",
+                  note=f"文献表 {len(locked_refs)} 条是文献管理软件的域结果，"
+                       f"重排会与文献库脱钩（Word 里按 F9 更新即整表回滚），"
+                       f"故保持原样；如需按本刊体例重排，请先在 EndNote/Zotero 里"
+                       f"改输出样式后重新插入",
+                  rule="citation.reference_list.templates", changed=False)
         return
 
     # 体例硬闸（P4-1）：引用重排只服务于声明了作者-年份体的目标刊。编号实引的
@@ -1312,13 +1607,11 @@ def main():
         elif child.tag == qn("w:tbl"):
             elems[i] = Table(child, doc)
         elif child.tag == qn("w:sdt"):
-            content = child.find(qn("w:sdtContent"))
-            inner = []
-            for e in (content if content is not None else []):
-                if e.tag == qn("w:p"):
-                    inner.append(Paragraph(e, doc))
-                elif e.tag == qn("w:tbl"):
-                    inner.append(Table(e, doc))
+            # 与 parse_docx._sdt_blocks 同一套递归展开（SDTNEST）：内嵌 sdt
+            # 继续展开直到取尽段落/表格，未识别叶节点已由解析端计数进 IR
+            sdt_els, _unknown = _sdt_blocks(child.find(qn("w:sdtContent")))
+            inner = [Paragraph(e, doc) if e.tag == qn("w:p") else Table(e, doc)
+                     for e in sdt_els]
             if inner:
                 elems[i] = inner
 
@@ -1331,6 +1624,9 @@ def main():
         el = elem_of(blk, elems)
         if el is None:
             continue
+        # 只数真正取到元素、进过分支判断的块：取不到元素的块没被核对，
+        # 把它算进「已核对」就是虚增覆盖率
+        audit.blocks_seen += 1
         if blk.get("sdt_pos") is not None:
             # sdt 内块的审计键带「槽.序」：同槽多块的条目 id 仍然唯一、可驳回
             blk = {**blk, "idx": f'{blk["idx"]}.{blk["sdt_pos"]}'}
@@ -1445,7 +1741,8 @@ def main():
             # 就散（拆表会把公式对象与编号断开），所以原样保留——但必须在报告里
             # 说明"这里没动"，否则用户看到公式没变，会以为工具漏了。
             audit.add(blk["idx"], t, "公式（伪表格）原样保留",
-                      note="1 行表格排版的公式与编号不做改动，避免拆散公式对象与编号的对应关系")
+                      note="1 行表格排版的公式与编号不做改动，避免拆散公式对象与编号的对应关系",
+                      changed=False)
             continue
 
         if t == "figure":
@@ -1456,13 +1753,16 @@ def main():
             p.alignment = ALIGN["center"]
             p.paragraph_format.line_spacing = 1.0
             after_fmt = fmt_snapshot(p)
-            # 已经是单倍行距且居中的图片段不再报「解除固定行距」
+            # 已经合规的图片段不出条目。确有行距差异的才叫「解除固定行距」；
+            # 只动了段前/段后距的用「图片段套版」——动作名必须与实际改动相符
+            # （FIGACT：命名不实非虚报），note 按 fmt_delta 列出实际差异
             if before_fmt != after_fmt:
-                why = ("固定行距会裁切内嵌图片，"
-                       if (before_fmt["line"], before_fmt["rule"])
-                       != (after_fmt["line"], after_fmt["rule"]) else "")
-                audit.add(blk["idx"], t, "图片段解除固定行距",
-                          note=f"{why}改为单倍行距并居中",
+                line_diff = (before_fmt["line"], before_fmt["rule"]) \
+                    != (after_fmt["line"], after_fmt["rule"])
+                why = "固定行距会裁切内嵌图片，" if line_diff else ""
+                audit.add(blk["idx"], t,
+                          "图片段解除固定行距" if line_diff else "图片段套版",
+                          note=why + fmt_delta(before_fmt, after_fmt, "单倍行距并居中"),
                           rule="figures")
             continue
 
@@ -1477,6 +1777,8 @@ def main():
                     audit.add(blk["idx"], t, "文献表标题归一", old, old,
                               "已驳回：保留原写法", rejected=True,
                               rule="blocks:references/label")
+                elif text_locked(blk):
+                    locked_note(audit, blk, "文献表标题归一", "blocks:references/label")
                 else:
                     replace_text(p, want)
                     audit.add(blk["idx"], t, "文献表标题归一", old, want, "仅改标题写法，条目未动",
@@ -1534,15 +1836,10 @@ def main():
             old = block_text(p)
             numeric = str(hd.get("numbering", "")).startswith("numeric")
             # 剥前缀要认"稿子原来是什么编号"，不能按目标刊的体系去剥：
-            # 中文稿投英文刊时，源码是「一、」，目标是「1.」，按目标剥会剥不掉
-            core = old.strip()
-            for rx in (NUM_PREFIX.get(level), NUM_PREFIX_NUM.get(level)):
-                if rx is None:
-                    continue
-                stripped = rx.sub("", core).strip()
-                if stripped != core:
-                    core = stripped
-                    break
+            # 中文稿投英文刊时，源码是「一、」，目标是「1.」，按目标剥会剥不掉。
+            # 但目标刊自己的写法也必须认（strip_number_prefix 第三条候选）：
+            # 本工具上一轮输出的就是那个形式，不认就叠成「1.1.标题」。
+            core, _stripped = strip_number_prefix(old.strip(), level, hd)
             core_norm = re.sub(r"\s", "", core)
 
             if numeric:
@@ -1582,6 +1879,10 @@ def main():
                     audit.add(blk["idx"], t, "标题重新编号", old, new,
                               "已驳回：保留原编号", rejected=True,
                               rule="headings.numbering")
+                elif text_locked(blk):
+                    # 标题里挂 SEQ 域（Word 自动章节号）时编号归域管，
+                    # 改字面文字会在 F9 更新时被域盖回去
+                    locked_note(audit, blk, "标题重新编号", "headings.numbering")
                 else:
                     replace_text(p, new)
                     audit.add(blk["idx"], t, "标题重新编号", old, new, "仅改编号前缀，标题文字未动",
@@ -1732,12 +2033,21 @@ def main():
             if old_prefix is not None:
                 new_prefix = format_ref_number(rl.get("number_format"), num,
                                                rl.get("space_after_number"))
-                if new_prefix and new_prefix != old_prefix:
+                # 比较时忽略尾随空白：前缀区含空白是为了「整段替换」不叠空格，
+                # 但该刊声明 space_after=None 时新前缀本就不带空白——`[1] ` 与
+                # `[1]` 是同一个编号，不能因为差一个空格就反复重写、每跑一次
+                # 吃掉一个空格
+                if new_prefix and new_prefix.rstrip() != old_prefix.rstrip():
                     before_txt = block_text(p)
                     if audit.blocked(blk["idx"], "文献条目编号归一"):
                         audit.add(blk["idx"], t, "文献条目编号归一", before_txt, before_txt,
                                   "已驳回：保留原编号写法", rejected=True,
                                   rule="citation.reference_list.number_format")
+                    elif text_locked(blk):
+                        # EndNote 文献表是一整个 EN.REFLIST 域：条目编号是该域的
+                        # 显示结果，改了前缀，用户 F9 更新就整表回滚
+                        locked_note(audit, blk, "文献条目编号归一",
+                                    "citation.reference_list.number_format")
                     else:
                         replace_prefix(p, len(old_prefix), new_prefix)
                         audit.add(blk["idx"], t, "文献条目编号归一", before_txt, block_text(p),
@@ -1815,6 +2125,10 @@ def main():
                     if audit.blocked(blk["idx"], "题注归一"):
                         audit.add(blk["idx"], t, "题注归一", old_cap, new_cap,
                                   "已驳回：保留原题注", rejected=True, rule=gap_rule)
+                    elif text_locked(blk):
+                        # 「表1」的 1 常是 SEQ 域：改字面间隔，F9 更新后域只重出
+                        # 数字，间隔照样丢，还可能把域结果变成死文本
+                        locked_note(audit, blk, "题注归一", gap_rule)
                     else:
                         replace_text(p, new_cap)
                         audit.add(blk["idx"], t, "题注归一", old_cap, new_cap,
@@ -1890,7 +2204,7 @@ def main():
 
     out = Path(a.out)
 
-    fn_count, fn_desc = style_footnotes(doc, rules)
+    fn_count, fn_desc, fn_external = style_footnotes(doc, rules)
     if fn_count:
         audit.add(-2, "footnote", "脚注正文套版",
                   note=f"{fn_count} 条脚注改为 {fn_desc}",
@@ -1902,10 +2216,28 @@ def main():
     sanitize_docx(out)
 
     audit_path = out.with_suffix(".audit.json")
+    # 推定项的区块归属（F16NOISE）：assumptions 保持原数组（逐条完整落盘，
+    # 展示分层不许删披露），另存一份「条目 → 区块」映射，审计页据此分组折叠。
+    # 键是 assumption 全文；规则集没带 extraction 留痕时映射全落「其他推定」。
     audit_path.write_text(json.dumps({"source": ir["source"], "target": rules["journal"]["name_zh"],
                                       "items": audit.items,
                                       "assumptions": rules.get("assumptions") or [],
-                                      "rejected": sorted(rejects)},
+                                      "assumption_sections": assume_groups.section_map(
+                                          rules.get("assumptions"),
+                                          (rules.get("verification") or {}).get("extraction")),
+                                      "rejected": sorted(rejects),
+                                      # 覆盖率：核对过多少块、改动落在多少块上。
+                                      # 两个数一起给，「没改的块是看过还是漏了」
+                                      # 才有答案（见 render_audit 的统计条）。
+                                      # 负数 idx 是页面/脚注/引用这类非块条目，
+                                      # 数进来会让改动块数超过核对块数。
+                                      "checked_blocks": audit.blocks_seen,
+                                      "changed_blocks": len({it["idx"] for it in audit.items
+                                                             if it.get("changed", True)
+                                                             and not it.get("rejected")
+                                                             and not str(it["idx"]).startswith("-")}),
+                                      # 域统计：报告要能说清「这段文字由谁掌管」
+                                      "fields": ir.get("fields") or {}},
                                      ensure_ascii=False, indent=2),
                           encoding="utf-8")
 
@@ -1919,11 +2251,15 @@ def main():
     for k, v in sorted(kinds.items(), key=lambda x: -x[1]):
         print(f"   {v:4d}  {k}")
     if ir.get("unsupported_content_blocks"):
-        # 解析时记数进 IR 的仍不支持的 sdt 结构（F24）：渲染汇总必须报出来，
-        # 不能让「这里没处理」变成静默的
+        # 解析时记数进 IR 的仍未处理的内容控件结构（F24/SDTNEST）：渲染汇总
+        # 必须报出来，不能让「这里没处理」变成静默的
         print(f"未处理内容块: {ir['unsupported_content_blocks']} 个"
-              f"（整块没有可处理的段落/表格，或内嵌了未下钻的内容控件，"
-              f"已原样保留）")
+              f"（内容控件里未识别的块级节点或取空的内容控件，已原样保留）")
+    if fn_external:
+        # 外部脚注关系没有可解析部件，套版与体检都够不着（EXTFOOT）：
+        # 跳过了多少条必须说明，不能静默
+        print(f"{fn_external} 条外部脚注关系未处理"
+              f"（外部超链接式脚注没有可解析部件，已原样保留）")
 
 
 if __name__ == "__main__":

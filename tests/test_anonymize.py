@@ -13,7 +13,7 @@ import json
 import pytest
 from docx import Document
 
-from conftest import RULES, run_tool
+from conftest import RULES, mutated_rules, run_tool
 
 BIO = "作者简介：张三，某大学经济学院教授，电子信箱 zs@example.edu.cn"
 ACK_HEAD = "致谢"
@@ -22,6 +22,9 @@ AUTHOR_LINE = "张三　李四"
 
 
 def build_docx(path, with_bio=True, with_ack=True):
+    """作者行必须排第二段：匿名工具只保留第一个 front_matter 块（标题），
+    其余前置块按位置删除（tools/anonymize.py 的 fm_seen 逻辑）——这段骨架
+    不能换成 minimal_doc 的固定顺序，保持手拼。"""
     doc = Document()
     doc.add_paragraph("数字金融与企业融资约束")
     doc.add_paragraph(AUTHOR_LINE)
@@ -57,12 +60,10 @@ def parse_and_patch_ir(tmp_path, docx_path):
 
 
 def alt_rules(tmp_path, name, blocks):
-    rules = json.loads((RULES / "tjyj.json").read_text(encoding="utf-8"))
-    rules["submission"]["anonymous"] = True
-    rules["submission"]["anonymize_blocks"] = blocks
-    path = tmp_path / name
-    path.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
-    return path
+    """复制 tjyj 改匿名相关键（F58 公共入口；键已存在，点路径赋值即可）。"""
+    return mutated_rules(tmp_path, "tjyj", name,
+                         **{"submission.anonymous": True,
+                            "submission.anonymize_blocks": blocks})
 
 
 def run_anonymize(tmp_path, docx_path, ir_path, rules_path, name="anon.docx"):
@@ -168,10 +169,10 @@ def test_journal_without_anonymous_refuses(tmp_path):
     """不要求匿名的刊，不该产出匿名稿。"""
     doc = build_docx(tmp_path / "i.docx")
     ir = parse_and_patch_ir(tmp_path, doc)
-    rules = alt_rules(tmp_path, "no_anon.json", [])
-    data = json.loads(rules.read_text(encoding="utf-8"))
-    data["submission"]["anonymous"] = False
-    rules.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    # 不走 alt_rules（它固定 anonymous=True），一次到位改两个键（F58）
+    rules = mutated_rules(tmp_path, "tjyj", "no_anon.json",
+                          **{"submission.anonymous": False,
+                             "submission.anonymize_blocks": []})
 
     import subprocess
     import sys

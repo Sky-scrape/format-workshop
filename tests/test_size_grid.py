@@ -18,7 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 RULES = ROOT / "rules" / "journal"
 sys.path.insert(0, str(ROOT / "tools"))
 
-SIZE_KEYS = {"size_pt", "font_size_pt", "caption_size_pt", "value_pt"}
+# 字号字段名单与 tools/audit_rulesets.py 同一（F58 收进一处）：建库体检工具怎么
+# 认字号字段，这里的刻度检查就怎么认——两份名单各自维护迟早漂移。工具侧另一份
+# （tools/normalize_rulesets.py，只认四把核心键）是迁移工具的历史口径，由工具
+# 所有者收口，测试跟着最严的一份走。
+from audit_rulesets import SIZE_KEYS  # noqa: E402
+
 SKIP = {"measured", "measured_raw", "size_pt_raw"}
 
 

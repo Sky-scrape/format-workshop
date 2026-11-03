@@ -10,6 +10,13 @@ import zipfile
 from collections import Counter
 from xml.etree import ElementTree as ET
 
+from pathlib import Path
+
+# embeddable Python（_pth 模式）不会把脚本所在目录放进 sys.path——
+# 这是它和常规解释器唯一的行为差异，绿色包里所有同目录 import 都会
+# 因此失败。显式挂上，两种启动方式行为一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import xmlsafe
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"

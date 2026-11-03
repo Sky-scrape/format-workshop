@@ -65,9 +65,26 @@ PAT = {
 
 YEAR = re.compile(r"(19|20)\d{2}")
 
+# 「1.」「2.」这类单级阿拉伯编号在中文期刊里是**两级歧义**的：
+#   《经济管理》《南开管理评论》体例里它是二级（一级「一、」）
+#   「一、／（一）／1.」体系里它是三级
+# 仅凭文本无法定级。硬编码成三级，会让前一类刊的合规投稿稿整篇二级标题
+# 被降成正文（`level==3 and 2 not in seen_level` 的降级保护正好触发），
+# 首轮就把标题格式毁掉，且重跑不幂等——同一份成品转两次，第二次报一批
+# 「改对齐」，标题被套成正文样式。因此这里只返回候选标记，由 parse()
+# 按「本文档已出现过哪几级」定级。
+AMBIGUOUS_H3 = "2or3"
+
 # 标题不用句读标点。数字编号标题全靠这一条与正文短句区分（如「3 个案例」）。
 # 冒号不算在内——「3 分析框架：科研自主性分级」是正常标题写法。
 HEADING_PUNCT = re.compile(r"[。；，！？]")
+
+# 不带编号的一级标题。不少刊的一级标题不编号（规则集 unnumbered_sections），
+# 渲染器会把「一、引言」改写成「引  言」——这个形式必须能被读回来，否则重跑时
+# 它认不出是标题，落进「前三段即前置区」的按位置推断里，被当成作者署名套版。
+# 同一份稿子越跑越错，就是这么来的。
+# 收紧到「整段只有这几个词、字间可有空白」：正文里不会单独成段，误判风险低。
+UNNUMBERED_H1 = re.compile(r"^(引\s*言|绪\s*论|结\s*论|结\s*语|余\s*论|致\s*谢|后\s*记)$")
 
 
 def looks_like_ref(text):
@@ -104,6 +121,108 @@ def para_text(p):
 
 def has_omml(p):
     return next(p.iter(M + "oMath"), None) is not None
+
+
+# ---------------------------------------------------------------- Word 域
+
+# 域类型识别。顺序即优先级：ADDIN 必须先于通用前缀判断，
+# 因为文献管理域的指令开头是「ADDIN EN.CITE ...」，不是任何关键字。
+FIELD_PATTERNS = (
+    # 文献管理软件插入的引文／文献表：这是唯一一类「文字不归作者也不归我们」的内容
+    ("citation", re.compile(r"^\s*ADDIN\s+(?:EN\.|ZOTERO|MENDELEY|CNKI|NOTE|REFMAN|CITATION)", re.I)),
+    # 图表自动编号，改动它会与题注文字脱钩，但重建时按目标刊重编，属正常业务
+    ("seq", re.compile(r"^\s*SEQ\b", re.I)),
+    # 交叉引用与目录：指向别处，拆平后编号变死文本
+    ("ref", re.compile(r"^\s*(?:REF|NOTEREF|PAGEREF)\b", re.I)),
+    ("toc", re.compile(r"^\s*TOC\b", re.I)),
+    # 页眉页脚类，重排不涉及
+    ("page", re.compile(r"^\s*(?:PAGE|NUMPAGES|SECTIONPAGES|STYLEREF)\b", re.I)),
+    ("eq", re.compile(r"^\s*EQ\b", re.I)),
+    ("date", re.compile(r"^\s*(?:DATE|TIME|SAVEDATE|PRINTDATE)\b", re.I)),
+    ("other", re.compile(r".*")),
+)
+
+FIELD_INSTR_MAX = 120
+FIELD_RESULT_MAX = 200
+
+
+def field_kind(instr):
+    for kind, rx in FIELD_PATTERNS:
+        if rx.match(instr or ""):
+            return kind
+    return "other"
+
+
+def scan_fields(p):
+    """扫描段落里的 Word 域，返回 [{kind, instr, result}]。
+
+    复杂域在 XML 里是三段结构：
+        fldChar(begin) → instrText(指令) → fldChar(separate) → 域结果 run → fldChar(end)
+
+    这条管道此前对域完全隐形：`para_text` 只收 `w:t`，`instrText` 天然读不到，
+    于是解析层看到的是「域结果」（长得和普通文字一样），IR 里只有纯文本，
+    重建时域结构凭空蒸发——没有任何一处记录这件事。后果是 EndNote 插入的
+    文献表被拆成死文本：作者返修想补一篇文献时，根本更新不了。
+
+    简化域 w:fldSimple 没有 fldChar 三段，指令在属性上，直接取。
+
+    这里只做识别与计数，不改动任何字节。文本框子树与 para_text 同口径跳过。
+    """
+    out = []
+    stack = []  # 每层：{"instr": [...], "result": [...], "phase": "instr"|"result"}
+
+    def walk(node):
+        for child in node:
+            tag = child.tag
+            if tag == W + "txbxContent":
+                continue
+            if tag == W + "fldSimple":
+                instr = child.get(W + "instr") or ""
+                result = "".join(t.text or "" for t in child.iter(W + "t"))
+                out.append(_field_rec(instr, result))
+            elif tag == W + "fldChar":
+                kind = child.get(W + "fldCharType")
+                if kind == "begin":
+                    stack.append({"instr": [], "result": [], "phase": "instr"})
+                elif kind == "separate" and stack:
+                    stack[-1]["phase"] = "result"
+                elif kind == "end" and stack:
+                    f = stack.pop()
+                    out.append(_field_rec("".join(f["instr"]), "".join(f["result"])))
+            elif tag == W + "instrText" and stack:
+                stack[-1]["instr"].append(child.text or "")
+            elif tag == W + "t" and stack and stack[-1]["phase"] == "result":
+                stack[-1]["result"].append(child.text or "")
+            walk(child)
+
+    walk(p)
+    return out
+
+
+def _field_rec(instr, result):
+    instr = (instr or "").strip()
+    return {"kind": field_kind(instr),
+            "instr": instr[:FIELD_INSTR_MAX],
+            "result": result[:FIELD_RESULT_MAX]}
+
+
+def field_stats(blocks):
+    """全文域的汇总：总数、按类型分布、含域的块数。
+
+    报告要用它说一句「本文档含 N 个域」——尤其是 citation 类，
+    那是「文字不归本工具改」的区域，必须让用户看见边界在哪。
+    """
+    by_kind = Counter()
+    blocks_with = 0
+    for b in blocks:
+        fs = b.get("fields") or []
+        if not fs:
+            continue
+        blocks_with += 1
+        for f in fs:
+            by_kind[f["kind"]] += 1
+    return {"total": sum(by_kind.values()), "by_kind": dict(by_kind),
+            "blocks_with_fields": blocks_with}
 
 
 def digit_ratio(s):
@@ -187,14 +306,53 @@ def classify_heading(text):
     if PAT["h2"].match(text):
         return (2, "high")
 
+    # 无编号的一级标题（「引  言」「结  论」）：本工具自己上一轮就是这么写的，
+    # 认不出来就意味着重跑不幂等。置信度给 medium——它没有编号这个强信号，
+    # 但有「整段只有节名」这个结构信号，且不会与正文句子混淆。
+    if UNNUMBERED_H1.match(text):
+        return (1, "medium")
+
     if digit_ratio(text) > 0.3:
         return None
     if PAT["h4"].match(text):
         return (4, "high")
     if PAT["h3"].match(text):
-        # 三级标题只在已出现二级标题之后可信，否则可能是数据行
-        return (3, "medium")
+        # 「1.」是二级还是三级取决于本文档的编号体系，见 AMBIGUOUS_H3
+        return (AMBIGUOUS_H3, "medium")
     return None
+
+
+def detect_arabic_level(children):
+    """判定「1.」在一级标题下是二级还是三级，返回 (级别, 是否有明确依据)。
+
+    单看「1.标题」本身定不了级：`（一）` 体系里它是三级，《经济管理》体例
+    （一、／1.／（1））里它是二级。两种都在中文经管期刊里常见，猜错不是
+    「排得不好看」，是整篇该级标题被套成另一级的样式（字号、对齐、缩进全错）。
+
+    判据只有一条，但必须**全文预扫**而不能边扫边判：全文有没有中文括号二级。
+    有「（一）」说明二级另有写法，「1.」只能是三级；没有，它就是二级。
+    边扫边判会在「（一）」出现在第一个「1.」之后时判反——引言章直接进正文
+    小节、二级标题晚于三级出现，在真实稿件里并不罕见。
+
+    第二个返回值是「有没有依据」。全文既没有「（一）」也没有「（1）」，说明
+    这份稿子只有两级，判二级是**推断**而非依据；调用方据此把置信度标成
+    ambiguous，别让推断混进「期刊要求」里。
+    """
+    has_cn2 = has_arabic3 = False
+    for _slot, child, _pos in children:
+        if child.tag != W + "p":
+            continue
+        t = para_text(child)
+        if not t:
+            continue
+        if PAT["h2"].match(t):
+            has_cn2 = True
+            break                 # 有中文括号二级就够了，无须扫完
+        if PAT["h4"].match(t):
+            has_arabic3 = True
+    if has_cn2:
+        return 3, True
+    return 2, has_arabic3
 
 
 def table_borders(tbl):
@@ -224,6 +382,33 @@ def has_drawing(p):
         if next(p.iter(W + tag), None) is not None:
             return True
     return False
+
+
+def _sdt_blocks(content):
+    """sdtContent 递归下钻：返回（可处理块元素列表, 未识别叶节点数）。
+
+    w:p / w:tbl 直接收进块列表；内嵌 w:sdt 继续下钻，其块按文档序并入同一
+    列表（SDTNEST：批五只下钻一层，外层有直接段落时内嵌 sdt 的段落既不进
+    IR 也不计数，深层内容控件里的正文被无声丢掉）；其余子节点是不认识的
+    叶节点，逐个计数。一个块都没取到、也没有未识别节点（空内容控件）时
+    计 1——整块没有可处理段落/表格的对象要报出来（F24 口径，原样保留）。
+
+    渲染端 render_from_ir._sdt_blocks 必须与这里保持同一展开顺序：IR 的
+    sdt_pos 是槽位内序，两边顺序不一致渲染就套错段。
+    """
+    blocks, unknown = [], 0
+    for e in (list(content) if content is not None else []):
+        if e.tag in (W + "p", W + "tbl"):
+            blocks.append(e)
+        elif e.tag == W + "sdt":
+            sub_blocks, sub_unknown = _sdt_blocks(e.find(W + "sdtContent"))
+            blocks.extend(sub_blocks)
+            unknown += sub_unknown
+        else:
+            unknown += 1
+    if not blocks and not unknown:
+        unknown = 1
+    return blocks, unknown
 
 
 def bind_captions(blocks):
@@ -296,12 +481,19 @@ def apply_ai(blocks, cfg, log=None):
                  b["text"] if "text" in b else MISSING) for b in blocks]
 
     cands = [b for b in blocks
-             if b["type"] in AI_UPGRADE_FROM or b.get("confidence") in ("low", "medium")]
+             if b["type"] in AI_UPGRADE_FROM
+             or b.get("confidence") in ("low", "medium", "ambiguous")]
     if not cands:
         return {"used": False, "reason": "规则已给出确定判断，无需补漏"}
 
-    prop = ai_assist.propose_types(blocks, cands, cfg, log=log)
+    # trace（F50）：截断情况随返回值落进 ir["ai"]，审计 JSON 有留痕，
+    # 不能只留在 stdout 日志行里
+    ai_trace = {}
+    prop = ai_assist.propose_types(blocks, cands, cfg, log=log, trace=ai_trace)
     if not prop:
+        if ai_trace:
+            return {"used": False, "reason": "无有效提案（未配置、调用失败或返回不合规）",
+                    "truncation": ai_trace}
         return {"used": False, "reason": "无有效提案（未配置、调用失败或返回不合规）"}
 
     by_idx = {b["idx"]: b for b in blocks}
@@ -347,10 +539,18 @@ def apply_ai(blocks, cfg, log=None):
                 b.pop("confidence", None)
             else:
                 b["confidence"] = cf
+        if ai_trace:
+            return {"used": False, "reason": "指纹校验失败：AI 路径动到了文本，整批已回滚",
+                    "truncation": ai_trace}
         return {"used": False, "reason": "指纹校验失败：AI 路径动到了文本，整批已回滚"}
 
     applied = [i for i in items if i["status"] == "applied"]
     log(f"AI 补漏：候选 {len(cands)} 块，提案 {len(prop)} 条，采纳 {len(applied)} 条")
+    if ai_trace:
+        return {"used": True, "model": cfg.get("model"),
+                "candidates": len(cands), "proposed": len(prop),
+                "applied": len(applied), "items": items,
+                "truncation": ai_trace}
     return {"used": True, "model": cfg.get("model"),
             "candidates": len(cands), "proposed": len(prop),
             "applied": len(applied), "items": items}
@@ -366,9 +566,15 @@ def parse(path, ai_cfg=None):
     in_references = False
     unsupported_content = 0
 
-    def emit(block):
+    def emit(block, el=None):
         if sdt_pos is not None:
             block["sdt_pos"] = sdt_pos    # sdt 内容块：同槽内的序号（F24）
+        # 域随块一起进 IR：重建端要靠它判断「这块的文字归 EndNote 所有，
+        # 本工具不动」，报告也要靠它把「本文档含 N 个域」说清楚
+        if el is not None:
+            fs = scan_fields(el)
+            if fs:
+                block["fields"] = fs
         blocks.append(block)
         return block
 
@@ -377,29 +583,29 @@ def parse(path, ai_cfg=None):
     # 一律按 body 子元素位置定位，生产端只数 w:p/w:tbl 的话，body 里一旦
     # 出现位于块元素之前的书签等元素，双方就整体错位——套版错段、改错正文、
     # 匿名路径漏删（F08）。sdt 内容控件也占自己的槽号；其内的 w:p/w:tbl
-    # 下钻为块、共用该槽号并带 sdt_pos 序号（F24）——不重新编号，按 body
-    # 子元素位置定位的契约不破。下不出来的（里面没有段落/表格）记数进 IR；
-    # 外层下钻了、内嵌套的内容控件（sdt 套 sdt）没有——其内段落不进 IR，
-    # 也逐个记数进 IR，不让「这里没处理」变成静默（F24）。只数 sdtContent
-    # 的直接子级：段落/表格内部的行内 sdt 文字已随段落文本处理，不算未处理块。
+    # 递归下钻（内嵌 sdt 继续展开直到取尽段落/表格，SDTNEST）为块、共用该
+    # 槽号并带 sdt_pos 序号（F24）——不重新编号，按 body 子元素位置定位的
+    # 契约不破。取尽后仍不认识的叶节点与取空的内容控件记数进 IR，不让
+    # 「这里没处理」变成静默。段落/表格内部的行内 sdt 文字已随段落文本
+    # 处理，不算未处理块。
     # 标题样式级别整体偏移（文档标题占用了 Heading 1 时）；规则识别的兜底仍走文本
     offset = style_offset(body)
     children = []
     for slot, child in enumerate(body):
         if child.tag == W + "sdt":
-            content = child.find(W + "sdtContent")
-            inner = [e for e in (content if content is not None else [])
-                     if e.tag in (W + "p", W + "tbl")]
-            for pos, e in enumerate(inner):
+            # 变量名避开 parse() 本地的 blocks（IR 块列表）——下钻产物是
+            # 原始 XML 元素，混进来就是类型灾难
+            inner_els, unknown = _sdt_blocks(child.find(W + "sdtContent"))
+            for pos, e in enumerate(inner_els):
                 children.append((slot, e, pos))
-            if not inner:
-                unsupported_content += 1
-            else:
-                unsupported_content += sum(
-                    1 for e in content if e.tag == W + "sdt")
+            unsupported_content += unknown
             continue
         if child.tag in (W + "tbl", W + "p"):
             children.append((slot, child, None))
+
+    # 「1.」的级别全文预扫一次（见 detect_arabic_level）：必须在进主循环之前
+    # 拿到结论，否则「（一）」晚于第一个「1.」出现时会判反
+    arabic_level, arabic_sure = detect_arabic_level(children)
 
     for idx, child, sdt_pos in children:
         if child.tag == W + "tbl":
@@ -409,7 +615,7 @@ def parse(path, ai_cfg=None):
             # 伪表格：1 行且列数很少、文字极短，实际是公式加编号
             if len(rows) == 1 and cols <= 3 and len(text) <= 60:
                 emit({"type": "equation_pseudo_table", "text": text, "idx": idx,
-                      "n_rows": len(rows), "n_cols": cols})
+                      "n_rows": len(rows), "n_cols": cols}, child)
                 continue
             emit({
                 "type": "table", "idx": idx, "n_rows": len(rows), "n_cols": cols,
@@ -419,19 +625,19 @@ def parse(path, ai_cfg=None):
                 # 「全文（含图表）」口径的刊统计时要数表格内文字，缺了它
                 # 标注与计算就自相矛盾。图内文字在图片对象里，文本层没有，天然不计
                 "cells": [para_text(tc) for tr in rows for tc in tr.findall(W + "tc")],
-            })
+            }, child)
             continue
 
         text = para_text(child)
         has_img = has_drawing(child)
         if not text and has_img:
-            emit({"type": "figure", "text": "", "idx": idx})
+            emit({"type": "figure", "text": "", "idx": idx}, child)
             continue
         if not text:
             # 纯公式段落没有文字，但它是内容，不能像空行一样丢掉——
             # 丢了渲染器就不知道这里有个公式，也就不会给它上行距保护。
             if has_omml(child):
-                emit({"type": "equation", "text": "", "idx": idx, "no_text": True})
+                emit({"type": "equation", "text": "", "idx": idx, "no_text": True}, child)
             continue
 
         level = conf = None
@@ -467,8 +673,20 @@ def parse(path, ai_cfg=None):
             if h is None:
                 h = classify_heading(text)
             if h:
-                level, conf = h
-                if level == 3 and 2 not in seen_level:
+                cand, conf = h
+                if cand == AMBIGUOUS_H3:
+                    # 级别由全文预扫给出（detect_arabic_level）：同一份稿子里
+                    # 「1.」不会一会儿二级一会儿三级。全文没有任何二级编号
+                    # 痕迹时，这个级别是推出来的，置信度标 ambiguous——
+                    # 报告里要能看出「这一级是猜的」，不能混进「期刊要求」。
+                    level = arabic_level
+                    if not arabic_sure:
+                        conf = "ambiguous"
+                else:
+                    level = cand
+                if level is None:
+                    btype, conf = "body", "low"
+                elif level == 3 and 2 not in seen_level:
                     btype, conf = "body", "low"
                 else:
                     btype = f"heading{level}"
@@ -493,7 +711,7 @@ def parse(path, ai_cfg=None):
         if level:
             block["level"] = level
             block["confidence"] = conf
-        emit(block)
+        emit(block, child)
 
     # 顺序不可换：规则先给基线 → AI 补漏（只改标签）→ 题注绑定。
     # 题注绑定放最后，因为 AI 可能刚把某个 body 认出是表题。
@@ -513,10 +731,15 @@ def parse(path, ai_cfg=None):
         "ai": trace,
     }
     if unsupported_content:
-        # 仍不支持的 sdt 结构（整块没有可处理的段落/表格，或内嵌套了下钻
-        # 不到的内容控件）记数进 IR（F24），渲染汇总据此提示，
+        # 取尽段落/表格后仍不认识的内容控件结构（未识别的块级节点、取空的
+        # 内容控件）记数进 IR（F24/SDTNEST），渲染汇总据此提示，
         # 不让「这里没处理」静默
         ir["unsupported_content_blocks"] = unsupported_content
+    fstats = field_stats(blocks)
+    if fstats["total"]:
+        # 域统计：重建端与报告都要用。不记录的话，「文献表被拆成死文本」
+        # 这件事在全流程里没有一处留下痕迹
+        ir["fields"] = fstats
     return ir
 
 
@@ -544,8 +767,17 @@ def main():
 
     if ir.get("unsupported_content_blocks"):
         print(f"\n  未处理内容块: {ir['unsupported_content_blocks']} 个"
-              f"（整块没有可处理的段落/表格，或内嵌了未下钻的内容控件，"
+              f"（内容控件里未识别的块级节点或取空的内容控件，"
               f"对象原样保留）")
+
+    fs = ir.get("fields") or {}
+    if fs.get("total"):
+        kinds = "、".join(f"{k} {v}" for k, v in sorted(fs["by_kind"].items(), key=lambda x: -x[1]))
+        print(f"\n  检测到 {fs['total']} 个 Word 域（{kinds}）"
+              f"，分布在 {fs['blocks_with_fields']} 个块")
+        if fs["by_kind"].get("citation"):
+            print("  ⚠ 含文献管理域：这些位置的文字由 EndNote/Zotero 掌管，"
+                  "本工具只改版式、不改文字")
 
     heads = [b for b in ir["blocks"] if b["type"].startswith("heading")]
     print(f"\n-- 识别出的标题（{len(heads)} 个） --")

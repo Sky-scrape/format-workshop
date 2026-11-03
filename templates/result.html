@@ -6,11 +6,11 @@
     <div class="success-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
     <div><h1>排版完成，稿件已就绪。</h1>
       <p>{{ meta.original }} 已按 <strong>{{ journal.name }}</strong> 的版式完成重排{% if meta.elapsed %} · 耗时 {{ meta.elapsed }} 秒{% endif %}</p>
-      <div class="result-tags"><span class="tag {{ journal.auth_class }}">版式依据：{{ journal.auth_label }}</span><span class="tag {{ 't-ok' if journal.status == 'verified' else 't-part' }}">{{ journal.status_label }}</span>{% if meta.injected %}<span class="tag t-ok">已注入 {{ meta.injected|length }} 项作者信息</span>{% endif %}{% if meta.rejected %}<span class="tag t-part">已驳回 {{ meta.rejected }} 条改动</span>{% endif %}</div>
+      <div class="result-tags"><span class="tag {{ journal.auth_class }}">版式依据：{{ journal.auth_label }}</span><span class="tag {{ 't-ok' if journal.status == 'verified' else 't-part' }}">{{ journal.status_label }}</span>{% if meta.injected %}<span class="tag t-ok">已注入 {{ meta.injected|length }} 项作者信息</span>{% endif %}{% if meta.rejected %}<span class="tag t-part">已驳回 {{ meta.rejected }} 条改动</span>{% endif %}{% if meta.audit_notes %}<span class="tag">另有 {{ meta.audit_notes }} 条说明项（未改动）</span>{% endif %}</div>
     </div>
     <div class="result-stats">
       <div class="stat"><strong>{{ meta.blocks or '—' }}</strong><span>内容块</span></div>
-      <div class="stat"><strong>{{ meta.audit_total }}</strong><span>审计记录</span></div>
+      <div class="stat"><strong>{{ meta.audit_total }}</strong><span>格式改动</span></div>
       <div class="stat"><strong>{{ 4 if meta.docx_anon else 3 }}</strong><span>交付文件</span></div>
     </div>
   </section>
@@ -37,7 +37,7 @@
       </a>
       <a class="download-card" href="/job/{{ job }}/download/audit" download>
         <span class="download-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3.5h14v17H5zM8 8h8M8 12h8M8 16h5"/></svg></span>
-        <span class="download-text"><strong>审计报告</strong><span>{{ meta.audit_total }} 条改动可逐条核对</span></span>
+        <span class="download-text"><strong>审计报告</strong><span>{{ meta.audit_total }} 条改动可逐条核对{% if meta.audit_notes %}，另有 {{ meta.audit_notes }} 条说明{% endif %}</span></span>
         <span class="download-arrow"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v9M6 9.5 10 13.5l4-4M4 16.5h12"/></svg></span>
       </a>
     </div>

@@ -10,7 +10,14 @@ import argparse
 import base64
 import html
 import json
+import sys
 from pathlib import Path
+
+# embeddable Python（_pth 模式）不会把脚本所在目录放进 sys.path，与
+# render_audit.py 同一姿势显式挂上，两种启动方式行为一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import assume_groups
 
 FR_NAMES = {22: "二号", 16: "三号", 15: "小三", 14: "四号", 12: "小四", 10.5: "五号", 9: "小五"}
 
@@ -309,9 +316,28 @@ def build(rules, sample_pdf=None):
     parts.append(table(pf_rows, f"需收集的个人信息（共 {len(rules['personal_fields'])} 项）"))
 
     if rules.get("assumptions"):
-        items = "".join(f"<li>{html.escape(a)}</li>" for a in rules["assumptions"])
-        parts.append('<section class="warn"><h2>推定项（官方未规定，非期刊要求）</h2>'
-                     f'<ul style="margin:0;padding-left:20px;font-size:13px;color:#7d3a30">{items}</ul></section>')
+        groups = assume_groups.group_assumptions(
+            rules["assumptions"], rules.get("verification", {}).get("extraction"))
+        n = sum(len(rows) for _, rows in groups)
+        if assume_groups.should_group(groups):
+            # 大批量（AI 建库草稿发布后）：按区块分组折叠——披露一条不删，
+            # 但不能把复核重点淹没。逐条仍可达，来源区块随组名亮出。
+            blocks = []
+            for sec, rows in groups:
+                lis = "".join(f"<li>{html.escape(a)}</li>" for a in rows)
+                blocks.append(
+                    f'<details><summary>{html.escape(sec)} '
+                    f'<span class="abadge">{len(rows)} 条</span>'
+                    f'（官方未规定，沿用基线/推定）</summary>'
+                    f'<ul style="margin:4px 0 8px;padding-left:20px">{lis}</ul></details>')
+            parts.append('<section class="warn"><h2>推定项（官方未规定，非期刊要求）</h2>'
+                         f'<p class="hint">共 {n} 条，按区块折叠，逐条可达；'
+                         '其中多数沿用自基线规则集，发布前须人工核对。</p>'
+                         + "".join(blocks) + '</section>')
+        else:
+            items = "".join(f"<li>{html.escape(a)}</li>" for a in rules["assumptions"])
+            parts.append('<section class="warn"><h2>推定项（官方未规定，非期刊要求）</h2>'
+                         f'<ul style="margin:0;padding-left:20px;font-size:13px;color:#7d3a30">{items}</ul></section>')
 
     if tb.get("open_issue"):
         parts.append(f'<section class="warn"><h2>待确认</h2><p>{html.escape(tb["open_issue"])}</p></section>')
@@ -359,6 +385,11 @@ border-radius:2px;display:block;margin:0 auto}}
 .cc.good{{border-left-color:#176b57}} .cc.good h3{{color:#176b57}}
 .cc.warn2{{border-left-color:#a44b3f}} .cc.warn2 h3{{color:#a44b3f}}
 .cc.info{{border-left-color:#176b57}} .cc.info h3{{color:#0e4f41}}
+details{{margin:2px 0}}
+details summary{{cursor:pointer;font-size:13px;color:#7d3a30}}
+.abadge{{display:inline-block;min-width:14px;text-align:center;font-size:11px;
+font-weight:600;color:#a44b3f;background:#fff;border:1px solid #efcfc7;
+border-radius:999px;padding:0 7px;margin:0 2px}}
 </style></head>
 <body><div class="wrap">
 {body_html}

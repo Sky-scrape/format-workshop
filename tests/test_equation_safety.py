@@ -15,7 +15,7 @@ from docx import Document
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn, nsdecls
 
-from conftest import NS_W, ROOT, render_into, run_tool
+from conftest import NS_W, ROOT, minimal_doc, render_into, run_tool
 
 M_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
 
@@ -33,9 +33,8 @@ def count_math(docx_path):
 
 
 def build_equation_manuscript(path):
-    doc = Document()
-    doc.add_paragraph("数字金融与企业融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融对企业融资约束的影响。")
+    doc = minimal_doc(path, title="数字金融与企业融资约束",
+                      abstract="内容提要：本文考察数字金融对企业融资约束的影响。")
 
     # 正文中的行内公式
     doc.add_paragraph("本文的基本设定如下，其中系数由下式给出：" * 3)
@@ -74,13 +73,11 @@ def count_math_paragraph(p):
 
 def test_heading_with_math_is_still_a_heading(tmp_path):
     """带公式的标题必须仍是标题，否则整篇不再编号。"""
-    doc = Document()
-    doc.add_paragraph("数字金融与企业融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融的影响。")
+    src = tmp_path / "heading_math.docx"
+    doc = minimal_doc(src, title="数字金融与企业融资约束",
+                      abstract="内容提要：本文考察数字金融的影响。")
     add_math(doc.add_paragraph("一、模型设定与"), "y")
     doc.add_paragraph("本节的模型设定如下，包含若干待估参数与识别假设。" * 3)
-
-    src = tmp_path / "heading_math.docx"
     doc.save(str(src))
 
     run_tool("parse_docx.py", src, "-o", tmp_path / "h.ir.json")
@@ -128,14 +125,12 @@ def test_equation_restyling_is_audited(tmp_path):
 
 def test_pure_math_paragraph_is_not_dropped_by_parser(tmp_path):
     """纯公式段落没有文字，但不能被当成空行丢掉。"""
-    doc = Document()
-    doc.add_paragraph("数字金融与企业融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融的影响。")
+    src = tmp_path / "pure_math.docx"
+    doc = minimal_doc(src, title="数字金融与企业融资约束",
+                      abstract="内容提要：本文考察数字金融的影响。")
     eq = doc.add_paragraph()
     add_math(eq, "σ²=Σ(x-μ)²/n")
     doc.add_paragraph("上式为企业规模的定义，其中 n 为样本量。" * 3)
-
-    src = tmp_path / "pure_math.docx"
     doc.save(str(src))
 
     run_tool("parse_docx.py", src, "-o", tmp_path / "p.ir.json")
@@ -146,17 +141,16 @@ def test_pure_math_paragraph_is_not_dropped_by_parser(tmp_path):
 
 def test_pseudo_table_formula_is_reported_as_untouched(tmp_path):
     """用 1 行表格排版的公式：不改结构，但报告里要说清「没动」。"""
-    doc = Document()
-    doc.add_paragraph("数字金融与企业融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融的影响。")
-    doc.add_paragraph("估计量为：" * 6)
+    src = tmp_path / "pseudo.docx"
+    doc = minimal_doc(src, title="数字金融与企业融资约束",
+                      abstract="内容提要：本文考察数字金融的影响。",
+                      extra_paragraphs=["估计量为：" * 6])
 
     table = doc.add_table(rows=1, cols=2)
     add_math(table.cell(0, 0).paragraphs[0], "β=(X'X)^{-1}X'y")
     table.cell(0, 1).paragraphs[0].text = "（1）"
 
     doc.add_paragraph("其中各项含义如上。" * 6)
-    src = tmp_path / "pseudo.docx"
     doc.save(str(src))
 
     result = render_into(tmp_path / "run4", src, target="tjyj")

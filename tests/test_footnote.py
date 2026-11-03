@@ -14,7 +14,8 @@ from docx import Document
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls, qn
 
-from conftest import RULES, TARGET_JOURNAL, render_into, run_tool
+from conftest import (RULES, TARGET_JOURNAL, minimal_doc, mutated_rules,
+                      render_into, run_tool)
 
 W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 FOOTNOTES_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
@@ -25,12 +26,12 @@ FOOTNOTES_CT = ("application/vnd.openxmlformats-officedocument"
 def build_docx_with_footnote(path, footnote_text="本文数据来自 Wind 数据库。", size_pt=12):
     """拼一份带真实脚注的 docx。
 
-    步骤：先让 python-docx 生成本体骨架，再往 zip 里补 footnotes.xml、
-    关系项与内容类型，最后在正文插 footnoteReference。
+    步骤：先让 python-docx 生成本体骨架（公共骨架走 minimal_doc，F58），
+    再往 zip 里补 footnotes.xml、关系项与内容类型，最后在正文插
+    footnoteReference。
     """
-    doc = Document()
-    doc.add_paragraph("数字金融与企业融资约束")
-    doc.add_paragraph("内容提要：本文考察数字金融对企业融资约束的影响。")
+    doc = minimal_doc(path, title="数字金融与企业融资约束",
+                      abstract="内容提要：本文考察数字金融对企业融资约束的影响。")
     p = doc.add_paragraph("本文的样本涵盖 2011-2020 年 A 股上市公司，"
                           "数据来源见注，处理方式与既有文献保持一致。" * 2)
     p.add_run()._r.append(parse_xml(f'<w:footnoteReference {nsdecls("w")} w:id="1"/>'))
@@ -143,10 +144,9 @@ def test_footnote_text_is_not_altered(tmp_path):
 
 def test_journal_without_footnote_rules_is_untouched(tmp_path):
     """规则集没写脚注规格时，不该硬塞一个默认字号。"""
-    rules = json.loads((RULES / f"{TARGET_JOURNAL}.json").read_text(encoding="utf-8"))
-    rules["typography"].pop("footnote", None)
-    alt = tmp_path / "no_footnote.json"
-    alt.write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
+    # 复制规则集删一键走公共入口（F58）：值为 None 表示整键删除
+    alt = mutated_rules(tmp_path, TARGET_JOURNAL, "no_footnote.json",
+                        **{"typography.footnote": None})
 
     src = build_docx_with_footnote(tmp_path / "fn5.docx", size_pt=12)
     result = render_into(tmp_path / "run5", src, rules_path=alt)
@@ -198,6 +198,8 @@ def build_wps_footnotes(path, size_pt=12):
     整条跳过，反手把两条分隔符改了字号——成品里首条脚注字号不对，
     报告却写着「脚注正文套版」。
     """
+    # 注意：这份稿在 HEAD 上只有标题＋两段正文、没有摘要段——minimal_doc
+    # 的缺省摘要会悄悄多出一段，测试语义就变了，所以这里保持手拼（F58 例外）。
     doc = Document()
     doc.add_paragraph("数字金融与企业融资约束")
     p = doc.add_paragraph("作者单位见脚注，数据来源见脚注二，正文其余内容保持不变。" * 2)

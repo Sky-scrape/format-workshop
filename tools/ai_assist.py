@@ -261,14 +261,19 @@ def _post(cfg, payload, timeout):
         return json.loads(r.read().decode("utf-8"))
 
 
-def _chat(cfg, messages):
-    """调一次模型。返回文本内容；失败抛异常由上层统一兜。"""
+def _chat(cfg, messages, max_tokens=2048):
+    """调一次模型。返回文本内容；失败抛异常由上层统一兜。
+
+    max_tokens 默认 2048（标签批的输出很小，维持原值不变）；事实抽取这类
+    要求逐键输出值+逐字引文的长应答由调用方传更大的值，否则密稿在 2048
+    处被截成半截 JSON（F52）。
+    """
     payload = {
         "model": cfg["model"],
         "messages": messages,
         "temperature": 0,
         "stream": False,
-        "max_tokens": 2048,
+        "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
     try:
@@ -349,10 +354,15 @@ def _candidate_payload(blocks, cands, cfg):
 
 # ---------------------------------------------------------------- 对外
 
-def propose_types(blocks, cands, cfg=None, log=None):
+def propose_types(blocks, cands, cfg=None, log=None, trace=None):
     """让模型给候选块提类型。返回 {idx: {type, conf, why}}。
 
     任何异常都收敛成空字典——AI 挂掉不能让格式转换挂掉。
+
+    trace（可选）：传入一个 dict，函数往里写本次截断情况——
+    {"truncated": bool, "dropped": int, "kept": int}。候选超过 max_blocks
+    时并不是「跳过 AI」，而是只标前 max_blocks 块、其余留在规则路径
+    （F50：旧日志说「AI 跳过」，与实际相反，且被截的块无处留痕）。
     """
     # 调用方可能只传部分键（网页表单就没带 batch_size），这里统一补齐，
     # 否则 cfg["max_blocks"] 会 KeyError——库函数不该假设调用方给全了配置
@@ -360,10 +370,20 @@ def propose_types(blocks, cands, cfg=None, log=None):
     if not cands or not available(cfg):
         return {}
     if len(cands) > cfg["max_blocks"]:
-        # 候选太多说明解析本身有问题，此时批量标注的成本与收益不成比例
+        # 候选太多说明解析本身有问题，此时批量标注的成本与收益不成比例。
+        # 如实说：是截断续跑，不是跳过；多出来的块没有提案，靠规则判定。
         if log:
-            log(f"AI 跳过：候选块 {len(cands)} 个超过上限 {cfg['max_blocks']}")
+            log(f"AI：候选块 {len(cands)} 个超过上限 {cfg['max_blocks']}，"
+                f"仅标注前 {cfg['max_blocks']} 块，其余按规则判定")
+        if isinstance(trace, dict):
+            trace["truncated"] = True
+            trace["dropped"] = len(cands) - cfg["max_blocks"]
+            trace["kept"] = cfg["max_blocks"]
         cands = cands[:cfg["max_blocks"]]
+    elif isinstance(trace, dict):
+        trace["truncated"] = False
+        trace["dropped"] = 0
+        trace["kept"] = len(cands)
 
     out = {}
     size = cfg["batch_size"]
