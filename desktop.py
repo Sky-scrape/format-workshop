@@ -127,15 +127,52 @@ def focus_existing():
 
 
 # ---------------------------------------------------------------- 窗口记忆
+def _visible_screens():
+    """枚举所有显示器的可见区域（VirtualScreen + 主屏工作区兜底）。"""
+    import ctypes
+    user32 = ctypes.windll.user32
+    screens = []
+    try:
+        # SM_XVIRTUALSCREEN=76..SM_CYVIRTUALSCREEN=79：全虚拟桌面
+        vx = user32.GetSystemMetrics(76)
+        vy = user32.GetSystemMetrics(77)
+        vw = user32.GetSystemMetrics(78)
+        vh = user32.GetSystemMetrics(79)
+        if vw > 0 and vh > 0:
+            screens.append((vx, vy, vx + vw, vy + vh))
+    except Exception:                    # noqa: BLE001
+        pass
+    if not screens:
+        # 兜底：主屏（SM_CXSCREEN=0/1）——至少保证「主屏可见」这一档
+        try:
+            w, h = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+            if w > 0 and h > 0:
+                screens.append((0, 0, w, h))
+        except Exception:                # noqa: BLE001
+            pass
+    return screens
+
+
 def load_window_state():
+    """读窗口几何；坐标必须与某块屏幕可见区域有交集，否则丢弃（回居中）。
+
+    「坐标不校、OS 能兜」是实测错的：副屏拔掉/改分辨率后窗口会落在屏幕外，
+    用户看到的就是「打开就跑到右下角」——Win32 不给不可见窗口自动搬家。
+    """
     try:
         d = json.loads(CFG.read_text(encoding="utf-8"))
         w, h = int(d.get("w", 0)), int(d.get("h", 0))
-        # 明显损坏的尺寸回默认；坐标不校（副屏拔掉后 OS 层能兜住）
-        if 500 <= w <= 8000 and 400 <= h <= 4000:
-            return {"w": w, "h": h,
-                    "x": int(d.get("x") or 0), "y": int(d.get("y") or 0),
+        if not (500 <= w <= 8000 and 400 <= h <= 4000):
+            return {}
+        x, y = int(d.get("x") or 0), int(d.get("y") or 0)
+        screens = _visible_screens()
+        ok = any(x + w > sx1 and x < sx2 and y + h > sy1 and y < sy2
+                 for sx1, sy1, sx2, sy2 in screens) if screens else True
+        if not ok:
+            return {"w": w, "h": h, "x": None, "y": None,
                     "maximized": bool(d.get("maximized"))}
+        return {"w": w, "h": h, "x": x, "y": y,
+                "maximized": bool(d.get("maximized"))}
     except Exception:                    # noqa: BLE001
         pass
     return {}
@@ -404,12 +441,14 @@ def main():
     if focus_existing():
         return 0
 
-    # 秒开：先出窗（启动页盖住服务冷启的 2~4s），就绪后原地换页
+    # 秒开：先出窗（启动页盖住服务冷启的 2~4s），就绪后原地换页。
+    # x/y 直接走 create_window 参数（None=系统默认居中级联），别事后赋值——
+    # 那要等事件循环起来才生效，且与 maximize 恢复顺序打架
     st = load_window_state()
     win = webview.create_window(
         window_title(), html=SPLASH, js_api=SaveBridge(),
         width=st.get("w", 1280), height=st.get("h", 860),
-        x=st.get("x") or None, y=st.get("y") or None,
+        x=st.get("x"), y=st.get("y"),
         min_size=(980, 640), text_select=True)
 
     win.events.closed += lambda: save_window_state(win)
