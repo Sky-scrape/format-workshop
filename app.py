@@ -728,6 +728,14 @@ def _stage_parse(d, jid, original):
         if ln:
             app.logger.info("[parse] %s", ln)
     ir_data = read_json(ir)
+    # 空稿在这里就拦下：0 个内容块的文件能一路渲染出「0 块成品」，
+    # 用户拿到一份什么都没排的稿子，比直接报错更糟。必须在生成任何
+    # 交付物之前失败，避免任务目录里留下可下载的空成品。
+    if not isinstance(ir_data, dict) or not (ir_data.get("blocks") or []):
+        raise ConvertError(
+            "这份稿件没有可排版的内容",
+            "解析出 0 个内容块。请确认上传的不是空文档；如果原稿是扫描件或 PDF "
+            "改的后缀，请提供可编辑的 .docx 源文件。")
     # 解析器看到的是任务目录里的 manuscript.docx，把来源名改回用户上传的文件名
     if original and ir_data.get("source") != original:
         ir_data["source"] = original

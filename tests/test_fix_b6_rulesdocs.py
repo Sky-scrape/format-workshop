@@ -14,9 +14,8 @@
        待补且 [] 是合法编码、213/464 为补录前口径），且勘误依据的数据事实
        仍成立。
 - F62  schema 结构图 verification 移到顶层；placement 枚举补三值并配含义。
-- F63  覆盖面计数跨文档一致：会计单列（1 本）、管理学 6 本，桶合计以 23 本
-       实际清单为准。
-- F64  needs.md 同步 23 本：jmsc 移出待补并注明 2026-11-01 第六批入库。
+- F63  覆盖面计数跨文档一致：会计单列（1 本）、管理学 6 本，桶合计以实际清单为准。
+- F64  needs.md 同步 27 本：第七批入库记录与中文 20 / 英文 7 口径都在。
 - F65  schema §3 block 类型总表覆盖规则集在用的每一个类型（含本批补的
        subtitle/doi/article_number/column_name/endnotes）。
 - READMEIT  已知限制声明重排条目为纯文本、原条目内斜体不保留。
@@ -43,7 +42,7 @@ AUDIT_MD = ROOT / "rules" / "audit-2026-11-01.md"
 README_MD = ROOT / "README.md"
 
 # 本文件钉的是「台账 ↔ 全库磁盘状态」的一致性：coverage/gaps/needs 描述完整
-# 规则库（23 本），开源检出只有 3 本示例（README「开源边界」），文件数对不上
+# 规则库（27 本），开源检出只有 3 本示例（README「开源边界」），文件数对不上
 # 是常态不是回归——全库一致性只在本地全库环境跑，公开检出整文件跳过。
 pytestmark = pytest.mark.skipif(
     len(list(RULES.glob("*.json"))) < 10,
@@ -204,10 +203,10 @@ def test_f61_erratum_facts_hold_in_data():
     assert not failures
     unknown = sum(r["provenance"]["unknown"] for r in rows)
     total = sum(r["size_fields"] for r in rows)
-    assert f"{unknown}/{total}" == "0/469", \
+    assert f"{unknown}/{total}" == "0/556", \
         f"出处计数漂成 {unknown}/{total}——勘误第 4 条的口径要跟着对齐"
     # 推定类单独成桶：纯推定项有出处，但必须与官方/实测区分开、可追踪复核
-    assert sum(r["provenance"]["inferred"] for r in rows) == 26, \
+    assert sum(r["provenance"]["inferred"] for r in rows) == 43, \
         "inferred 桶漂移——勘误第 4 条的推定计数要跟着对齐"
 
 
@@ -239,13 +238,16 @@ def test_f62_placement_enum_has_three_new_values():
 
 def test_f63_bucket_counts_match_actual_list():
     cov = read(COVERAGE_MD)
-    m = re.search(r"覆盖面：中文 (\d+) 本，覆盖金融（(\d+)）、产业与贸易（(\d+)）、"
-                  r"管理学（(\d+)）、综合与统计（(\d+)）、会计（(\d+)）；英文 (\d+) 本", cov)
-    assert m, "coverage.md 覆盖面行格式变了或仍未把会计单列"
-    zh_total, finance, industry, mgmt, comp_stat, accounting, en_total = map(int, m.groups())
+    # 覆盖面行随批次会增加方向（第七批加了「财经综合与人口资源环境」）。
+    # 不把方向名写死，只要求「中文总数 = 各方向计数之和」且中英合计等于实际清单。
+    m = re.search(r"覆盖面：中文 (\d+) 本，覆盖(.+?)；英文 (\d+) 本", cov)
+    assert m, "coverage.md 覆盖面行格式变了"
+    zh_total, buckets, en_total = int(m.group(1)), m.group(2), int(m.group(3))
+    counts = [int(n) for n in re.findall(r"（(\d+)", buckets)]
+    assert counts and sum(counts) == zh_total, \
+        f"各方向计数之和 {sum(counts)} 与中文总数 {zh_total} 不一致"
     assert "管理学（7）" not in cov, "会计不应折入管理学"
-    assert mgmt == 6 and accounting == 1, "管理学应为 6 本、会计单列 1 本"
-    assert finance + industry + mgmt + comp_stat + accounting == zh_total
+    assert "管理学（6）" in cov and "会计（1）" in cov, "管理学/会计分桶变了"
     assert zh_total + en_total == len(list(RULES.glob("*.json"))), \
         "覆盖面总数与 rules/journal 实际清单不一致"
 
@@ -264,14 +266,13 @@ def test_f63_counts_agree_across_documents():
 
 # ---------------------------------------------------------------- F64
 
-def test_f64_needs_md_synced_to_23():
+def test_f64_needs_md_synced_to_current_library():
     t = read(NEEDS_MD)
     assert "均已凭正文 PDF 补齐，22 本" not in t, "needs.md 还停在 22 本"
-    assert "第六批入库（verified）" in t, "jmsc 入库记录缺失"
-    assert "23 本" in t
-    # jmsc 移出待补优先级：旧的「三本一起要 PDF」组合已拆
+    # 第七批（2026-11-04）入库后：中文 20 + 英文 7 = 27 本
+    assert "共 27 本" in t, "needs.md 没有同步到 27 本"
+    assert "第七批" in t, "第七批入库记录缺失"
     assert "**管理科学学报 / 系统工程理论与实践 / 管理工程学报**" not in t
-    assert "从待补清单移除" in t
 
 
 # ---------------------------------------------------------------- F65

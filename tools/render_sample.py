@@ -257,6 +257,20 @@ def build(rules, out_path):
                  latin=body.get("font_latin"),
                  size=au_tp["size_pt"], align=au_tp.get("align", "center"), line=au_line)
 
+    # ---------- 作者单位 ----------
+    # 此前样板只渲染英文单位，中文刊的 typography.affiliations 一直画不出来
+    # （§16.6 同类问题：规则集声明了、渲染器不消费，样板与规则集漂移）
+    aff_blk_zh = next((b for b in rules["blocks"]
+                       if b["type"] == "affiliations" and b.get("lang") != "en"), None)
+    aff_tp_zh = tp.get("affiliations")
+    if aff_blk_zh and aff_tp_zh:
+        aff_line_zh = max(line_pt, round(aff_tp_zh["size_pt"] * 1.35))
+        add_para(doc, smp.get("affiliations") or
+                 "（1. 样本大学经济学院，北京　100000；2. 样本研究院，上海　200000）",
+                 cn=aff_tp_zh["font_cn"], latin=aff_tp_zh.get("font_latin", body.get("font_latin")),
+                 size=aff_tp_zh["size_pt"], align=aff_tp_zh.get("align", "center"),
+                 line=aff_line_zh)
+
     # ---------- 内容摘要 ----------
     ab_tp = tp.get("abstract") or body      # 摘要常单独定字体（楷体/仿宋）
     abs_block = next((b for b in rules["blocks"] if b["type"] == "abstract" and b.get("lang") == "zh"),
@@ -363,7 +377,11 @@ def build(rules, out_path):
         en_kw = next((b for b in rules["blocks"]
                       if b["type"] == "keywords" and b.get("lang") == "en"), {})
         abs_tp = tp.get("abstract_en") or body
-        abs_ls = (abs_tp.get("line_spacing") or {}).get("value_pt") or LINE
+        # 行距取值必须落回数值：LINE 在倍数行距下是 dict（{"pt","mult"}），
+        # 直接拼进占位文字会把字典原样印到样板上（财经问题研究样板曾出现）
+        _en_abs_ls = abs_tp.get("line_spacing") or {}
+        abs_ls = (_en_abs_ls.get("value_pt") or _en_abs_ls.get("equivalent_exact_pt")
+                  or line_pt)
         add_para(doc, (en_abs.get("label") or "Abstract: ") +
                       (smp.get("abstract_en") or
                        "This sample is generated for layout verification. "
@@ -373,7 +391,9 @@ def build(rules, out_path):
                  latin=abs_tp.get("font_latin", body["font_latin"]),
                  size=abs_tp["size_pt"], align="both", line=abs_ls, indent_chars=indent)
         kw_tp = tp.get("keywords_en") or abs_tp
-        kw_ls = (kw_tp.get("line_spacing") or {}).get("value_pt") or abs_ls
+        kw_ls = ((kw_tp.get("line_spacing") or {}).get("value_pt")
+                 or (kw_tp.get("line_spacing") or {}).get("equivalent_exact_pt")
+                 or abs_ls)
         add_para(doc, (en_kw.get("label") or "Key words: ") +
                       en_kw.get("separator", "; ").join(
                           smp.get("keywords_en") or
@@ -519,6 +539,21 @@ def build(rules, out_path):
                  cn=layer.get("font_cn"), size=layer.get("size_pt"),
                  align=layer.get("align"), line=LINE)
 
+    # ---------- 生成式 AI 声明（官方要求时排在参考文献之前，如 Elsevier 系英文刊） ----------
+    ai_decl = (rules.get("submission") or {}).get("ai_declaration") or {}
+    if ai_decl.get("required"):
+        add_para(doc, ai_decl.get("section_title") or
+                 "Declaration of generative AI and AI-assisted technologies in the manuscript preparation process",
+                 cn=body.get("font_latin"), latin=body.get("font_latin"),
+                 size=body["size_pt"], bold=True, align="left", line=line_pt, keep=True)
+        add_para(doc, ai_decl.get("sample_text") or
+                 "During the preparation of this work the author(s) used [NAME OF TOOL / SERVICE] "
+                 "in order to [REASON]. After using this tool/service, the author(s) reviewed and "
+                 "edited the content as needed and take(s) full responsibility for the content of "
+                 "the published article.",
+                 cn=body.get("font_latin"), latin=body.get("font_latin"),
+                 size=body["size_pt"], align="both", line=line_pt)
+
     # ---------- 参考文献 ----------
     ref = next(b for b in rules["blocks"] if b["type"] == "references")
     rh = tp.get("references_heading") or {}
@@ -601,7 +636,9 @@ def build(rules, out_path):
                      indent_chars=an.get("heading_indent_chars") or None)
 
     # 排在正文之后的英文四件套（世界经济、财贸经济这类把英文摘要放文末的刊）
-    if has_zh and not en_before_body:
+    # 只有规则集声明了英文块才追加文末英文区——不声明的刊（如财经问题研究，
+    # 投稿模板不含英文摘要）不应凭空多出一段（§9：未声明该构件则不渲染）
+    if has_zh and en_idx and not en_before_body:
         render_english()
 
     # 排在正文之后的英文分类号（如《世界经济》把 JEL 放在全文末尾）

@@ -29,7 +29,11 @@
 
 1. 确认 `python app.py` 能起来，`http://127.0.0.1:5000` 能打开
 2. 改动涉及渲染的，至少跑一遍 `python tools/build_journal.py rules/journal/cjyj.json`，确认样板没有意外变化
-3. 提交信息说清"改了什么"和"为什么改"，后者比前者重要
+3. **跑全量测试**：`.venv\Scripts\python -m pytest`（macOS/Linux 用 `python -m pytest`）
+4. 提交信息说清"改了什么"和"为什么改"，后者比前者重要
+5. **回复/PR 描述里写测试结果**：通过 / 失败 / 跳过 / xfail 各多少条；有失败项附用例名与复现命令。测试没跑或没跑完，不得声称改动完成
+
+日常只动验收层时，可以先跑 `pytest -m acceptance`；提交前仍要跑全量。
 
 ## 最想收到的 PR
 

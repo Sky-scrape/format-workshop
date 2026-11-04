@@ -563,3 +563,53 @@ def invariant_failures(p):
             break
 
     return problems
+
+
+# ---- 验收层夹具（非 autouse：只影响显式请求的验收用例）----------------
+# 验收层不碰真实数据：任务目录、草稿目录、AI 配置全部指到 tmp_path，
+# 并封住 socket。建库/发布用例用 tmp_rules 操作规则库副本。
+
+@pytest.fixture()
+def acceptance_env(tmp_path, monkeypatch):
+    import socket
+
+    import app
+    import ai_assist
+
+    work = tmp_path / "work"
+    work.mkdir(parents=True)
+    monkeypatch.setattr(app, "WORK", work)
+    monkeypatch.setattr(app, "DRAFT_DIR", tmp_path / "drafts")
+    monkeypatch.setattr(ai_assist, "CONFIG_PATH", tmp_path / "ai.json")
+
+    def deny(*args, **kwargs):
+        raise AssertionError("测试期间禁止联网：请把外部调用换成假客户端")
+
+    monkeypatch.setattr(socket, "create_connection", deny)
+    monkeypatch.setattr(socket.socket, "connect", deny)
+    app.app.config["TESTING"] = True
+    return {"work": work, "tmp": tmp_path}
+
+
+@pytest.fixture()
+def acceptance_client(acceptance_env):
+    import app
+
+    return app.app.test_client()
+
+
+@pytest.fixture()
+def tmp_rules(tmp_path, monkeypatch):
+    """仓库自带 3 本刊的临时副本：发布/覆盖/回滚都只动这里。"""
+    import app
+
+    root = tmp_path / "rules"
+    root.mkdir()
+    for jid in SHIPPED_JOURNALS:
+        for suffix in (".json", ".spec.html", ".sample.docx", ".sample.pdf"):
+            src = RULES / f"{jid}{suffix}"
+            if src.exists():
+                shutil.copy2(src, root / src.name)
+    monkeypatch.setattr(app, "RULES_DIR", root)
+    monkeypatch.setattr(app, "DRAFT_DIR", root / "_drafts")
+    return root

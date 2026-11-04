@@ -29,8 +29,12 @@ PARSE_STDOUT = (
 def _make_job(tmp_path, name="a1b2c3d4e5f6"):
     d = tmp_path / name
     d.mkdir()
+    # 至少一个内容块：_stage_parse 现在会拒收 0 块空稿（避免交付空成品），
+    # 本文件测的是 stdout 日志落点，不该被空稿守卫挡在日志逻辑之前。
     (d / "manuscript.ir.json").write_text(
-        json.dumps({"source": "论文.docx"}), encoding="utf-8")
+        json.dumps({"source": "论文.docx",
+                    "blocks": [{"idx": 0, "type": "body", "text": "正文"}]}),
+        encoding="utf-8")
     return d
 
 
@@ -64,7 +68,8 @@ def test_parse_stdout_lands_in_server_log(monkeypatch, tmp_path, caplog):
     # 流水线行为不变：两步子进程照常调用，IR 原样返回
     assert any("parse_docx.py" in " ".join(c) for c in calls)
     assert any("compliance_report.py" in " ".join(c) for c in calls)
-    assert ir == {"source": "论文.docx"}
+    assert ir["source"] == "论文.docx"
+    assert ir["blocks"][0]["text"] == "正文"
 
 
 def test_parse_stdout_blank_lines_produce_no_log_records(monkeypatch, tmp_path,
