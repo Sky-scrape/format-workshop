@@ -1161,6 +1161,15 @@ def journals():
                            drafts=draft_list())
 
 
+APP_VERSION = "1.0.0"       # 与 tools/build_installer.py 的默认版本保持一致
+
+
+@app.context_processor
+def inject_version():
+    """状态栏（桌面壳）与帮助弹窗都要展示版本号。"""
+    return {"app_version": APP_VERSION}
+
+
 @app.context_processor
 def inject_ai_state():
     """每个页面都要知道 AI 开没开：导航要显示状态，「本地安全」的措辞也要跟着变。"""
