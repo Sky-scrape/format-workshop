@@ -1115,6 +1115,16 @@ def index():
     return render_template("index.html", journal_count=len(load_journals()))
 
 
+@app.route("/favicon.ico")
+def favicon():
+    """浏览器不带 <link> 也会来要这个路径；--app 窗口的任务栏图标同样取自它。
+
+    真文件在 static/favicon.ico（tools/make_icon.py 生成）；旧的内联 SVG
+    data-URI 在独立窗口壳里支持不稳，ICO 是全场景兜住的格式。
+    """
+    return send_from_directory(ROOT / "static", "favicon.ico")
+
+
 def render_workspace(error=None, preselect=""):
     """工作台只有这一个入口：报错页也必须带全期刊列表。
 
