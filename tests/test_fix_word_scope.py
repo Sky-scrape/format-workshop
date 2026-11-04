@@ -21,6 +21,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from conftest import RULES  # noqa: E402
@@ -74,6 +76,8 @@ def test_body_scope_counts_body_only():
 
 # ---------- scope=全文：摘要与参考文献必须计入 ----------
 
+@pytest.mark.skipif(not (RULES / "jjgl.json").is_file(),
+                    reason="jjgl 属完整规则库（不开源），公开检出无此刊")
 def test_full_scope_counts_whole_manuscript():
     """jjgl（scope=全文）：19000 全文对上限出黄档，判决口径必须如实说「全文」。"""
     rules = load_rules("jjgl")

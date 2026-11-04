@@ -42,6 +42,13 @@ NEEDS_MD = ROOT / "rules" / "needs.md"
 AUDIT_MD = ROOT / "rules" / "audit-2026-11-01.md"
 README_MD = ROOT / "README.md"
 
+# 本文件钉的是「台账 ↔ 全库磁盘状态」的一致性：coverage/gaps/needs 描述完整
+# 规则库（23 本），开源检出只有 3 本示例（README「开源边界」），文件数对不上
+# 是常态不是回归——全库一致性只在本地全库环境跑，公开检出整文件跳过。
+pytestmark = pytest.mark.skipif(
+    len(list(RULES.glob("*.json"))) < 10,
+    reason="台账一致性以完整规则库为对象，公开检出（3 本示例）不适用")
+
 
 def read(path):
     return path.read_text(encoding="utf-8")

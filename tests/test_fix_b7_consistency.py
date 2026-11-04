@@ -29,6 +29,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from conftest import ROOT, RULES, TOOLS, minimal_doc
 
 SCHEMA_MD = ROOT / "rules" / "journal-schema.md"
@@ -218,6 +220,10 @@ def test_placement_enum_has_three_data_values_with_meanings():
                     "submission_system"}, f"枚举缺值：{sorted(enum)}"
 
 
+# 反向覆盖（新枚举值各有在库使用）以 23 本全库为口径；公开检出 3 本示例
+# 凑不齐这些值，跳过而不是报假回归。
+@pytest.mark.skipif(len(list(RULES.glob("*.json"))) < 10,
+                    reason="枚举反向覆盖以完整规则库为口径，公开检出跳过")
 def test_placement_enum_covers_every_value_in_data():
     """枚举必须罩住数据在用的每一个值（F62 残余的复现口径：23 本实查）。
 

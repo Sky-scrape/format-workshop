@@ -13,7 +13,7 @@
 import re
 
 import pytest
-from conftest import SHIPPED_JOURNALS
+from conftest import RULES, SHIPPED_JOURNALS
 from rules_ref import resolvable
 
 CARDS_RE = re.compile(r'data-qid="([a-z0-9_]+)"')
@@ -193,6 +193,8 @@ def test_all_sections_render(app_module, client):
             assert row["label"] in html, f"缺行：{sec['title']}/{row['label']}"
 
 
+@pytest.mark.skipif(not (RULES / "cjyj.sample.pdf").is_file(),
+                    reason="样张 PDF 由 build_journal 渲染，不进开源仓库")
 def test_sample_pdf_served_inline(client):
     """样张 PDF 内联出（浏览器可直接翻页缩放），不是附件。"""
     r = client.get("/journal/cjyj/sample.pdf")
@@ -201,6 +203,8 @@ def test_sample_pdf_served_inline(client):
     assert "attachment" not in (r.headers.get("Content-Disposition") or "")
 
 
+@pytest.mark.skipif(not (RULES / "cjyj.sample.docx").is_file(),
+                    reason="样板 docx 由 build_journal 渲染，不进开源仓库")
 def test_sample_docx_downloads_with_readable_name(client):
     """样板 docx 走附件下载，中文名经 RFC 5987 编码后可还原。"""
     from urllib.parse import unquote
@@ -221,6 +225,9 @@ def test_sample_routes_reject_bad_ids(client):
     assert client.get("/journal/nonexistent/sample").status_code == 404
 
 
+@pytest.mark.skipif(not (RULES / "cjyj.sample.pdf").is_file()
+                    or not (RULES / "tjyj.sample.pdf").is_file(),
+                    reason="查询页嵌入的样张由 build_journal 渲染，不进开源仓库")
 def test_query_page_embeds_real_sample_preview(client):
     """查询页嵌入的是真实渲染产物：对比模式两刊的样张都在场。"""
     html = client.get("/query?journals=cjyj,tjyj").data.decode("utf-8")

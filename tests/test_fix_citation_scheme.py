@@ -36,10 +36,19 @@ SCHEME = {"cjyj": "numbered", "gjjryj": "numbered",
 # 编号制 + 有条目模板：修前勾选闸会开的两本（gjjryj 无模板，闸本来就关）
 NUMBERED_WITH_TEMPLATES = ("cjyj", "ciejournal")
 
+# ciejournal 只在完整规则库（不开源）；公开检出里 gjjryj 仍把这枚钉住
+_NUMBERED_IDS = [j for j in (*NUMBERED_WITH_TEMPLATES, "gjjryj")
+                 if (RULES / f"{j}.json").is_file()]
+
 
 def test_declared_scheme_matches_journal_style():
-    """体例判别字段的值必须与刊物体例一致，这是两道闸共同的判别依据。"""
+    """体例判别字段的值必须与刊物体例一致，这是两道闸共同的判别依据。
+
+    mwm 只在完整规则库里；公开检出跳过该刊，其余照钉。
+    """
     for jid, want in SCHEME.items():
+        if not (RULES / f"{jid}.json").is_file():
+            pytest.skip(f"{jid} 不在公开检出（完整规则库不开源）")
         rules = json.loads((RULES / f"{jid}.json").read_text(encoding="utf-8"))
         got = rules["citation"]["system"]
         assert got == want, f"{jid} 的 citation.system={got!r}，与其体例（{want}）不符"
@@ -68,7 +77,7 @@ def run_with_citation(tmp_path, jid):
     return [p.text for p in Document(str(out)).paragraphs], audit
 
 
-@pytest.mark.parametrize("jid", [*NUMBERED_WITH_TEMPLATES, "gjjryj"])
+@pytest.mark.parametrize("jid", _NUMBERED_IDS)
 def test_numbered_journal_never_converts(tmp_path, jid):
     """编号实引刊勾了也不转：正文与文献表原样，审计说明跳过原因。"""
     texts, audit = run_with_citation(tmp_path, jid)
@@ -85,6 +94,8 @@ def test_numbered_journal_never_converts(tmp_path, jid):
     assert skipped[0]["rule"] == "citation.system", skipped[0]["rule"]
 
 
+@pytest.mark.skipif(not (RULES / "mwm.json").is_file(),
+                    reason="mwm 属完整规则库（不开源），公开检出无此刊")
 def test_author_year_journal_still_converts(tmp_path):
     """对照：author-year 刊（mwm）勾了照常转换，硬闸不许误伤。"""
     texts, audit = run_with_citation(tmp_path, "mwm")

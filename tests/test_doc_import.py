@@ -24,6 +24,10 @@ sys.path.insert(0, str(ROOT))
 import app  # noqa: E402
 
 SAMPLE_DOCX = ROOT / "rules" / "journal" / "tjyj.sample.docx"
+# 样板是 build_journal.py 的渲染产物（开源仓库只放行三本示例的 json+spec），
+# 公开检出里没有——用到它的用例跳过，而不是报「文件不存在」的假回归
+needs_sample = pytest.mark.skipif(
+    not SAMPLE_DOCX.is_file(), reason="tjyj.sample.docx 由 build_journal 生成，不进开源仓库")
 
 OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
@@ -52,6 +56,7 @@ def test_sniff_recognizes_real_doc(tmp_path):
     assert app._sniff_doc(p) == "doc"
 
 
+@needs_sample
 def test_sniff_recognizes_renamed_docx(tmp_path):
     """.docx 本质是 zip，改了后缀也认得出来。"""
     p = tmp_path / "b.doc"
@@ -79,6 +84,7 @@ def test_sniff_missing_file_is_unknown(tmp_path):
 
 # ---------------------------------------------------------------- 分派逻辑
 
+@needs_sample
 def test_renamed_docx_is_used_directly(tmp_path):
     """改了后缀的 docx 直接复制，不绕 Office。
 
@@ -103,6 +109,7 @@ def test_garbage_file_is_rejected_with_reason(tmp_path):
 
 
 @needs_converter
+@needs_sample
 def test_real_doc_converts_and_keeps_structure(tmp_path):
     """真 .doc 能转出来，且转换不吞内容。
 
