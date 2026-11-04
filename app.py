@@ -68,6 +68,7 @@ STEP_TIMEOUT = 300
 
 sys.path.insert(0, str(ROOT / "tools"))
 import ai_assist        # noqa: E402  AI 配置与调用
+import atomic_io        # noqa: E402  原子写（小配置文件）
 import docx_meta        # noqa: E402  DOCX 元数据隐私闸门
 import extract_journal  # noqa: E402  稿约 PDF → 规则集草稿
 import ocr              # noqa: E402  PDF 取文（文字层优先，缺则 OCR）
@@ -488,6 +489,24 @@ def job_lock(job):
     进入 stage_render 互删互写同一批成品，产出与审计可能来自不同轮（F11）。"""
     with _JOB_LOCKS_GUARD:
         return _JOB_LOCKS.setdefault(job, threading.Lock())
+
+
+def conversion_running():
+    """此刻是否有任务真的在处理：解析/排版线程持着任务锁（D-05）。
+
+    stage_parse / stage_render 全程持锁（含编排 Office 的子进程），锁被
+    持有 = 转换正在跑；锁还在 _JOB_LOCKS 里但没人持（上一轮结束后的残留）
+    不算忙。桌面壳的关窗确认用：转换线程会被 os._exit 连同成果一起硬杀，
+    关窗前必须先问引擎忙不忙。journal:{jid} 的锁也一并计入——新建刊的
+    AI 抽取同样是几分钟量级的在途工作。
+    """
+    with _JOB_LOCKS_GUARD:
+        locks = list(_JOB_LOCKS.values())
+    for lock in locks:
+        if not lock.acquire(blocking=False):
+            return True
+        lock.release()
+    return False
 
 
 def busy_page(err):
@@ -1161,7 +1180,18 @@ def journals():
                            drafts=draft_list())
 
 
-APP_VERSION = "1.0.0"       # 与 tools/build_installer.py 的默认版本保持一致
+APP_VERSION = "1.0.0"       # 版本真源：构建脚本经 tools/app_version.py 解析这里（D-10）
+
+
+@app.route("/healthz")
+def healthz():
+    """服务身份标记：app_ctl start 靠它认出端口上的是不是自家服务（D-06）。
+
+    端口活≠自家服务：映像名核对认不出「5000 上的另一个 python 应用」，
+    /healthz 的应答带身份标记（tools/app_ctl.py 的 HEALTHZ_MARK），对得上
+    才算自家的。只回常量——不碰盘、不碰引擎，也不暴露路径之外的信息。
+    """
+    return {"app": "geshi-gongfang", "version": APP_VERSION}
 
 
 @app.context_processor
@@ -1182,7 +1212,7 @@ def inject_ai_state():
         return {"ai_on": False, "ai_enabled": False, "ai_send_mode": "snippet"}
 
 
-# ---------------------------------------------------------------- AI 设置
+# ---------------------------------------------------------------- 设置页
 
 def _ai_form():
     """从表单取值。api_key 留空表示沿用已保存的，避免把密钥回显到页面上。"""
@@ -1232,10 +1262,10 @@ def settings():
 def settings_shell():
     """桌面壳偏好（关窗语义）。只在意桌面壳里可见，浏览器里提交也无害。"""
     action = request.form.get("close_action", "exit")
-    cfg_path = ROOT / "config" / "close.json"
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(json.dumps({"action": "tray" if action == "tray" else "exit"}),
-                        encoding="utf-8")
+    # 原子写：进程被硬杀不留半截 JSON（读侧 read_json_safe 本就按半截兜底）
+    atomic_io.write_text(
+        ROOT / "config" / "close.json",
+        json.dumps({"action": "tray" if action == "tray" else "exit"}))
     return redirect(url_for("settings", shell_saved=1))
 
 
@@ -2420,13 +2450,18 @@ def too_large(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    return render_template("error.html", code="500", title="服务内部错误",
+    return render_template("error.html", code="500", title="软件内部错误",
                            hint="转换过程出错，稿件没有被修改。请回到工作台重试。"), 500
 
 
-def setup_logging():
-    """请求与异常同时写一份到 outputs/server.log：后台窗口被关掉也能回溯。"""
-    path = ROOT / "outputs" / "server.log"
+def setup_logging(name="server.log"):
+    """请求与异常同时写一份到 outputs/<name>：后台窗口被关掉也能回溯。
+
+    name 分流（D-07）：server.log 归监听端口的浏览器服务模式，桌面壳写
+    desktop.log——两个进程各持一个 RotatingFileHandler 写同一文件时，
+    轮转 rename 在 Windows 上会互相踩（WinError 32）。
+    """
+    path = ROOT / "outputs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -2524,6 +2559,26 @@ def install_lifecycle_hooks(log):
     threading.Thread(target=beat, daemon=True).start()
 
 
+def init_app(install_hooks=True, log_name="server.log"):
+    """引擎初始化的唯一入口：建目录、清过期任务、装日志、装生命周期钩子。
+
+    服务模式 main() 与桌面壳 desktop.engine() 共用这一份——壳曾把前三步
+    抄过去、漏掉 install_lifecycle_hooks：faulthandler/crash.log/atexit/
+    心跳全没装，壳进程（pythonnet/WebView2 COM、WSGI、编排 Office 的线程
+    池同住一屋）原生崩了只剩 pythonw 静默消失，无从取证（D-07）。
+
+    注意：信号处理只有主线程装得上（其他线程 ValueError，被钩子自己吞掉）；
+    壳的引擎引导跑在后台线程里，装的是 faulthandler/atexit/心跳三样，这
+    三样已覆盖壳形态最想要的崩溃取证。
+    """
+    WORK.mkdir(parents=True, exist_ok=True)
+    sweep()
+    log = setup_logging(log_name)
+    if install_hooks:
+        install_lifecycle_hooks(log)
+    return log
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="格式工坊 · 本地服务")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PAPER_PORT", "5000")),
@@ -2553,10 +2608,7 @@ if __name__ == "__main__":
         print(f"直接打开 {url} 即可；要重启就先运行 停止.bat，再运行 启动.bat。")
         raise SystemExit(1)
 
-    WORK.mkdir(parents=True, exist_ok=True)
-    sweep()
-    log = setup_logging()
-    install_lifecycle_hooks(log)
+    log = init_app()
     log_path = ROOT / "outputs" / "server.log"
     app.logger.info(f"服务启动 {url} pid={os.getpid()} 日志={log_path.name}")
     print("格式工坊 · 本地服务已启动 → " + url)

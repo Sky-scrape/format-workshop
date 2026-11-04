@@ -170,9 +170,11 @@ def save_config(values):
     for k, v in (values or {}).items():
         if k in DEFAULTS and v is not None:
             raw[k] = v
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
+    # 原子写：硬杀不留半截 JSON（load_config 读到坏文件按缺失兜底，
+    # 但那等于配置静默回默认——写侧别再生产半截文件，D-14）
+    import atomic_io
+    atomic_io.write_text(
+        CONFIG_PATH, json.dumps(raw, ensure_ascii=False, indent=2) + "\n")
     return raw
 
 

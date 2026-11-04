@@ -71,6 +71,16 @@ desktop.ini
 dist/
 build/
 
+# 门面 exe 只该出现在 build/（tools/build_launcher.py:37）。
+# 根目录曾有一份同字节复制，漏 ignore 会被 git add . 带进公开历史；
+# 没门面时 app_ctl.py 的 shortcut 自动回落 pythonw 直拉 desktop.py
+/格式工坊.exe
+
+# 壳的运行期状态（在仓库目录跑过壳就会生成：desktop.py:39/:611、app.py:1235）
+config/window.json
+config/close.json
+config/tray-hint.flag
+
 # pytest --basetemp 临时产物（bt_<标记>/，见 tools/build_portable.py 的排除规则）
 bt_*/
 tools/installer/installer-gen.iss

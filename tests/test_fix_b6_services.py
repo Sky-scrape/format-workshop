@@ -113,7 +113,7 @@ def test_stop_reports_not_found_honestly(monkeypatch, capsys):
     monkeypatch.setattr(app_ctl, "time", types.SimpleNamespace(sleep=lambda *_: None))
     assert app_ctl.stop() == 0
     out = capsys.readouterr().out
-    assert out.count("未找到匹配进程") == 2, "守护与服务两条都要如实报告"
+    assert out.count("未找到匹配进程") == 3, "守护、服务与桌面壳三条都要如实报告"
     assert "已处理" not in out, "说反话的「已处理」不许再出现"
 
 

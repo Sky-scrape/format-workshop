@@ -1,0 +1,14 @@
+{# 转换旅程的步骤条：全站唯一的一套 4 步定义。
+   工作台与补录页都从这里取——曾经两处各写一份（工作台 3 步、补录页 4 步），
+   总步数与当前步号同时对不上。要改步骤名/步数只动这个文件。
+   用法：{{ journey(done=已完成步数, cur=当前步号) }}；
+   工作台是旅程起点（done=0, cur=1），第 2 步由页面脚本随选刊点亮。 #}
+{% set JOURNEY_STEPS = ['上传稿件', '选择期刊', '补录信息', '生成成品'] %}
+{% macro journey(done, cur) -%}
+<div class="journey" aria-label="转换步骤">{%- for label in JOURNEY_STEPS -%}
+  {%- set n = loop.index -%}
+  <span class="{{ 'done' if n <= done else ('now' if n == cur else '') }}" data-step="{{ n }}"><i>{{ '✓' if n <= done else n }}</i>{{ label }}</span>
+  {%- if not loop.last %}<em></em>{% endif -%}
+  {%- endfor -%}
+</div>
+{%- endmacro %}

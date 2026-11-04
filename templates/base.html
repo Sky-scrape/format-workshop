@@ -26,7 +26,7 @@ h1,h2,h3{text-wrap:balance}
 .a-tpl{background:transparent;border:1px solid #bcd6ca;color:var(--accent)}
 .a-pub{background:transparent;border:1px solid #e3d4b6;color:var(--gold)}
 .a-guide{background:transparent;border:1px solid #c9d0e2;color:#5b6e95}
-/* 元信息分隔：规约禁用「·」中点（各字体基线不一、忽上忽下），统一 1px 细竖线 */
+/* 元信息分隔：规约禁用「·」中点（各字体基线不一、忽上忽下），统一 1px 细竖线；窗口标题/标签页标题不在此限 */
 .sep{display:inline-block;width:1px;height:10px;background:#c9d4cd;margin:0 8px;vertical-align:-1px}
 
 /* 品牌首页 */
@@ -39,7 +39,8 @@ h1,h2,h3{text-wrap:balance}
 .home-features{border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(3,1fr);padding:20px 6vw;max-width:1420px;width:100%;margin:0 auto}.feature{display:flex;align-items:center;justify-content:center;gap:13px;border-left:1px solid var(--line)}.feature:first-child{border:0}.feature-no{font-family:Georgia,serif;font-size:var(--fs-body);color:#87a295}.feature strong{font-size:var(--fs-aux);font-weight:500;display:block}.feature span{font-size:var(--fs-aux);color:var(--ink3);display:block;margin-top:2px}
 
 /* 单屏工作台 */
-.workspace-shell{height:calc(100vh - 68px);min-height:600px;padding:20px 28px 22px;display:flex;flex-direction:column}.workspace-heading{display:flex;align-items:center;gap:20px;margin-bottom:16px;flex:none}.workspace-heading h1{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-page);font-weight:600;letter-spacing:.5px;margin:0 0 3px}.workspace-heading p{font-size:var(--fs-aux);color:var(--ink3);margin:0}.flow-steps{display:flex;align-items:center;margin-left:auto}.flow-step{display:flex;align-items:center;gap:6px;font-size:var(--fs-aux);color:var(--ink3)}.flow-step b{width:21px;height:21px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;font-family:Georgia,serif;font-weight:400}.flow-step.on{color:var(--accent)}.flow-step.on b{border-color:#bcd6ca;background:var(--accent-soft)}.flow-line{width:33px;height:1px;background:#d9e2dc;margin:0 9px}
+.workspace-shell{height:calc(100vh - 68px);min-height:600px;padding:20px 28px 22px;display:flex;flex-direction:column}.workspace-heading{display:flex;align-items:center;gap:20px;margin-bottom:16px;flex:none}.workspace-heading h1{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-page);font-weight:600;letter-spacing:.5px;margin:0 0 3px}.workspace-heading p{font-size:var(--fs-aux);color:var(--ink3);margin:0}/* 转换旅程步骤条：工作台与补录页共用，4 步定义在模板 _journey.html 一处 */
+.journey{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:var(--fs-aux);color:var(--ink3)}.journey i{width:17px;height:17px;border-radius:50%;border:1px solid var(--line);display:inline-grid;place-items:center;font-style:normal;font-size:var(--fs-aux);margin-right:4px}.journey .done i{background:var(--accent-soft);border-color:#bcd6ca;color:var(--accent)}.journey .now{color:var(--accent)}.journey .now i{border-color:var(--accent);color:var(--accent)}.journey em{width:22px;height:1px;background:var(--line);display:inline-block;font-style:normal}
 .error-message{font-size:var(--fs-aux);color:var(--danger);background:var(--danger-bg);border:1px solid #efcfc7;border-radius:8px;padding:7px 11px;margin-bottom:12px;flex:none}
 .workbench{display:grid;grid-template-columns:minmax(250px,.82fr) minmax(420px,1.65fr) minmax(240px,.78fr);gap:15px;flex:1;min-height:0}.panel{background:#fff;border:1px solid var(--line);border-radius:14px;min-height:0}.panel-head{height:68px;padding:16px 18px 12px;display:flex;align-items:flex-start;gap:10px;border-bottom:1px solid var(--line2)}.step-no{font-family:Georgia,serif;font-size:var(--fs-aux);color:var(--accent);background:var(--accent-soft);border:1px solid #d4e5dc;width:28px;height:27px;border-radius:7px;display:grid;place-items:center;flex:none}.panel-head h2{font-size:var(--fs-body);font-weight:600;margin:0 0 2px}.panel-head p{font-size:var(--fs-aux);color:var(--ink3);margin:0}.panel-head .count{margin-left:auto;font-size:var(--fs-aux);color:var(--ink3);padding-top:5px;white-space:nowrap}
 .upload-panel{display:flex;flex-direction:column}.upload-body{padding:16px;display:flex;flex-direction:column;min-height:0;flex:1}.drop{border:1.5px dashed #bdcec5;border-radius:11px;background:var(--soft);min-height:185px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px;cursor:pointer;transition:.2s;flex:1;max-height:270px}.drop:hover,.drop.on{border-color:var(--accent);background:#eff7f2}.drop.has-error{border-color:var(--danger)}.drop input{display:none}.drop-icon{width:40px;height:40px;border-radius:11px;background:#e4efe9;color:var(--accent);display:grid;place-items:center;margin-bottom:11px}.drop-icon svg{width:20px;height:20px}.drop strong{font-size:var(--fs-body);font-weight:500}.drop>span{font-size:var(--fs-aux);color:var(--ink3);margin-top:3px}.drop>span u{color:var(--accent);text-underline-offset:3px}.drop small{font-size:var(--fs-aux);letter-spacing:.8px;color:#9aa69f;margin-top:12px}
@@ -58,7 +59,7 @@ dialog{border:1px solid var(--line);border-radius:16px;padding:0;width:min(510px
 
 @media(min-width:1500px){.workbench{grid-template-columns:320px 1fr 300px}.jcard{min-height:68px}.drop{max-height:300px}}
 @media(max-width:1100px){.topbar{padding:0 24px}.brand,.top-actions{min-width:170px}.workbench{grid-template-columns:240px 1fr 230px;gap:10px}.workspace-shell{padding:17px}.jcard{grid-template-columns:1fr auto}.jspec{display:none}.home-hero{gap:25px}.compare-board{transform:scale(.88)}.result-stats{display:none}}
-@media(max-width:850px){.topnav{gap:20px}.brand,.top-actions{min-width:0}.brand small{display:none}.local-pill{display:none}.home-shell{height:auto;min-height:calc(100vh - 68px);overflow:visible}.home-hero{grid-template-columns:1fr;padding:55px 8vw 35px;text-align:center}.home-copy>p{margin-left:auto;margin-right:auto}.eyebrow,.home-actions,.home-proof{justify-content:center}.home-visual{display:none}.home-features{padding:20px 4vw}.workspace-shell{height:auto;min-height:calc(100vh - 68px)}.workbench{grid-template-columns:1fr 1.4fr}.confirm-panel{grid-column:1/-1}.confirm-body{display:grid;grid-template-columns:1fr 1fr;gap:15px}.summary-specs{margin:0}.confirm-note{display:none}.confirm-bottom{margin:0}.flow-steps{display:none}}
+@media(max-width:850px){.topnav{gap:20px}.brand,.top-actions{min-width:0}.brand small{display:none}.local-pill{display:none}.home-shell{height:auto;min-height:calc(100vh - 68px);overflow:visible}.home-hero{grid-template-columns:1fr;padding:55px 8vw 35px;text-align:center}.home-copy>p{margin-left:auto;margin-right:auto}.eyebrow,.home-actions,.home-proof{justify-content:center}.home-visual{display:none}.home-features{padding:20px 4vw}.workspace-shell{height:auto;min-height:calc(100vh - 68px)}.workbench{grid-template-columns:1fr 1.4fr}.confirm-panel{grid-column:1/-1}.confirm-body{display:grid;grid-template-columns:1fr 1fr;gap:15px}.summary-specs{margin:0}.confirm-note{display:none}.confirm-bottom{margin:0}.workspace-shell .journey{display:none}}
 @media(max-width:620px){.topbar{height:61px;padding:0 16px}.brand-mark{width:31px;height:31px}.brand strong{font-size:var(--fs-title)}.topnav{gap:16px}.topnav a{font-size:var(--fs-aux)}.help-btn{display:none}.home-shell{min-height:calc(100vh - 61px)}.home-copy h1{font-size:43px}.home-copy>p{font-size:var(--fs-body)}.home-proof{margin-top:28px}.proof{padding:0 15px}.home-features{grid-template-columns:1fr;gap:13px;padding:20px 8vw}.feature{border:0;justify-content:flex-start}.home-actions{flex-direction:column;gap:13px}.workspace-shell{min-height:calc(100vh - 61px);padding:15px 12px}.workspace-heading{margin-bottom:12px}.workspace-heading h1{font-size:var(--fs-head)}.workbench{display:flex;flex-direction:column}.upload-panel{min-height:390px}.drop{max-height:none}.journal-panel{min-height:530px}.jcard{grid-template-columns:1fr auto}.confirm-body{display:flex}.result-shell{padding:18px 14px 35px}.result-hero{padding:22px 18px;align-items:flex-start}.result-hero h1{font-size:var(--fs-head)}.downloads{grid-template-columns:1fr}.result-stats{display:none}.result-bottom{flex-direction:column;align-items:stretch}.result-bottom .btn{width:100%}iframe{height:600px}}
 @media(max-height:760px) and (min-width:851px){.workspace-shell{padding-top:14px;padding-bottom:14px}.workspace-heading{margin-bottom:11px}.workspace-heading h1{font-size:var(--fs-head)}.panel-head{height:60px;padding-top:12px}.journal-tools{padding-top:9px}.jcard{min-height:55px;padding-top:7px;padding-bottom:7px}.journal-list{gap:6px}.upload-body{padding:13px}.upload-note{margin:6px 1px}.summary-specs{padding:9px 0;margin:12px 0;gap:7px}.selected-journal{font-size:var(--fs-head)}.confirm-note{padding:9px}.home-hero{padding-top:20px;padding-bottom:15px}.home-visual{min-height:390px}.compare-board{transform:scale(.9)}.home-copy h1{font-size:50px;margin-bottom:16px}.home-copy>p{margin-bottom:22px}.home-proof{margin-top:25px}.home-features{padding-top:15px;padding-bottom:15px}}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
@@ -73,7 +74,6 @@ dialog{border:1px solid var(--line);border-radius:16px;padding:0;width:min(510px
 .proof span{font-size:var(--fs-aux)}
 .feature strong{font-size:var(--fs-body)}.feature span{font-size:var(--fs-aux);margin-top:3px}
 .workspace-heading p{font-size:var(--fs-aux)}
-.flow-step{font-size:var(--fs-aux)}
 .error-message{font-size:var(--fs-body);line-height:1.7;max-height:96px;overflow:auto}
 .panel-head{height:72px;padding:17px 18px 13px}
 .panel-head p{font-size:var(--fs-aux)}.panel-head .count{font-size:var(--fs-aux)}
@@ -157,7 +157,7 @@ box-shadow:0 18px 44px rgba(18,40,30,.18);padding:10px;display:flex;flex-directi
 
 /* ── 桌面软件状态栏 ────────────────────────────────────────────
    浏览器标签页里不渲染（body.desktop-only 只在桌面壳里注入）：网页形态
-   保持零侵入。软件的身份证：版本 + 服务状态 + 端口。 */
+   保持零侵入。软件的身份证：版本 + 运行状态 + 数据边界，不露端口。 */
 .statusbar{display:none;position:fixed;left:0;right:0;bottom:0;z-index:90;height:26px;
 padding:0 12px;display:none;align-items:center;gap:10px;background:var(--surface);
 border-top:1px solid var(--line);font-size:var(--fs-aux);color:var(--ink3);user-select:none}
@@ -195,11 +195,9 @@ body.has-statusbar .home-shell,body.has-statusbar .workspace-shell{height:calc(1
 <footer class="statusbar" id="statusbar">
   <span>格式工坊 v{{ app_version }}</span>
   <i class="sb-sep"></i>
-  <span><i class="sb-dot" id="sbDot"></i> <span id="sbService">检测服务…</span></span>
+  <span><i class="sb-dot" id="sbDot"></i> <span id="sbService">检测中…</span></span>
   <span class="sb-right">
-    <span id="sbPort">127.0.0.1</span>
-    <i class="sb-sep"></i>
-    <span>本地运行 · 数据不出本机</span>
+    <span>本地运行</span><i class="sb-sep"></i><span>数据不出本机</span>
   </span>
 </footer>
 <script>
@@ -215,18 +213,30 @@ body.has-statusbar .home-shell,body.has-statusbar .workspace-shell{height:calc(1
   }
   function enableShellUI(){
     document.body.classList.add('has-statusbar');
-    var sbPort = document.getElementById('sbPort');
-    var qport = new URLSearchParams(location.search).get('from');
-    if (sbPort && qport) sbPort.textContent = '127.0.0.1:' + qport;
     var dot = document.getElementById('sbDot'), txt = document.getElementById('sbService');
     function sbCheck(){
       fetch('/', {cache:'no-store'}).then(function(){
-        dot.classList.add('on'); txt.textContent = '服务运行中';
+        dot.classList.add('on'); txt.textContent = '运行中';
       }).catch(function(){
-        dot.classList.remove('on'); txt.textContent = '服务未响应';
+        dot.classList.remove('on'); txt.textContent = '响应异常';
       });
     }
     sbCheck(); setInterval(sbCheck, 15000);
+    /* 站内「新窗口」链接在壳里也开壳窗口。target="_blank" 交给 WebView2
+       会走系统浏览器，地址栏露出 127.0.0.1:端口——那正是桌面壳要藏掉的
+       东西。外站链接（DOI、网址）仍交给系统浏览器，桌面壳里看外网不拦。 */
+    function openInApp(e){
+      var a = e.target && e.target.closest ? e.target.closest('a[target="_blank"]') : null;
+      if (!a) return;
+      var href = a.getAttribute('href') || '';
+      if (href.charAt(0) !== '/' || href.charAt(1) === '/') return;
+      var api = window.pywebview && window.pywebview.api;
+      if (!api || !api.open_in_app) return;
+      e.preventDefault();
+      api.open_in_app(href);
+    }
+    document.addEventListener('click', openInApp);
+    document.addEventListener('auxclick', function(e){ if (e.button === 1) openInApp(e); });
     /* 浏览器习惯清理：壳内禁右键菜单与 F12（开发调试用 PAPER_OPEN=browser） */
     document.addEventListener('contextmenu', function(e){ e.preventDefault(); });
     document.addEventListener('keydown', function(e){

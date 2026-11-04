@@ -15,8 +15,9 @@ set "PYW=pythonw"
 where pythonw >nul 2>nul || set "PYW=python"
 
 :pick
-rem No arguments -> desktop shell (native window over the service). Named
-rem arguments (stop / status / shortcut / quiet) forward to tools\app_ctl.py.
+rem No arguments -> desktop shell (native window; pages are answered by the
+rem in-process engine -- no port, no background service). Named arguments
+rem (stop / status / shortcut / quiet) forward to tools\app_ctl.py.
 if not "%~1"=="" goto forward
 
 rem start (not a plain call): desktop.py lives for the whole session, and a

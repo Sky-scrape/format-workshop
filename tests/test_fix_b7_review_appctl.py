@@ -39,7 +39,7 @@ def test_stop_ps1_crash_exit1_reported_as_failure(monkeypatch, capsys):
     _quiet_stop(monkeypatch, ("", 1))
     assert app_ctl.stop() == 0
     out = capsys.readouterr().out
-    assert out.count("停止脚本执行失败") == 2, "守护与服务两条都要如实报告"
+    assert out.count("停止脚本执行失败") == 3, "守护、服务与桌面壳三条都要如实报告"
     assert "未找到匹配进程" not in out, "执行失败不许说成没有进程"
 
 
@@ -48,7 +48,7 @@ def test_stop_ps1_no_match_is_exit2(monkeypatch, capsys):
     _quiet_stop(monkeypatch, ("", 2))
     assert app_ctl.stop() == 0
     out = capsys.readouterr().out
-    assert out.count("未找到匹配进程") == 2
+    assert out.count("未找到匹配进程") == 3
     assert "执行失败" not in out
 
 
@@ -57,7 +57,7 @@ def test_stop_ps1_crash_with_partial_output_carries_detail(monkeypatch, capsys):
     _quiet_stop(monkeypatch, ("failed 4321: access denied\n", 1))
     assert app_ctl.stop() == 0
     out = capsys.readouterr().out
-    assert out.count("停止脚本执行失败") == 2
+    assert out.count("停止脚本执行失败") == 3
     assert "failed 4321" in out, "崩溃前残段要跟着报出来"
 
 

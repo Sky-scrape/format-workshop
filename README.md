@@ -7,7 +7,7 @@
 
 一个跑在本机的工具。上传 `.docx`，选一本期刊，拿到三样东西：格式正确的成品、一份逐条可核的审计报告、一份带修订标记的对照版。
 
-**稿子不出本机。** 查重和在线排版类服务都要你把全文传上去，这个不用——它就是个本地 Web 应用，`127.0.0.1:5000`，不联网也能跑（AI 辅助是可选开关，默认关闭）。
+**稿子不出本机。** 查重和在线排版类服务都要你把全文传上去，这个不用——它就跑在你自己的电脑上：双击打开的是原生桌面窗口，页面由进程内引擎直接应答，不监听端口、不起后台服务，不联网也能跑（AI 辅助是可选开关，默认关闭）。
 
 导出的 `.docx` 还会清掉 Word 文档属性里的作者、最后修改者和 WPS 账号标识；匿名稿连修订与批注作者一起匿名化，并在交付前做一次硬性检查。正文一个字不动，去掉的只是随文件外发的身份通道。
 
@@ -148,7 +148,7 @@ python app.py --port 5001      # 换端口
 python app.py --no-browser     # 不自动开浏览器
 ```
 
-Windows 下也可直接双击根目录的 `格式工坊.bat`：弹出**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳——无地址栏、无浏览器边框，服务未起会经 keepalive 自动拉起）；`stop` / `status` / `shortcut` / `quiet` 等子命令转发给 `tools/app_ctl.py`。
+Windows 下也可直接双击根目录的 `格式工坊.bat`：弹出**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳——无地址栏、无浏览器边框；页面由**进程内引擎**直接应答，不监听端口、不起后台服务）。`stop` / `status` / `shortcut` / `quiet` 等子命令仍转发给 `tools/app_ctl.py`，其中 `stop` / `status` 只针对可选的浏览器服务模式。
 
 还可以把桌面快捷方式一次性建好（pythonw 直启，双击无控制台黑窗，图标同页面）：
 
@@ -156,11 +156,11 @@ Windows 下也可直接双击根目录的 `格式工坊.bat`：弹出**原生桌
 格式工坊.bat shortcut
 ```
 
-不想用了就 `格式工坊.bat stop` 停止后台服务、删掉桌面的 `格式工坊.lnk` 即可，无其他残留。
+不想用了直接关窗口即可：引擎随进程退出，不留后台服务，也没有端口需要释放；只有浏览器服务模式才用 `格式工坊.bat stop`。
 
 ### 分发：便携包与安装版
 
-不想装 Python 的使用者用绿色便携包：`python tools/build_portable.py --zip` 产出 `dist\格式工坊-<版本>.zip`，对方解压后双击里面的 **`格式工坊.exe`** 即可——带图标的原生桌面窗口（桌面壳 `desktop.py`，pywebview 借 WebView2 画壳），解释器与依赖都在包里。exe 是 `tools/build_launcher.py` 冻结的**软件门面**：只负责拉起旁边的解释器跑桌面壳，三层进程模型零改动；未签名二进制，个别杀软可能误报，加白即可。
+不想装 Python 的使用者用绿色便携包：`python tools/build_portable.py --zip` 产出 `dist\格式工坊-<软件版本>.zip`（版本号取自 app.py 的 `APP_VERSION`，包内附 `BUILD-INFO.txt` 记录构建来源），对方解压后双击里面的 **`格式工坊.exe`** 即可——带图标的原生桌面窗口（桌面壳 `desktop.py`，pywebview 借 WebView2 画壳），解释器与依赖都在包里。exe 是 `tools/build_launcher.py` 冻结的**软件门面**：只负责拉起旁边的解释器跑桌面壳，三层进程模型零改动；未签名二进制，个别杀软可能误报，加白即可。
 
 标准安装包则是：
 
@@ -183,9 +183,9 @@ python tools/build_installer.py           # 再打成 dist\格式工坊-setup-<�
   .venv\Scripts\python -m pip install -r requirements-dev.txt
   ```
 
-  之后开发一律双击根目录的 `开发版.bat`：弹出的是**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳），不再开浏览器；服务固定占 **5001** 端口，`stop` / `status` / `shortcut` 等子命令与 `格式工坊.bat` 同一套（`开发版.bat stop` 只停开发版）。跑测试：`.venv\Scripts\python -m pytest`。
+  之后开发一律双击根目录的 `开发版.bat`：弹出的是**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳），不再开浏览器；页面由进程内引擎直接应答，**不监听端口、不起后台服务**，关窗即退。`stop` / `status` / `shortcut` 等子命令与 `格式工坊.bat` 同一套（`stop` / `status` 只针对浏览器服务模式）。跑测试：`.venv\Scripts\python -m pytest`。
 
-隔离是四层的：解释器（便携包 `python\` vs 源码 `.venv\`）、端口（5000 vs 5001）、进程清理（stop 按启动目录圈定进程，见 `tools/kill_by_cmdline.ps1` 的 `-Root`）、工作产物（`outputs\` 各在各的目录里）。本目录的 `格式工坊.bat` 检测到 `.venv` 时也会优先用它，但端口仍是 5000——与使用版并存时请走 `开发版.bat`；日常使用更要以使用版那份为准，若仍用本源码目录常驻 5000，开发版与它同目录，`stop` 无法按目录区分，会一起停掉。
+隔离靠解释器与工作目录：便携包用自带的 `python\`、开发版用源码 `.venv\`，两边的 `outputs\` 各在各的目录里；桌面壳不占端口，两个版本可以同时打开、互不冲突。只有显式跑 `python app.py` 的浏览器服务模式才需要 5000/5001 端口区分。
 
 ### 可选依赖
 

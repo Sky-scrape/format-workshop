@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_journey.html" import journey %}
 {% block title %}补齐作者信息 · 格式工坊{% endblock %}
 {% block style %}
 <style>
@@ -8,12 +9,6 @@ margin-bottom:18px}
 .fill-head h1{font-family:"Songti SC",SimSun,serif;font-size:var(--fs-page);font-weight:600;margin:0 0 6px;letter-spacing:.5px}
 .fill-head p{font-size:var(--fs-body);color:var(--ink3);margin:0;line-height:1.8}
 .fill-head p b{color:var(--accent);font-weight:500}
-.steps{display:flex;align-items:center;gap:8px;font-size:var(--fs-aux);color:var(--ink3)}
-.steps i{width:17px;height:17px;border-radius:50%;border:1px solid var(--line);display:inline-grid;
-place-items:center;font-style:normal;font-size:var(--fs-aux);margin-right:4px}
-.steps .done i{background:var(--accent-soft);border-color:#bcd6ca;color:var(--accent)}
-.steps .now{color:var(--accent)}.steps .now i{border-color:var(--accent);color:var(--accent)}
-.steps em{width:22px;height:1px;background:var(--line);display:inline-block;font-style:normal}
 .fill-grid{display:grid;grid-template-columns:320px 1fr;gap:14px;margin-bottom:14px;align-items:start}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px}
 .card h2{font-size:var(--fs-body);font-weight:600;margin:0 0 4px}
@@ -57,12 +52,8 @@ font-size:var(--fs-aux);color:#7d3a30;line-height:1.9;margin:0 0 14px}
       <h1>补齐作者信息与缺失要件</h1>
       <p>{{ meta.original }} → <b>{{ journal }}</b><i class="sep"></i>这里填的每一段文字都会按该刊版式放到位，正文一个字都不动</p>
     </div>
-    <div class="steps">
-      <span class="done"><i>✓</i>上传</span><em></em>
-      <span class="done"><i>✓</i>选刊</span><em></em>
-      <span class="now"><i>3</i>补录</span><em></em>
-      <span><i>4</i>出稿</span>
-    </div>
+    {# 步骤条与工作台同源（_journey.html，4 步模型）：上传、选刊已完成，当前在补录 #}
+    {{ journey(done=2, cur=3) }}
   </div>
 
   {% if n_need %}

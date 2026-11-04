@@ -189,7 +189,9 @@ def test_stop_ps1_crash_reported_as_failure(monkeypatch, capsys):
     _quiet_stop(monkeypatch, ("", -1))
     assert app_ctl.stop() == 0
     out = capsys.readouterr().out
-    assert out.count("停止脚本执行失败") == 2, "守护与服务两条都要如实报告"
+    # 3 条 = 守护 + 服务 + 桌面壳（D-04 给 stop 加的第三个 pattern，
+    # 与 test_fix_b7_review_appctl.py 同口径；此文件当时漏改）
+    assert out.count("停止脚本执行失败") == 3, "守护、服务与桌面壳三条都要如实报告"
     assert "未找到匹配进程" not in out, "执行失败不许说成没有进程"
 
 
@@ -199,7 +201,8 @@ def test_stop_no_match_still_reported(monkeypatch, capsys):
     _quiet_stop(monkeypatch, ("", 2))
     assert app_ctl.stop() == 0
     out = capsys.readouterr().out
-    assert out.count("未找到匹配进程") == 2
+    # 同上：桌面壳（D-04）算第三条
+    assert out.count("未找到匹配进程") == 3
 
 
 def test_run_ps1_full_exception_returns_negative(monkeypatch):

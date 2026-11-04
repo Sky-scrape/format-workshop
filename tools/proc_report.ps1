@@ -7,7 +7,7 @@
 #     Python.
 
 $procs = @(Get-CimInstance Win32_Process | Where-Object {
-    $_.Name -match '^(python|pythonw)\.exe$' -and $_.CommandLine -match 'app\.py|keepalive'
+    $_.Name -match '^(python|pythonw)\.exe$' -and $_.CommandLine -match 'app\.py|keepalive|desktop\.py'
 })
 
 foreach ($p in $procs) {
@@ -17,6 +17,7 @@ foreach ($p in $procs) {
 
     $role = "app"
     if ($p.CommandLine -match 'keepalive') { $role = "keepalive" }
+    if ($p.CommandLine -match 'desktop\.py') { $role = "shell" }
 
     Write-Output ("{0}|{1}|{2}" -f $p.ProcessId, $role, $parName)
 }

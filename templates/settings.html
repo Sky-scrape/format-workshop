@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}AI 设置 · 格式工坊{% endblock %}
+{% block title %}设置 · 格式工坊{% endblock %}
 {% block style %}
 <style>
 .set-shell{padding:34px 34px 70px;max-width:920px;margin:auto}
@@ -51,7 +51,7 @@
 <div class="set-shell">
   <div class="set-head">
     <div>
-      <h1>AI 设置</h1>
+      <h1>设置</h1>
       <p>AI 只参与「判断这一段是什么」和「从稿约里读格式要求」，不生成也不改写论文里的任何文字。不配置时全站按纯规则运行，功能不受影响。</p>
     </div>
     <div class="state {{ 'on' if ai_on else '' }}"><i></i>{{ '已启用' if ai_on else ('已配置但未启用' if ai_enabled else '未启用') }}</div>
@@ -67,11 +67,11 @@
     <div class="radios">
       <label>
         <input type="radio" name="close_action" value="exit" form="shellForm" {{ 'checked' if close_action != 'tray' }}>
-        <div><strong>关闭窗口即退出（推荐）</strong><span>点 × 时程序与后台服务一并结束，行为与一般桌面软件一致。</span></div>
+        <div><strong>关闭窗口即退出（推荐）</strong><span>点 × 时程序连同内置引擎一并结束，行为与一般桌面软件一致；转换进行中会先确认。</span></div>
       </label>
       <label>
         <input type="radio" name="close_action" value="tray" form="shellForm" {{ 'checked' if close_action == 'tray' }}>
-        <div><strong>关闭窗口最小化到托盘</strong><span>点 × 后程序收进屏幕右下角托盘继续运行（后台服务随时可用），从托盘图标退出。</span></div>
+        <div><strong>关闭窗口最小化到托盘</strong><span>点 × 后程序收进屏幕右下角托盘，软件继续运行，从托盘图标退出。</span></div>
       </label>
     </div>
     <form method="post" action="/settings/shell" id="shellForm" class="shell-save">
@@ -82,7 +82,7 @@
 
   <form method="post" action="/settings" id="aiForm">
     <div class="card">
-      <h2>服务连接</h2>
+      <h2>AI 服务连接</h2>
       <p class="hint">任何兼容 OpenAI 接口的服务都可以，模型与厂商不受限制。</p>
 
       <div class="switch">

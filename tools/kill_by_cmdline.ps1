@@ -8,7 +8,12 @@
 # CreateProcess), so a non-ASCII project path still compares correctly.
 #
 # Usage:
-#   kill_by_cmdline.ps1 -Pattern 'app\.py' -Root '<project root>' [-Quiet] [-DryRun]
+#   kill_by_cmdline.ps1 -Pattern '<regex>' -Root '<project root>' [-Quiet] [-DryRun]
+#     -Pattern  'keepalive' | 'app\.py' | 'desktop\.py'. The shell pattern
+#               (D-04) is mandatory in the caller's list: desktop.py neither
+#               listens on a port nor matches app\.py, so an unscoped stop
+#               left the shell running and upgrades/uninstalls could not
+#               replace {app}\python.
 #     -Root    mandatory path scope: only processes whose command line contains
 #              this path are considered (F48: a bare substring match used to
 #              force-kill unrelated projects' python processes).

@@ -65,7 +65,8 @@ def parent_info():
              f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId={os.getpid()}';"
              "$q=Get-CimInstance Win32_Process -Filter \"ProcessId=$($p.ParentProcessId)\";"
              "Write-Output \"$($q.Name)|$($q.ProcessId)\""],
-            capture_output=True, text=True, timeout=10).stdout.strip()
+            capture_output=True, text=True, timeout=10,
+            creationflags=0x08000000 if os.name == "nt" else 0).stdout.strip()
         return out or "未知|?"
     except Exception:  # noqa: BLE001
         return "未知|?"

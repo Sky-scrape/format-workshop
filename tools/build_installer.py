@@ -11,8 +11,8 @@ ISCC 从哪找：--iscc 参数 → 环境变量 INNO_SETUP → %LocalAppData%\Pr
 
 用法
 ----
-    py -3 tools/build_installer.py                # 版本默认 1.0.0
-    py -3 tools/build_installer.py --version 1.1  # 发新版时手动递增
+    py -3 tools/build_installer.py                # 版本默认取 app.py 的 APP_VERSION
+    py -3 tools/build_installer.py --version 1.1  # 也可手动指定（发版脚本用）
 
 产物
 ----
@@ -25,6 +25,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import app_version as appver
+from package_docs import strip_private_docs
 
 ROOT = Path(__file__).resolve().parent.parent
 ISS = ROOT / "tools" / "installer" / "installer.iss"
@@ -84,7 +87,9 @@ def find_iscc(explicit=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.0.0")
+    # 版本真源在 app.py 的 APP_VERSION（经 tools/app_version.py 解析）；
+    # 曾经默认值在这里另写一份 1.0.0，两处一漂移产物就对不上号（D-10）
+    ap.add_argument("--version", default=appver.app_version())
     ap.add_argument("--iscc", default=None, help="ISCC.exe 路径（默认自动探测）")
     a = ap.parse_args()
 
@@ -97,6 +102,10 @@ def main():
     if stale.is_dir():
         shutil.rmtree(stale)
     (portable / "outputs").mkdir()
+
+    # 旧版 build_portable 可能已把根目录内部文档拷进包里（D-08）：进
+    # Program Files 前清掉，白名单见 tools/package_docs.py
+    strip_private_docs(portable)
 
     iscc = find_iscc(a.iscc)
     out = ROOT / "dist" / f"格式工坊-setup-{a.version}.exe"

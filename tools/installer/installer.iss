@@ -59,7 +59,8 @@ Filename: "{app}\格式工坊.exe"; WorkingDir: "{app}"; \
     Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-; 卸载前先停后台服务，否则 python\ 里的文件被占用删不掉。
+; 卸载前先停壳与服务（app_ctl stop 按启动目录圈定守护/服务/桌面壳三类进程），
+; 否则 python\ 里的解释器被运行中的壳占用删不掉（D-04）。
 ; [UninstallRun] 在删文件之前执行（RUNUNINSTH）。
 Filename: "{app}\python\pythonw.exe"; Parameters: """tools\app_ctl.py"" stop"; \
     WorkingDir: "{app}"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
@@ -67,13 +68,18 @@ Filename: "{app}\python\pythonw.exe"; Parameters: """tools\app_ctl.py"" stop"; \
 [UninstallDelete]
 ; 兜底：运行期在解释器目录里长出的 __pycache__ 不在安装清单里，按清单删会
 ; 剩下一堆 .pyc（实测）。python\ 全是程序文件，卸载时整目录带走；
-; outputs\（稿件与日志）是用户数据，有意保留不删
+; outputs\（稿件与日志）是用户数据，有意保留不删。
+; WebView2 用户数据目录不在 {app} 下，也在本机缓存（D-03）：desktop.py 把
+; 它固定在 %LocalAppData%\格式工坊\webview，里面只有静态资源缓存（app.py
+; 对非 /static 响应一律 Cache-Control: no-store，稿件内容不落盘），卸载带走。
 Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\tools\__pycache__"
 Type: filesandordirs; Name: "{app}\__pycache__"
+Type: filesandordirs; Name: "{localappdata}\格式工坊\webview"
 
 [Code]
-// 覆盖安装/升级前也要先停旧服务，文件才覆盖得动（PREINSSTOP）。
+// 覆盖安装/升级前也要先停旧的壳与服务（app_ctl stop 圈定含桌面壳，D-04），
+// 文件才覆盖得动（PREINSSTOP）。
 // 注意 [Code] 段是 Pascal 语法，注释用 //，INI 的 ; 在这里不是注释
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var

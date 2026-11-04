@@ -1,50 +1,79 @@
-"""格式工坊 · 桌面壳：原生窗口替代浏览器页（使用版与开发版同一入口）。
+"""格式工坊 · 桌面壳：原生窗口 + 进程内引擎，不监听端口。
 
 为什么有这个文件：Flask 应用本体不变，但双击 bat/exe 弹出的不该是浏览器
 ——pywebview 借 WebView2（Win10/11 自带）画一个真正的原生窗口：没有地址栏、
 没有浏览器边框，体感是桌面软件。
 
-进程模型刻意沿用既有链路：窗口只负责「看」，服务仍由 keepalive 常驻守护，
-bat 的 stop 照常能停；窗口随关随走，不留进程。
+引擎形态（2026-11 起）：页面由本进程内的 Flask 直接应答，不再起 keepalive
+和 app.py 的 HTTP 服务。WebView2 的 WebResourceRequested 把
+http://127.0.0.1/* 拦下来，转成一次 WSGI 调用——没有监听 socket、没有端口、
+没有后台服务进程；关窗即退，和其他桌面软件一致。响应在后台线程生成，
+WebView2 的 deferral 负责等它完成，界面线程不被慢请求（解析、转换）阻塞。
 
 用法：
     pythonw desktop.py                  # 原生窗口（格式工坊.bat 双击即此）
-    PAPER_PORT=5002 python desktop.py   # 指定端口、控制台日志可见
+    python desktop.py                   # 同前，但控制台日志可见
 """
 
+import io
 import json
 import os
-import subprocess
 import sys
 import threading
 import time
-from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent
 
-# 端口默认值按环境判：便携包（无 .venv）服务常驻 5000；源码目录（有 .venv）
-# 开发版在 5001（开发版.bat 也会显式设 PAPER_PORT）。explorer 拉起快捷方式时
-# 提供不了环境变量，只能靠这个判据。必须先定端口再 import app_ctl：app_ctl
-# 在导入时读 PAPER_PORT 算 PORT，spawn_keepalive 把它传给 keepalive，顺序反了
-# 便携包的守护就会去拉 5001。
-os.environ.setdefault(
-    "PAPER_PORT", "5001" if (ROOT / ".venv").is_dir() else "5000")
-PORT = int(os.environ["PAPER_PORT"])
-
+# 便携包用 embeddable Python（_pth 模式）：脚本所在目录不会自动进 sys.path，
+# 下面的 import app 会报 ModuleNotFoundError。显式补上，与 tools/*.py 的
+# 处理一致；源码运行时 ROOT 本来就在 path 里，重复插入无副作用。
+# tools/ 也要进 path：atomic_io（原子写小配置）在那里。
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
-import app_ctl  # noqa: E402
+
+# 站内页面的虚拟主机：请求不出进程，由下面的 WSGI 桥直接应答。不带端口，
+# 页面里的相对链接、重定向与 request.host 都按 http://127.0.0.1 走。
+LOCAL_URL = "http://127.0.0.1"
+LOCAL_HOST = "127.0.0.1"
 
 CFG = ROOT / "config" / "window.json"
+
+
+# ---------------------------------------------------------------- 壳侧日志
+def log_line(text):
+    """往 outputs/desktop.log 追加一行（带时间戳）；写不进就放弃，不抛。
+
+    壳进程跑在 pythonw 下没有控制台，任何异常不落盘就是零痕迹；启动链路
+    曾是全零日志——install_engine 失败、请求处理失败、窗口几何保存失败都
+    静默（D-02）。FAIL 页让用户来查这个文件，它必须真的有内容。
+    """
+    try:
+        (ROOT / "outputs").mkdir(parents=True, exist_ok=True)
+        with (ROOT / "outputs" / "desktop.log").open("a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}\n")
+    except Exception:                    # noqa: BLE001
+        pass
+
+
+def log_exc(context, extra=""):
+    """异常 + 上下文落 desktop.log（统一取证落点）。必须在 except 块内调用。"""
+    import traceback
+    log_line(f"{context}{('：' + extra) if extra else ''}\n"
+             f"{traceback.format_exc()}")
 
 
 # ---------------------------------------------------------------- 关窗语义
 def close_action():
     """× 按钮的行为，读 config/close.json：exit（默认）| tray。
 
-    exit 下点 × 会弹三选对话框（最小化/直接关闭/取消）；tray 下直接驻留
-    不弹——两个习惯各自固定，对话框只服务还没定习惯的人。
+    收敛后的两种语义（D-05，settings.html 同口径）：exit 下点 × 即退出，
+    转换进行中会先弹确认（见 confirm_exit_on_close）；tray 下点 × 驻留
+    托盘（图标不就绪时不驻留，见 Tray.on_closing）。曾经承诺的「三选
+    对话框（最小化/直接关闭/取消）」从未可达——ask_on_close 只被
+    on_closing 调，而 on_closing 只在 tray 模式注册，默认路径没有订阅者，
+    已随死代码一并删除。
     """
     try:
         d = json.loads((ROOT / "config" / "close.json").read_text(encoding="utf-8"))
@@ -53,31 +82,61 @@ def close_action():
         return "exit"
 
 
-# 三选对话框的返回值（MessageBoxW 的 IDYES/IDNO/IDCANCEL）
-IDC_MINIMIZE = 6                   # IDYES →「最小化窗口」
-IDC_CLOSE = 7                      # IDNO  →「直接关闭」
+def conversion_busy():
+    """引擎里有没有任务正在处理（stage_parse/stage_render 持着任务锁）。
+
+    转换同步跑在请求线程（壳里即 WSGI 桥的 work 线程）：默认路径关窗后
+    reap 会 os._exit(0) 硬杀整进程，等几十秒的成果只剩半截 job 目录——
+    关窗前必须先问一句引擎忙不忙（D-05）。引擎没起来（启动页阶段）不算忙。
+    """
+    eng = _ENGINE
+    if eng is None:
+        return False
+    try:
+        return bool(eng.conversion_running())
+    except Exception:                # noqa: BLE001
+        return False
 
 
-def ask_on_close():
-    """原生三选对话框：最小化窗口 / 直接关闭 / 取消。
+def _confirm_interrupt_box():
+    """原生确认框：转换进行中退出会中断转换。返回 True 才放行关窗。
 
     用 Win32 MessageBoxW 而不是网页 dialog：× 是原生窗口消息，弹原生框
-    才同层（网页弹窗盖不住标题栏，且 HTML dialog 出不来这三颗按钮）。
-    MB_TOPMOST 防对话框被主窗压住点不到；消息框句柄取不到就拿主窗标题。
+    才同层（网页弹窗盖不住标题栏）。MB_TOPMOST 防被主窗压住点不到。
     """
     if os.name != "nt":
-        return IDC_CLOSE
+        return True
     import ctypes
-    MB_YESNOCANCEL = 0x3
+    MB_OKCANCEL = 0x1
+    MB_ICONWARNING = 0x30
     MB_TOPMOST = 0x40000
     MB_SETFOREGROUND = 0x10000
-    text = ("要最小化到任务栏（后台服务继续运行），\n还是直接退出格式工坊？")
-    title = window_title()
-    flags = MB_YESNOCANCEL | MB_TOPMOST | MB_SETFOREGROUND
-    # MB_DEFBUTTON3=0x200：默认焦点给「取消」，回车手滑不会误退
-    flags |= 0x200
-    r = ctypes.windll.user32.MessageBoxW(0, text, title, flags)
-    return {6: IDC_MINIMIZE, 7: IDC_CLOSE}.get(r, 2)   # 其余（取消=2）归取消
+    text = ("还有转换正在进行中。现在退出会中断转换，\n"
+            "这个任务的成果可能只剩半截。\n\n仍要退出吗？")
+    r = ctypes.windll.user32.MessageBoxW(
+        0, text, window_title(),
+        MB_OKCANCEL | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND)
+    return r == 1                    # IDOK=1 放行；IDCANCEL=2 拦下
+
+
+def confirm_exit_on_close():
+    """exit 模式的 closing 处理：忙时先确认，闲时即关即退（D-05）。"""
+    if conversion_busy():
+        return _confirm_interrupt_box()
+    return True
+
+
+def warn_tray_dead():
+    """托盘不可用时的原生告知：程序将退出，而不是藏进空气里（D-11）。"""
+    if os.name != "nt":
+        return
+    import ctypes
+    MB_OK = 0x0
+    MB_ICONWARNING = 0x30
+    ctypes.windll.user32.MessageBoxW(
+        0, "托盘图标不可用，程序将退出。\n"
+           "可在「设置」里把关窗行为改回「关闭窗口即退出」。",
+        window_title(), MB_OK | MB_ICONWARNING | MB_TOPMOST)
 
 
 # ---------------------------------------------------------------- 单实例
@@ -137,8 +196,8 @@ def _find_window(title):
 def focus_existing():
     """已有本版壳窗口就带到前台并返回 True——exe 连点两下不该开两个窗。
 
-    用窗口标题精确匹配（FindWindowW），不查端口：服务由 keepalive 常驻，
-    端口活着不代表窗口开着（用户可能只关了窗、留着服务）。
+    用窗口标题精确匹配（FindWindowW），不查进程/端口：同目录两个版本
+    可能同时在跑，只有标题能区分是谁的窗口。
     """
     if os.name != "nt":
         return False
@@ -154,6 +213,9 @@ def focus_existing():
 
 
 # ---------------------------------------------------------------- 窗口记忆
+_GEOMETRY_SAVED = False
+
+
 def load_window_state():
     """只记尺寸，不记位置：位置每次交给 Windows 居中级联（SHELLPOS）。
 
@@ -172,38 +234,404 @@ def load_window_state():
     return {}
 
 
-def save_window_state(window):
+def fit_to_work_area(w, h):
+    """窗口尺寸钳制到主屏工作区：默认 1280x860 在 1280x800 的屏上底/右被
+    裁掉（复测实测）；来自更大屏幕的记忆尺寸（拔副屏、换分辨率）同样越界。
+    工作区不含任务栏；留 32px 余量是给 Windows 居中级联的——贴满工作区的
+    窗口被级联一推就出屏。取不到工作区（SPI 失败/异常）按原值放行，宁可
+    维持旧行为也不瞎猜。实际生效尺寸还受 min_size 托底，这里不必复刻。
+    """
+    if os.name != "nt":
+        return w, h
     try:
-        CFG.parent.mkdir(parents=True, exist_ok=True)
-        CFG.write_text(json.dumps({
-            "w": window.width, "h": window.height,
-            "maximized": window.maximized,
-        }, ensure_ascii=False), encoding="utf-8")
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        # SPI_GETWORKAREA：主屏工作区。开窗不传 x/y、由系统居中级联，
+        # 窗口落在主屏，主屏工作区就是唯一需要迁就的参照。
+        ok = ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+        work_w = int(rect.right) - int(rect.left)
+        work_h = int(rect.bottom) - int(rect.top)
+        if not ok or work_w <= 0 or work_h <= 0:
+            return w, h
+        return max(1, min(int(w), work_w - 32)), max(1, min(int(h), work_h - 32))
     except Exception:                    # noqa: BLE001
-        pass
+        return w, h
 
 
-# ---------------------------------------------------------------- 另存为桥
-class SaveBridge:
-    """给页面提供「原生另存为」：页面拦截下载点击 → 这里选位置 → 落盘。
+def current_geometry(window):
+    """closing 时刻的窗口几何：宽高趁窗口活着取，最大化用 IsZoomed 实测。
 
-    浏览器式的「下到下载文件夹、重名加 (1)」是最露馅的网页习惯。桥复用
-    服务端原有的下载 URL（附件语义不变），只是把落盘位置交还给用户。
+    pywebview 6.2.1 的 winforms on_close 先 del BrowserView.instances[uid]
+    再 set closed——在 closed/reap 里读 window.width 是对已销毁实例实时
+    解包 get_size 的 None，必抛 TypeError（D-01）；而 maximized 是构造参数
+    不是实时状态，存它只会记到启动值，改从原生窗口的 IsZoomed 取。
+    """
+    try:
+        w, h = int(window.width), int(window.height)
+    except Exception:                    # noqa: BLE001
+        return None
+    maximized = False
+    if os.name == "nt":
+        try:
+            import ctypes
+            native = getattr(window, "native", None)
+            hwnd = int(native.Handle.ToInt64()) if native is not None else 0
+            if hwnd:
+                maximized = bool(ctypes.windll.user32.IsZoomed(hwnd))
+        except Exception:                # noqa: BLE001
+            pass
+    return {"w": w, "h": h, "maximized": maximized}
+
+
+def save_window_state(window):
+    """窗口尺寸记忆落盘。必须在窗口存活期调用（closing 时实例未注销）：
+    旧调用点 closed/reap 都在 FormClosed 之后，width 抛 TypeError 被裸
+    except 吞掉，尺寸记忆因此从未落盘过（D-01）。原子写（D-14），失败落
+    desktop.log——静默丢的话「下次还是这个尺寸」悄悄失效，查都没处查。
+    """
+    global _GEOMETRY_SAVED
+    geo = current_geometry(window)
+    if geo is None:
+        log_line("save_window_state：窗口已销毁，宽高取不到，几何不保存"
+                 "（几何保存应挂在 closing 上）")
+        return
+    try:
+        import atomic_io
+        atomic_io.write_text(CFG, json.dumps(geo, ensure_ascii=False))
+        _GEOMETRY_SAVED = True
+    except Exception as e:               # noqa: BLE001
+        log_line(f"save_window_state failed: {e!r}")
+
+
+# ---------------------------------------------------------------- 进程内引擎
+_ENGINE = None
+_ENGINE_LOCK = threading.Lock()
+_ENGINE_INSTALLED = set()
+_INSTALL_LOCK = threading.Lock()
+
+
+def engine():
+    """导入并初始化 Flask 应用；只做一次。
+
+    应用以 WSGI 可调用对象跑在壳进程里——没有监听 socket，也就没有端口。
+    初始化走 app.init_app() 的同一份引导（建目录、清过期任务、装日志、装
+    生命周期钩子）：壳曾手抄前三步、漏掉 install_lifecycle_hooks——壳进程
+    同住 pythonnet/WebView2 COM、WSGI 与编排 Office 的线程，是原生崩溃
+    高发处，faulthandler/crash.log/心跳缺了就是 pythonw 静默消失（D-07）。
+    日志落 outputs/desktop.log，server.log 留给监听端口的服务模式——两个
+    进程各持 RotatingFileHandler 写同一文件，轮转 rename 在 Windows 上互踩。
+    信号处理只在主线程装得上（引导线程里 ValueError 被钩子吞掉），壳拿到
+    的是 faulthandler/atexit/心跳三样。
+    """
+    global _ENGINE
+    with _ENGINE_LOCK:
+        if _ENGINE is None:
+            import app as paper_app
+            paper_app.init_app(install_hooks=True, log_name="desktop.log")
+            _ENGINE = paper_app
+        return _ENGINE
+
+
+def wsgi_call(method, uri, headers=None, body=b""):
+    """把一次浏览器请求交给进程内 Flask，返回 (code, reason, headers, payload)。
+
+    入参与返回值都是纯 Python 类型，可在任意线程调用；只有把结果交给
+    WebView2 的那一步必须回 UI 线程（CoreWebView2 的 COM 约束）。
+    """
+    from urllib.parse import unquote_to_bytes, urlsplit
+
+    parts = urlsplit(uri)
+    environ = {
+        "REQUEST_METHOD": method,
+        "SCRIPT_NAME": "",
+        "PATH_INFO": unquote_to_bytes(parts.path).decode("latin-1"),
+        "QUERY_STRING": parts.query,
+        "SERVER_NAME": LOCAL_HOST,
+        "SERVER_PORT": "80",
+        "SERVER_PROTOCOL": "HTTP/1.1",
+        "REMOTE_ADDR": LOCAL_HOST,
+        "wsgi.version": (1, 0),
+        "wsgi.url_scheme": "http",
+        "wsgi.input": io.BytesIO(body),
+        "wsgi.errors": sys.stderr or io.StringIO(),
+        "wsgi.multithread": True,
+        "wsgi.multiprocess": False,
+        "wsgi.run_once": False,
+    }
+    for key, value in (headers or {}).items():
+        name = key.upper().replace("-", "_")
+        if name in ("CONTENT_TYPE", "CONTENT_LENGTH"):
+            environ[name] = value
+        elif name == "HOST":
+            environ["HTTP_HOST"] = value
+        else:
+            environ["HTTP_" + name] = value
+    environ.setdefault("HTTP_HOST", LOCAL_HOST)
+    if "CONTENT_LENGTH" not in environ and body:
+        environ["CONTENT_LENGTH"] = str(len(body))
+
+    captured = {}
+
+    def start_response(status, resp_headers, exc_info=None):
+        captured["status"] = status
+        captured["headers"] = resp_headers
+
+    chunks = engine().app(environ, start_response)
+    payload = b"".join(chunks)
+    if hasattr(chunks, "close"):
+        chunks.close()
+    status = captured.get("status", "500 Internal Server Error")
+    code_text, _, reason = status.partition(" ")
+    return int(code_text), reason or "OK", captured.get("headers", []), payload
+
+
+def response_header_text(headers, length, method):
+    """WSGI 响应头 → WebView2 的 CRLF 文本；长度按实际字节重算。
+
+    HEAD 没有 body，但 Content-Length 必须保留 Flask 声明的真实长度，
+    否则 WebView2 会按 0 处理（静态文件的 HEAD 探测会失真）。
+    """
+    lines, declared = [], None
+    for key, value in headers:
+        name = key.lower()
+        if name in ("transfer-encoding", "connection"):
+            continue
+        if name == "content-length":
+            declared = value
+            continue
+        lines.append(f"{key}: {value}")
+    if method == "HEAD" and declared is not None:
+        lines.append(f"Content-Length: {declared}")
+    else:
+        lines.append(f"Content-Length: {length}")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def install_engine(window, timeout=25):
+    """等 WebView2 就绪，把 LOCAL_URL 下的请求接到进程内 Flask。
+
+    CoreWebView2 只能在 UI 线程访问，所以安装走 native.Invoke；请求本身
+    在后台线程跑，跑完再回 UI 线程设置响应并 Complete deferral——解析、
+    转换这类慢请求只占一个工作线程，界面不会被冻住。
+
+    重试必须幂等（D-02）：Invoke 是投递到 UI 线程的异步动作，UI 线程繁忙
+    时下一个 install() 会在上一个生效前排入队列，不查「已装过」就无条件
+    AddWebResourceRequestedFilter + WebResourceRequested += 会装出双处理器，
+    站内请求被处理两遍——install() 开头先看 state["ok"]，上一个成功了就
+    直接退出。失败各路（install/请求处理/放弃）都落 desktop.log，FAIL 页
+    指过来的文件不能是空的。
+    """
+    key = getattr(window, "uid", id(window))
+    with _INSTALL_LOCK:
+        if key in _ENGINE_INSTALLED:
+            return True
+
+    native = None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        native = getattr(window, "native", None)
+        if native is not None:
+            break
+        time.sleep(0.1)
+    if native is None:
+        log_line(f"install_engine：{timeout}s 内等不到 WebView2 native，放弃")
+        return False
+
+    from System import Action
+    state = {}
+
+    def install():
+        if state.get("ok"):
+            return                       # 重试幂等：上一个已装好（D-02）
+        try:
+            core = native.webview.CoreWebView2
+            if core is None:
+                return
+            from Microsoft.Web.WebView2.Core import CoreWebView2WebResourceContext
+            core.AddWebResourceRequestedFilter(
+                f"{LOCAL_URL}/*", CoreWebView2WebResourceContext.All)
+
+            def on_request(sender, args):
+                req = args.Request
+                uri, method = str(req.Uri), str(req.Method)
+                headers = {str(h.Key): str(h.Value)
+                           for h in req.Headers.GetEnumerator()}
+                body = b""
+                try:
+                    if req.Content is not None:
+                        import System
+                        ms = System.IO.MemoryStream()
+                        req.Content.CopyTo(ms)
+                        body = bytes(ms.ToArray())
+                except Exception:        # noqa: BLE001
+                    body = b""
+                deferral = args.GetDeferral()
+
+                def work():
+                    try:
+                        code, reason, resp_headers, payload = wsgi_call(
+                            method, uri, headers, body)
+                        header_text = response_header_text(
+                            resp_headers, len(payload), method)
+
+                        def apply():
+                            try:
+                                import System
+                                stream = System.IO.MemoryStream(payload)
+                                args.Response = core.Environment.CreateWebResourceResponse(
+                                    stream, code, reason, header_text)
+                            finally:
+                                deferral.Complete()
+
+                        native.Invoke(Action(apply))
+                    except Exception:    # noqa: BLE001
+                        # 只补 Complete 用户看到的是 WebView2 原生错误页，
+                        # desktop.log 必须留下一笔才能回溯（D-02）
+                        log_exc("请求处理失败", uri)
+                        try:
+                            native.Invoke(Action(lambda: deferral.Complete()))
+                        except Exception:    # noqa: BLE001
+                            pass
+
+                threading.Thread(target=work, daemon=True).start()
+
+            core.WebResourceRequested += on_request
+            state["ok"] = True
+        except Exception as e:           # noqa: BLE001
+            state["error"] = e
+            log_exc("install：装引擎拦截器失败")
+
+    while time.time() < deadline:
+        try:
+            native.Invoke(Action(install))
+        except Exception:                # noqa: BLE001
+            pass
+        if state.get("ok"):
+            with _INSTALL_LOCK:
+                _ENGINE_INSTALLED.add(key)
+            return True
+        time.sleep(0.2)
+    if state.get("error") is not None:
+        log_line(f"install_engine 放弃：error={state['error']!r}")
+    else:
+        log_line("install_engine 放弃：重试期内 WebView2 未就绪")
+    return False
+
+
+def load_app_url(window, url):
+    """装好进程内引擎的拦截器，再加载站内页面；失败落错误页。"""
+    def run():
+        try:
+            engine()
+            if install_engine(window):
+                window.load_url(url)
+                return
+        except Exception:                # noqa: BLE001
+            log_exc("引擎装载失败")
+        window.load_html(FAIL)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------- 站内新窗口
+def child_url(url_path):
+    """把站内相对路径补成本机 URL；外站地址返回 None。
+
+    只认 "/" 开头的路径（"//host" 是协议相对地址，也算外站）。壳里的
+    target="_blank" 由页面 JS 拦截后走这里，不让它落到系统浏览器。
+    """
+    if not isinstance(url_path, str):
+        return None
+    if not url_path.startswith("/") or url_path.startswith("//"):
+        return None
+    return f"{LOCAL_URL}{url_path}"
+
+
+CHILD_TITLES = (
+    ("/spec", "格式规格"),
+    ("triage.html", "投稿体检"),
+    ("audit.html", "审计报告"),
+)
+
+
+def child_title(url_path):
+    """子窗口标题要带后缀，绝不能与主窗标题同名。
+
+    主窗的收尾进程靠 FindWindowW 精确匹配标题判断「窗口还在不在」，
+    子窗口同名会被误认成主窗，关主窗后进程退不掉。
+    """
+    for key, label in CHILD_TITLES:
+        if key in url_path:
+            return f"格式工坊 · {label}"
+    return "格式工坊 · 详情"
+
+
+# ---------------------------------------------------------------- JS 桥
+class ShellBridge:
+    """给页面提供的原生能力：另存为 + 站内新窗口。
+
+    浏览器式的「下到下载文件夹、重名加 (1)」「新标签页里露出地址栏」都是
+    最露馅的网页习惯。桥复用引擎原有的 URL（附件语义不变），只把落盘
+    位置和窗口形态换成桌面软件该有的样子。
     """
 
+    def __init__(self, window=None):
+        # 桥挂在窗口上；file dialog 要以发起调用的窗口为父窗，不能固定用
+        # windows[0]——子窗口里点保存时，主窗可能在最小化或刚被关掉。
+        # 必须用下划线属性：pywebview 注入 JS API 时会递归暴露公开属性，
+        # 公共名 window 会让它顺着 window.native → WinForms 无限下钻而卡死。
+        self._window = window
+
+    def _owner(self):
+        # 已知发起窗口就不必 import webview（失败页重试时它总在，但惰性
+        # 导入让这条路径在任何环境都可调）
+        if self._window:
+            return self._window
+        import webview
+        return webview.windows[0] if webview.windows else None
+
+    def open_in_app(self, url_path):
+        """站内 target="_blank" 链接：开壳自己的子窗口，不交给系统浏览器。
+
+        pywebview 默认 OPEN_EXTERNAL_LINKS_IN_BROWSER=True，会把新窗口请求
+        丢给 webbrowser.open——用户看到的是一个带 127.0.0.1:端口 的浏览器
+        窗口，桌面壳藏了半天的地址栏又露出来了。
+        """
+        url = child_url(url_path)
+        if url is None:
+            return {"ok": False, "message": "路径不合法"}
+        import webview
+        try:
+            bridge = ShellBridge()
+            # 子窗同样钳到工作区：1000x780 在 1280x800 屏上底边也被裁
+            w0, h0 = fit_to_work_area(1000, 780)
+            child = webview.create_window(
+                child_title(url_path), html=SPLASH, js_api=bridge,
+                width=w0, height=h0, min_size=(760, 520),
+                text_select=True)
+            bridge._window = child
+            load_app_url(child, url)
+            return {"ok": True}
+        except Exception as e:        # noqa: BLE001
+            return {"ok": False, "message": str(e)}
+
     def _fetch(self, url_path):
-        """GET 服务端下载路由，返回 (字节, 文件名)。文件名取自
-        Content-Disposition（attachment() 写的 RFC 5987 中文名）。"""
-        conn = HTTPConnection("127.0.0.1", PORT, timeout=120)
-        conn.request("GET", url_path)
-        resp = conn.getresponse()
-        if resp.status != 200:
-            raise RuntimeError(f"服务端返回 HTTP {resp.status}")
-        data = resp.read()
+        """GET 站内下载路由，返回 (字节, 文件名)。文件名取自
+        Content-Disposition（attachment() 写的 RFC 5987 中文名）。
+
+        请求直接交给进程内 Flask，不再经 127.0.0.1:端口 的 HTTP 回环。
+        """
+        code, _, headers, data = wsgi_call(
+            "GET", f"{LOCAL_URL}{url_path}", {"Host": LOCAL_HOST})
+        if code != 200:
+            raise RuntimeError(f"引擎返回 HTTP {code}")
         if not data:
             raise RuntimeError("没有可保存的内容")
         name = None
-        disp = resp.getheader("Content-Disposition") or ""
+        disp = next((v for k, v in headers
+                     if k.lower() == "content-disposition"), "")
         for part in disp.split(";"):
             part = part.strip()
             if part.startswith("filename*="):
@@ -219,10 +647,10 @@ class SaveBridge:
             if not url_path.startswith("/"):
                 return {"ok": False, "message": "路径不合法"}
             data, name = self._fetch(url_path)
-            windows = webview.windows
-            if not windows:
+            owner = self._owner()
+            if owner is None:
                 return {"ok": False, "message": "窗口不存在"}
-            target = windows[0].create_file_dialog(
+            target = owner.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=name)
             if not target:
                 return {"ok": False}      # 用户取消：静默
@@ -231,31 +659,38 @@ class SaveBridge:
         except Exception as e:            # noqa: BLE001
             return {"ok": False, "message": str(e)}
 
+    def retry(self):
+        """启动失败页的「重试」：重新装载引擎并回到站内首页。
 
-# ---------------------------------------------------------------- 服务拉起
-def service_ready():
-    try:
-        c = HTTPConnection("127.0.0.1", PORT, timeout=1.5)
-        c.request("GET", "/")
-        return c.getresponse().status == 200
-    except Exception:                    # noqa: BLE001
-        return False
+        失败页曾是死胡同——文案让用户「查看日志后重试」，却没有任何重试
+        动作，只能关窗重开（D-13）。重试就是重跑 load_app_url：engine()
+        失败不会缓存，import 成功即原地换页。
+        """
+        win = self._owner()
+        if win is None:
+            return {"ok": False, "message": "窗口不存在"}
+        load_app_url(win, f"{LOCAL_URL}/")
+        return {"ok": True}
+
+    def open_outputs(self):
+        """启动失败页的「打开日志文件夹」：资源管理器定位 outputs。
+
+        找日志不该要求用户懂目录结构；server.log 只在 import 成功后才创建
+        （setup_logging 在 engine() 里），import 阶段失败时按旧文案去找
+        server.log 是扑空——干脆打开整个 outputs 文件夹（D-13）。
+        """
+        out = ROOT / "outputs"
+        try:
+            out.mkdir(parents=True, exist_ok=True)
+            if os.name != "nt":
+                return {"ok": False, "message": "仅支持 Windows"}
+            os.startfile(out)             # noqa: S606  用户自己点的按钮
+            return {"ok": True}
+        except Exception as e:            # noqa: BLE001
+            return {"ok": False, "message": str(e)}
 
 
-def ensure_service():
-    """就绪返回 True；首轮未就绪先拉起 keepalive（幂等，start 同口径）。"""
-    for attempt in range(40):            # 最多 20 秒
-        if service_ready():
-            return True
-        if attempt == 0:
-            try:
-                app_ctl.spawn_keepalive()
-            except Exception:            # noqa: BLE001
-                pass
-        time.sleep(0.5)
-    return False
-
-
+# ---------------------------------------------------------------- 启动页
 SPLASH = ("<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
           "<body style='margin:0'><div style='font-family:Inter,\"PingFang SC\","
           "\"Microsoft YaHei\",sans-serif;display:grid;place-items:center;"
@@ -266,9 +701,38 @@ SPLASH = ("<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
           "</div></div></body></html>")
 
 FAIL = ("<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
-        "<body style='margin:0'><div style='font-family:sans-serif;padding:28px'>"
-        "<h2>服务启动失败</h2><p>端口 {port} 无响应，请查看 outputs\\keepalive.log "
-        "与 outputs\\server.log，或运行 格式工坊.bat stop 后重试。</p></div>"
+        "<body style='margin:0'><div style='font-family:Inter,\"PingFang SC\","
+        "\"Microsoft YaHei\",sans-serif;max-width:560px;margin:84px auto;"
+        "padding:0 24px'>"
+        "<div style='width:44px;height:44px;margin-bottom:18px;border-radius:12px;"
+        "background:#143b33'></div>"
+        "<h2 style='color:#18332e;margin:0 0 10px'>软件启动失败</h2>"
+        "<p style='color:#52655f;font-size:14px;line-height:1.9;margin:0 0 22px'>"
+        "内置引擎没能启动。请点击重试；若反复出现，点下面第二个按钮打开 "
+        "outputs 文件夹，把里面的日志发给我们。</p>"
+        "<div style='display:flex;gap:10px'>"
+        "<button id='retry' style='border:0;background:#176b57;color:#fff;"
+        "border-radius:9px;padding:10px 22px;font-size:14px;cursor:pointer'>重试</button>"
+        "<button id='openLogs' style='border:1px solid #c9d4cd;background:#fff;"
+        "color:#52655f;border-radius:9px;padding:10px 18px;font-size:14px;"
+        "cursor:pointer'>打开日志文件夹</button></div>"
+        "<p id='note' style='color:#9aa69f;font-size:12px;display:none;margin-top:14px'>"
+        "</p></div>"
+        "<script>"
+        "function api(name){var a=(window.pywebview&&pywebview.api)?pywebview.api:null;"
+        "if(!a)return Promise.reject(new Error('api not ready'));"
+        "return Promise.resolve(a).then(function(x){return x[name]()})}"
+        "var busy=false;"
+        "document.getElementById('retry').addEventListener('click',function(){"
+        "if(busy)return;busy=true;var b=this;b.disabled=true;b.textContent='正在重试…';"
+        "api('retry').catch(function(){b.disabled=false;b.textContent='重试';busy=false;"
+        "var n=document.getElementById('note');n.textContent='还没就绪，稍候片刻再点一次';"
+        "n.style.display='block'})});"
+        "document.getElementById('openLogs').addEventListener('click',function(){"
+        "api('open_outputs').catch(function(){var n=document.getElementById('note');"
+        "n.textContent='打不开文件夹：请手动到软件目录下找 outputs';"
+        "n.style.display='block'})});"
+        "</script>"
         "</body></html>")
 
 
@@ -276,9 +740,8 @@ FAIL = ("<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
 class Tray:
     """关窗不退场：窗口收到 closing 时隐藏进托盘，托盘菜单提供退出。
 
-    为什么关窗=隐藏：服务由 keepalive 常驻，窗口一关用户就失去了「软件
-    还在跑」的可见性，任务栏里也没了落点。托盘把控制权还回来：点开主窗、
-    直接停服、或彻底退出（窗+托盘；服务留给下次秒开）。
+    为什么关窗=隐藏：转换可能还在跑，窗口一关就把进程收掉会中断任务；
+    托盘给用户一个「程序还在」的落点。托盘菜单可点开主窗或彻底退出。
     """
 
     def __init__(self, window):
@@ -301,12 +764,6 @@ class Tray:
         except Exception:            # noqa: BLE001
             pass
 
-    def stop_service(self, icon=None, item=None):
-        try:
-            app_ctl.stop()
-        except Exception:            # noqa: BLE001
-            pass
-
     def hide_to_tray(self, icon=None, item=None):
         try:
             self.window.hide()
@@ -314,12 +771,9 @@ class Tray:
             pass
 
     def quit(self, icon=None, item=None):
-        """真退出：窗、托盘、后台服务一并收掉。
-
-        服务由本壳经 keepalive 拉起的才归我们管；app_ctl.stop() 按 -Root
-        圈定本目录进程，误伤不了别的项目。
-        """
+        """真退出：窗与托盘一并收掉；引擎跟着进程走，没有后台服务可停。"""
         self.quitting = True
+        save_window_state(self.window)   # destroy 前窗口还活着（D-01）
         try:
             self.window.destroy()
         except Exception:            # noqa: BLE001
@@ -329,51 +783,72 @@ class Tray:
                 self.icon.stop()
             except Exception:        # noqa: BLE001
                 pass
-        self.stop_service()
 
     def on_closing(self):
-        """× 的语义按设置走：默认弹三选对话框；开了「关窗到托盘」直接驻留。
+        """tray 模式的 closing：驻留托盘；图标不就绪就不驻留（D-11）。
 
-        三选（MB_YESNOCANCEL，原生 MessageBox）：最小化到托盘 / 直接关闭 /
-        取消——许多用户既不想丢后台服务，也不想要「关了就是关了」的一刀切，
-        每次给一次选择权（SHELLX 里仍可改默认行为，close.json=tray 时不弹）。
+        本处理器只在托盘模式注册（Tray.run ← start_tray ← main 的 tray
+        分支）——exit 模式的 × 走 main() 里注册的 confirm_exit_on_close，
+        与这里无关。曾经写在里面的「三选对话框」分支因此不可达，已删
+        （D-05）。icon.run 在 daemon 线程里失败主流程无感知，不验证就
+        hide，窗口隐藏、无图标、无气泡，进程还活着——用户唯一的出路是
+        任务管理器。不就绪就不藏，告知后放行关闭。
+
+        放行关闭的每一条路（图标不就绪、配置中途改回 exit）都要趁窗口
+        活着先存几何（D-01；评审④）——return True 之后窗口随即销毁，再取
+        宽高就是销毁后解包。tray 模式的 main() 没有注册 closing 几何回调，
+        这两处就是几何记忆在托盘模式的全部落点。
         """
         if self.quitting:
             return True
         if close_action() == "tray":
+            if not self.tray_ready():
+                warn_tray_dead()
+                # 放行关闭前窗口还活着，几何趁此刻存（评审④补的洞）
+                save_window_state(self.window)
+                return True               # 放行关闭：退出好过无窗僵尸
+            # 驻留前窗口还活着：几何趁此刻存（hide 后再取就是销毁后解包，
+            # D-01 的教训——保存必须贴着窗口存活期）
+            save_window_state(self.window)
             try:
                 self.window.hide()
             except Exception:            # noqa: BLE001
                 return True
             self.notify_once()
             return False
-        choice = ask_on_close()
-        if choice == IDC_MINIMIZE:       # 最小化窗口（任务栏还在，服务照跑）
-            try:
-                self.window.minimize()
-            except Exception:            # noqa: BLE001
-                pass
-            return False                 # 取消本次关闭
-        if choice == IDC_CLOSE:          # 直接关闭：放行，收尾走 reap 线程
-            return True
-        return False                     # 取消（含关掉对话框/ESC）
+        # 配置中途改回 exit（壳还挂着本处理器）：与 × 同样放行，几何同场保存
+        save_window_state(self.window)
+        return True
+
+    def tray_ready(self):
+        """托盘图标真的在跑：icon 已构造且 visible。
+
+        icon.run 在 daemon 线程里失败主流程无感知（explorer 崩溃重启也会丢
+        图标）；pystray 的 visible 在托盘线程成功展示后才为 True。
+        """
+        return self.icon is not None and bool(getattr(self.icon, "visible", False))
 
     def notify_once(self):
         """首次藏进托盘时气泡告知，点 × 找不到窗口的用户才知道软件还在。
 
-        只提示一次（记 config/tray-hint.flag）——每次都弹就成了骚扰。
+        只提示一次（记 config/tray-hint.flag）——每次都弹就成了骚扰。flag
+        在 notify 成功之后才落盘：写反了的话 notify 一抛错 flag 已在盘上，
+        此后永不补发气泡（D-11 实核的失败面）。没有 icon 时不写 flag——
+        下次藏进托盘（托盘就绪后）再补。
         """
         flag = ROOT / "config" / "tray-hint.flag"
-        if flag.exists():
+        if flag.exists() or not self.icon:
             return
         try:
-            flag.parent.mkdir(parents=True, exist_ok=True)
-            flag.write_text("ok", encoding="utf-8")
-            if self.icon:
-                self.icon.notify("程序最小化到了屏幕右下角的托盘"
-                                 "（可能收在 ^ 里）。点这里或双击图标即可回来。",
-                                 "格式工坊")
-        except Exception:            # noqa: BLE001
+            self.icon.notify("程序最小化到了屏幕右下角的托盘"
+                             "（可能收在 ^ 里）。点这里或双击图标即可回来。",
+                             "格式工坊")
+        except Exception:                # noqa: BLE001
+            return                       # notify 失败不写 flag，下次再试
+        try:
+            import atomic_io
+            atomic_io.write_text(flag, "ok")
+        except Exception:                # noqa: BLE001
             pass
 
     def run(self):
@@ -414,32 +889,20 @@ def stop_tray():
         _TRAY.stop()
 
 
-def stop_service_if_owned():
-    """收尾停服：只停**本目录**的 keepalive/app.py（app_ctl.stop 的 -Root
-    口径）。使用版与开发版各管各的，关一个不动另一个。
+def webview_udf():
+    """WebView2 用户数据目录的固定落点：%LOCALAPPDATA%\\<窗口标题>\\webview。
 
-    必须剥离成独立进程去跑：关窗路径上 WinForms 的 Application.Exit 会在
-    closed 事件触发后立刻终结整个进程，回调线程来不及跑完 app_ctl.stop()
-    （内部要起 powershell 子进程，秒级耗时）。DETACHED 起一个 python
-    -c 一行流，壳死也不影响它把服务停完。
+    pywebview 默认 private_mode=True，WinForms 后端此时把用户数据目录设成
+    tempfile.TemporaryDirectory().name——每次启动冷建一套完整浏览器
+    profile（实测一个 ~70MB），而 exit 收尾的 os._exit 抢在
+    clear_user_data 之前，临时目录基本必留；%TEMP% 残留不属于任何卸载器
+    管辖，GPU/代码缓存也无法跨次复用，启动偏慢（D-03）。固定目录后跨次
+    复用、二次启动更快。稿件内容不进这里：app.py 对非 /static 响应一律
+    Cache-Control: no-store，缓存只落 css/js/图标这类静态资产。使用版与
+    开发版按窗口标题判据分目录，两壳并存互不锁。
     """
-    exe = Path(sys.executable)
-    pyw = exe.with_name("pythonw.exe")
-    runner = pyw if pyw.exists() else exe
-    code = ("import sys, os; sys.path.insert(0, r'"
-            + str(ROOT / "tools") + "'); import app_ctl; "
-            + "app_ctl.stop()")
-    try:
-        # CREATE_NO_WINDOW(0x08000000) 必带：DETACHED(0x8) 只是脱离父控制台，
-        # console 程序（python.exe/存根转手）仍会给自己分配新控制台——闪黑窗
-        # 就是它（实测）。pythonw 优先，转手/回退链路也压住。
-        subprocess.Popen(
-            [str(runner), "-c", code], cwd=str(ROOT),
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=0x00000008 | 0x00000200 | 0x08000000)
-    except Exception:                # noqa: BLE001
-        pass
+    base = os.environ.get("LOCALAPPDATA") or (ROOT / "outputs")
+    return Path(base) / window_title() / "webview"
 
 
 def main():
@@ -448,64 +911,84 @@ def main():
     if focus_existing():
         return 0
 
-    # 秒开：先出窗（启动页盖住服务冷启的 2~4s），就绪后原地换页。
+    # 页面里的普通下载（历史页等）交给 WebView2 的原生「另存为」；
+    # 结果页的下载卡片仍由 ShellBridge 选位置，两者并存。
+    webview.settings["ALLOW_DOWNLOADS"] = True
+
+    # 秒开：先出窗（启动页盖住引擎冷启的 1~3s），就绪后原地换页。
     # 不传 x/y：Windows 居中级联——每次打开都在舒服的位置（SHELLPOS）
     st = load_window_state()
+    # 尺寸先过工作区钳制：默认值与来自大屏的旧记忆都可能比当前屏高/宽
+    # （复测：1280x860 默认值在 1280x800 屏上底边被任务栏裁掉）
+    w0, h0 = fit_to_work_area(st.get("w", 1280), st.get("h", 860))
+    bridge = ShellBridge()
     win = webview.create_window(
-        window_title(), html=SPLASH, js_api=SaveBridge(),
-        width=st.get("w", 1280), height=st.get("h", 860),
+        window_title(), html=SPLASH, js_api=bridge,
+        width=w0, height=h0,
         min_size=(980, 640), text_select=True)
+    bridge._window = win
 
-    win.events.closed += lambda: save_window_state(win)
+    # ×=退出（默认）路径的收尾：closing 同步触发、窗口实例未注销——几何
+    # 保存挂在这里才拿得到宽高（closed/reap 都在 FormClosed 之后，曾让尺寸
+    # 记忆 100% 失效，D-01）；转换防护同一时机（D-05）。订阅有前科（注释见
+    # 下）：不触发的事件回调与 main() 尾部都可能不跑，所以 reap 线程保留
+    # 作兜底，两道都在。
+    if close_action() != "tray":
+        win.events.closing += confirm_exit_on_close
+        win.events.closing += lambda: save_window_state(win)
 
     def boot():
-        if ensure_service():
-            if st.get("maximized"):
-                try:
-                    win.maximize()
-                except Exception:        # noqa: BLE001
-                    pass
-            # ?from=<port> 只是页面初载的壳信号；站内跳转丢失后由
-            # window.pywebview 轮询兜底（base.html enableShellUI）
-            win.load_url(f"http://127.0.0.1:{PORT}/?from={PORT}")
-        else:
-            win.load_html(FAIL.format(port=PORT))
+        if st.get("maximized"):
+            try:
+                win.maximize()
+            except Exception:        # noqa: BLE001
+                pass
+        # 引擎在本进程内加载，装好请求拦截后再导航；没有端口可连。
+        load_app_url(win, f"{LOCAL_URL}/")
 
     threading.Thread(target=boot, daemon=True).start()
 
-    # ×=退出（默认）路径的收尾保障：不依赖事件回调——实测订阅 closing 后，
-    # closed 事件与 main() 尾部代码都可能不触发，壳进程会以无窗状态空转。
+    # 收尾保障（exit 与 tray 模式都要）：不依赖事件回调——实测订阅 closing
+    # 后，closed 事件与 main() 尾部代码都可能不触发，壳进程会以无窗状态空转。
     # 唯一可靠的「窗口真没了」信号是 FindWindowW（与单实例同款；native.Visible
-    # 在关窗后仍返回 True，是坑）。窗口消失 → 存几何、剥离停服、带走进程。
-    # 停服必须剥离成独立进程：os._exit 前起 DETACHED 子进程，壳死它照常跑完
-    # （app_ctl.stop 内部要起 powershell，秒级耗时，等不得）。
-    if close_action() != "tray":
-        def reap_when_window_gone():
-            # 启动页→页面阶段窗口可能重建，先等它出现，出现 3 秒后才开始盯
-            title = window_title()
-            first_seen = None
-            deadline = time.time() + 60
-            while time.time() < deadline:
-                if _find_window(title):
-                    if first_seen is None:
-                        first_seen = time.time()
-                    if time.time() - first_seen >= 3:
-                        break
-                time.sleep(0.5)
-            else:
-                return               # 窗口迟迟没出现，放弃（别误收）
-            while True:
+    # 在关窗后仍返回 True，是坑）。窗口消失 → 存几何、带走进程。
+    # 引擎就在本进程里，没有服务需要另起进程去停。tray 模式曾被排除在外，
+    # 但放行关闭（图标不就绪等）同样可能留下无窗进程（评审④）。
+    def reap_when_window_gone():
+        # 启动页→页面阶段窗口可能重建，先等它出现，出现 3 秒后才开始盯
+        title = window_title()
+        first_seen = None
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if _find_window(title):
+                if first_seen is None:
+                    first_seen = time.time()
+                if time.time() - first_seen >= 3:
+                    break
+            time.sleep(0.5)
+        else:
+            return               # 窗口迟迟没出现，放弃（别误收）
+        while True:
+            if not _find_window(title):
+                # 连续两次确认（1 秒），防切主题/闪屏误判
+                time.sleep(1)
                 if not _find_window(title):
-                    # 连续两次确认（1 秒），防切主题/闪屏误判
-                    time.sleep(1)
-                    if not _find_window(title):
-                        break
-                time.sleep(0.5)
-            save_window_state(win)
-            stop_service_if_owned()
-            stop_tray()
-            os._exit(0)              # 事件循环自己退不干净，直接带走进程
-        threading.Thread(target=reap_when_window_gone, daemon=True).start()
+                    break
+            time.sleep(0.5)
+        # tray 模式窗口合法地藏着（WinForms Hide 不销毁 HWND，FindWindow
+        # 仍找得到；这里再拦一道是双保险）：托盘还活着且不是在退出，就还有
+        # 回得来的路，进程绝不能收——收了等于把驻留中的转换硬杀掉
+        tray = _TRAY
+        if tray is not None and tray.tray_ready() and not tray.quitting:
+            return
+        if not _GEOMETRY_SAVED:
+            save_window_state(win)   # closing 没跑成时的兜底（D-01）
+        stop_tray()
+        # os._exit 跳过 atexit（生命周期钩子的正常退出留痕不会跑），
+        # 退出这一笔得自己写：事后能确定壳活到了窗口关闭这一刻（D-07）
+        log_line(f"窗口已关闭，壳进程退出（os._exit）pid={os.getpid()}")
+        os._exit(0)              # 事件循环自己退不干净，直接带走进程
+    threading.Thread(target=reap_when_window_gone, daemon=True).start()
 
     if close_action() == "tray":
         # 托盘只在「关窗驻留」模式下存在；默认语义（×=退出）下它是噪音——
@@ -533,9 +1016,14 @@ def main():
     threading.Thread(target=tint_when_ready, daemon=True).start()
 
     icon = ROOT / "static" / "favicon.ico"
-    webview.start(icon=str(icon) if icon.is_file() else None)
+    # 用户数据目录落固定位置（D-03）：private_mode 默认 True 会让 WebView2
+    # 每次在 %TEMP% 一次性建全套 profile，os._exit 又抢在清理前杀进程——
+    # 残留没人回收、缓存不复用。固定目录跨次复用，二次启动更快。
+    udf = webview_udf()
+    udf.mkdir(parents=True, exist_ok=True)
+    webview.start(icon=str(icon) if icon.is_file() else None,
+                  private_mode=False, storage_path=str(udf))
     stop_tray()
-    stop_service_if_owned()      # 兜底：closed 回调没跑成时（异常路径）再试一次
     return 0
 
 
@@ -544,8 +1032,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception:                    # noqa: BLE001
         # pythonw 没有控制台，WebView2 缺失之类的初始化异常只有落盘才能查
-        import traceback
-        (ROOT / "outputs").mkdir(parents=True, exist_ok=True)
-        with (ROOT / "outputs" / "desktop.log").open("a", encoding="utf-8") as f:
-            f.write(traceback.format_exc() + "\n")
+        log_exc("壳进程初始化异常")
         raise

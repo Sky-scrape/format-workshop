@@ -73,7 +73,7 @@
 {% endblock %}
 {% block script %}
 <script>
-/* 壳内下载走原生「另存为」：pywebview 桥（desktop.py SaveBridge）选位置、
+/* 壳内下载走原生「另存为」：pywebview 桥（desktop.py ShellBridge）选位置、
    服务端按原 URL 回流、落盘到用户选的地方——不再是「下到下载文件夹」的
    网页习惯。浏览器里（无桥）完全不变。 */
   document.querySelectorAll('a.download-card[href*="/download/"]').forEach(a=>{

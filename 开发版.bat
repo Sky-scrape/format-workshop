@@ -1,7 +1,9 @@
 @echo off
 rem Dev-checkout entry. No arguments -> launch the desktop shell (native
-rem window over the 5001 service, auto-starting it via keepalive). Any
-rem argument (stop / status / shortcut / quiet) forwards to tools\app_ctl.py.
+rem window; pages are answered by the in-process engine -- no port, no
+rem background service). Any argument (stop / status / shortcut / quiet)
+rem forwards to tools\app_ctl.py; stop/status only concern the optional
+rem browser-service mode (python app.py).
 chcp 65001 >nul
 cd /d "%~dp0"
 set "PAPER_PORT=5001"

@@ -23,8 +23,8 @@ embeddable 绿色包保留完整目录结构，上面每一条都照常工作—
 
 产物
 ----
-    dist/格式工坊/            ← 双击 格式工坊.bat
-    dist/格式工坊.zip         ← --zip 时生成
+    dist/格式工坊/                        ← 双击 格式工坊.bat
+    dist/格式工坊-<软件版本>.zip          ← --zip 时生成；包内附 BUILD-INFO.txt
 """
 
 import argparse
@@ -33,7 +33,11 @@ import subprocess
 import sys
 import urllib.request
 import zipfile
+from datetime import datetime
 from pathlib import Path
+
+import app_version as appver
+from package_docs import is_private_doc
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PY = "3.12.10"
@@ -49,7 +53,7 @@ EXCLUDE_TOP = {
 # 任意层级都不带的目录名
 EXCLUDE_DIRS = {"__pycache__", ".git", ".pytest_cache", ".idea", ".vscode"}
 # 单个文件级别排除：ai.json 里可能有 API key，开发依赖与 CI 配置也用不上；
-# 开发版.bat 只在源码目录有意义（便携包没有 .venv，端口判据也会判错）
+# 开发版.bat 只在源码目录有意义（便携包没有 .venv，开发版判据也判不成）
 EXCLUDE_FILES = {"config/ai.json", "pytest.ini", "requirements-dev.txt",
                  ".gitignore", ".gitattributes", "开发版.bat"}
 EXCLUDE_SUFFIX = {".pyc", ".pyo", ".log", ".tmp", ".bak", ".swp"}
@@ -76,6 +80,9 @@ def is_excluded(rel: Path) -> bool:
         if s == e or s.startswith(e + "/"):
             return True
     if parts and parts[0].startswith("bt_"):
+        return True
+    if is_private_doc(parts, rel.name):
+        # 根目录散落的内部文档（实测报告等）不随 AGPL 包分发（D-08）
         return True
     if s in EXCLUDE_FILES:
         return True
@@ -195,6 +202,27 @@ def dir_size(p: Path) -> int:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
 
 
+def write_build_info(out: Path, ver: str, py_ver: str) -> None:
+    """包根目录写 BUILD-INFO.txt：这包是谁、从哪份源码、什么时候打的。
+
+    zip 名只放得下软件版本；构建来源（git rev）与解释器版本放包内，用户
+    报问题时能对上号（D-10）。非仓库构建（无 git）如实标注。
+    """
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT),
+                           capture_output=True, text=True, timeout=15)
+        rev = r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:                        # noqa: BLE001
+        rev = ""
+    lines = [
+        f"软件版本 {ver}",
+        f"Python {py_ver}（embeddable）",
+        f"git {rev or '（非仓库构建，无版本记录）'}",
+        f"构建时间 {datetime.now():%Y-%m-%d %H:%M}",
+    ]
+    (out / "BUILD-INFO.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--python", default=DEFAULT_PY, help=f"embeddable 版本，默认 {DEFAULT_PY}")
@@ -203,11 +231,14 @@ def main():
     ap.add_argument("--zip", action="store_true", help="构建后打包成 zip")
     a = ap.parse_args()
 
-    ver = a.python
+    # zip 名用软件版本（app.py 的 APP_VERSION），不是 --python——3.12.10 是
+    # 解释器版本，放在文件名里没人知道对应软件的哪一版（D-10）
+    ver = appver.app_version()
+    py_ver = a.python
     out = Path(a.out) / OUT_NAME
     py_dir = out / "python"
 
-    print(f"构建 {OUT_NAME}（Python {ver}）→ {out}")
+    print(f"构建 {OUT_NAME} {ver}（Python {py_ver}）→ {out}")
 
     # 全量清理再重建：copy_project 只覆盖不删除，上一版留在 rules/ 里的
     # 文件（比如误复制的期刊原件）会一直跟着走。--skip-deps 时保留 python/，
@@ -226,15 +257,15 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     if not py_dir.exists():
-        z = fetch_python(ROOT / "build" / "cache", ver)
+        z = fetch_python(ROOT / "build" / "cache", py_ver)
         print("  解压解释器")
         with zipfile.ZipFile(z) as zf:
             zf.extractall(py_dir)
-        configure_pth(py_dir, ver)
+        configure_pth(py_dir, py_ver)
 
     if not a.skip_deps:
         ensure_pure_wheels()
-        install_deps(py_dir, ver)
+        install_deps(py_dir, py_ver)
     # 每次构建都清：--skip-deps 复用旧目录时，上一轮留下的缓存也在里面
     site_packages = py_dir / "Lib" / "site-packages"
     if site_packages.is_dir():
@@ -244,6 +275,8 @@ def main():
 
     n = copy_project(out)
     print(f"  复制项目文件 {n} 个")
+
+    write_build_info(out, ver, py_ver)
 
     # 软件门面：tools/build_launcher.py 的产物进包根目录——用户双击的是
     # 带图标的 exe 而不是 bat，体感即软件；没打门面就提示一句
@@ -268,7 +301,7 @@ def main():
     print(f"  入口 {out / '格式工坊.bat'}")
 
     if a.zip:
-        zp = Path(a.out) / f"{OUT_NAME}-{ver}.zip"
+        zp = Path(a.out) / f"{OUT_NAME}-{ver}.zip"   # ver=软件版本（D-10）
         print(f"\n打包 {zp}")
         with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
             for f in sorted(out.rglob("*")):
