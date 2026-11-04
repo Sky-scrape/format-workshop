@@ -160,7 +160,7 @@ Windows 下也可直接双击根目录的 `格式工坊.bat`：弹出**原生桌
 
 ### 分发：便携包与安装版
 
-不想装 Python 的使用者用绿色便携包：`python tools/build_portable.py --zip` 产出 `dist\格式工坊-<版本>.zip`，对方解压后双击里面的 `格式工坊.bat` 即可——弹出的是**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳），解释器与依赖都在包里。
+不想装 Python 的使用者用绿色便携包：`python tools/build_portable.py --zip` 产出 `dist\格式工坊-<版本>.zip`，对方解压后双击里面的 **`格式工坊.exe`** 即可——带图标的原生桌面窗口（桌面壳 `desktop.py`，pywebview 借 WebView2 画壳），解释器与依赖都在包里。exe 是 `tools/build_launcher.py` 冻结的**软件门面**：只负责拉起旁边的解释器跑桌面壳，三层进程模型零改动；未签名二进制，个别杀软可能误报，加白即可。
 
 标准安装包则是：
 

@@ -45,18 +45,17 @@ Source: "..\..\dist\格式工坊\*"; DestDir: "{app}"; \
     Flags: recursesubdirs ignoreversion createallsubdirs
 
 [Icons]
-; 直指 pythonw + app_ctl.py，与桌面 .lnk 同一形态：双击无控制台黑窗
-Name: "{group}\格式工坊"; Filename: "{app}\python\pythonw.exe"; \
-    Parameters: """tools\app_ctl.py"""; WorkingDir: "{app}"; \
-    IconFilename: "{app}\static\favicon.ico"
+; 直指包根目录的 格式工坊.exe（软件门面，见 tools/build_launcher.py）：
+; 双击真 exe，图标即自身，最像桌面软件
+Name: "{group}\格式工坊"; Filename: "{app}\格式工坊.exe"; \
+    WorkingDir: "{app}"
 Name: "{group}\卸载格式工坊"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\格式工坊"; Filename: "{app}\python\pythonw.exe"; \
-    Parameters: """tools\app_ctl.py"""; WorkingDir: "{app}"; \
-    IconFilename: "{app}\static\favicon.ico"; Tasks: desktopicon
+Name: "{autodesktop}\格式工坊"; Filename: "{app}\格式工坊.exe"; \
+    WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\python\pythonw.exe"; Parameters: """tools\app_ctl.py"""; \
-    WorkingDir: "{app}"; Description: "启动格式工坊"; \
+Filename: "{app}\格式工坊.exe"; WorkingDir: "{app}"; \
+    Description: "启动格式工坊"; \
     Flags: postinstall nowait skipifsilent
 
 [UninstallRun]

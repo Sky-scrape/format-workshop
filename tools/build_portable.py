@@ -245,6 +245,16 @@ def main():
     n = copy_project(out)
     print(f"  复制项目文件 {n} 个")
 
+    # 软件门面：tools/build_launcher.py 的产物进包根目录——用户双击的是
+    # 带图标的 exe 而不是 bat，体感即软件；没打门面就提示一句
+    facade = ROOT / "build" / "格式工坊.exe"
+    if facade.is_file():
+        shutil.copy2(facade, out / "格式工坊.exe")
+        print("  已放入门面 格式工坊.exe")
+    else:
+        print("  提示：未找到 build\\格式工坊.exe（跑一次 tools/build_launcher.py），"
+              "包内将没有 exe 门面")
+
     # 产物目录：清空重建——冒烟测试留下的运行日志不该进分发包（--skip-deps
     # 复用目录时它不在清除范围内，尤其会带）。程序会自建，先建好第一屏更干净
     outputs = out / "outputs"

@@ -166,18 +166,22 @@ def shortcut():
     """
     dev = PORT != 5000
     name = "格式工坊·开发版.lnk" if dev else "格式工坊.lnk"
+    exe = ROOT / "格式工坊.exe"
     pyw = ROOT / "python" / "pythonw.exe"
     if not pyw.is_file():
         sibling = Path(sys.executable).with_name("pythonw.exe")
         pyw = sibling if sibling.is_file() else None
-    if pyw is None:
+    if exe.is_file():
+        target, args = str(exe), ""           # 软件门面：真 exe，图标即自身
+    elif pyw is not None:
+        target = str(pyw)                     # 没打门面时退回直拉桌面壳
+        args = f'"{ROOT / "desktop.py"}"'
+    else:
         target = str(ROOT / "格式工坊.bat")   # 连 pythonw 都没有：带控制台但能用
         args = ""
-    else:
-        target = str(pyw)
-        args = f'"{ROOT / "desktop.py"}"'
     icon = ROOT / "static" / "favicon.ico"
-    icon_loc = f"{icon},0" if icon.is_file() else target
+    icon_loc = target if target.endswith(".exe") else (
+        f"{icon},0" if icon.is_file() else target)
     ps = (
         "$ws = New-Object -ComObject WScript.Shell;"
         "$d = [Environment]::GetFolderPath('Desktop');"
