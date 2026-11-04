@@ -59,6 +59,26 @@
 
   {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
   {% if success %}<div class="flash good">{{ success }}</div>{% endif %}
+  {% if shell_saved %}<div class="flash good">桌面壳偏好已保存，下次启动生效。</div>{% endif %}
+
+  <div class="card">
+    <h2>桌面软件</h2>
+    <p class="hint">下面这项只在桌面版（双击 格式工坊.exe / 开发版.bat）里有意义；浏览器里使用时可忽略。</p>
+    <div class="radios">
+      <label>
+        <input type="radio" name="close_action" value="exit" form="shellForm" {{ 'checked' if close_action != 'tray' }}>
+        <div><strong>关闭窗口即退出（推荐）</strong><span>点 × 时程序与后台服务一并结束，行为与一般桌面软件一致。</span></div>
+      </label>
+      <label>
+        <input type="radio" name="close_action" value="tray" form="shellForm" {{ 'checked' if close_action == 'tray' }}>
+        <div><strong>关闭窗口最小化到托盘</strong><span>点 × 后程序收进屏幕右下角托盘继续运行（后台服务随时可用），从托盘图标退出。</span></div>
+      </label>
+    </div>
+    <form method="post" action="/settings/shell" id="shellForm" class="shell-save">
+      <button class="btn" type="submit">保存桌面偏好</button>
+    </form>
+  </div>
+  <style>.shell-save{margin-top:14px}.shell-save .btn{min-height:38px;padding:8px 18px}</style>
 
   <form method="post" action="/settings" id="aiForm">
     <div class="card">

@@ -1218,9 +1218,25 @@ def settings():
             ai_assist.save_config(cfg)
             success = "已保存。改动下一次转换即可生效。"
     cfg = ai_assist.load_config()
+    try:
+        shell_cfg = json.loads((ROOT / "config" / "close.json").read_text(encoding="utf-8"))
+    except Exception:
+        shell_cfg = {}
     return render_template("settings.html", cfg=cfg, error=error, success=success,
                            key_set=bool(str(cfg.get("api_key") or "").strip()),
-                           config_path=str(ai_assist.CONFIG_PATH))
+                           config_path=str(ai_assist.CONFIG_PATH),
+                           close_action=shell_cfg.get("action") or "exit")
+
+
+@app.route("/settings/shell", methods=["POST"])
+def settings_shell():
+    """桌面壳偏好（关窗语义）。只在意桌面壳里可见，浏览器里提交也无害。"""
+    action = request.form.get("close_action", "exit")
+    cfg_path = ROOT / "config" / "close.json"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(json.dumps({"action": "tray" if action == "tray" else "exit"}),
+                        encoding="utf-8")
+    return redirect(url_for("settings", shell_saved=1))
 
 
 @app.route("/settings/test", methods=["POST"])

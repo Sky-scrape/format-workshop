@@ -14,6 +14,7 @@ bat 的 stop 照常能停；窗口随关随走，不留进程。
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -36,6 +37,20 @@ sys.path.insert(0, str(ROOT / "tools"))
 import app_ctl  # noqa: E402
 
 CFG = ROOT / "config" / "window.json"
+
+
+# ---------------------------------------------------------------- 关窗语义
+def close_action():
+    """× 按钮的行为，读 config/close.json：exit（默认）| tray。
+
+    托盘驻留是微信式习惯，喜欢的人在设置里显式打开；默认必须是最直觉的
+    「关了就是关了」。
+    """
+    try:
+        d = json.loads((ROOT / "config" / "close.json").read_text(encoding="utf-8"))
+        return "tray" if d.get("action") == "tray" else "exit"
+    except Exception:                # noqa: BLE001
+        return "exit"
 
 
 # ---------------------------------------------------------------- 单实例
@@ -84,6 +99,12 @@ def tint_title_bar(hwnd, timeout=5.0):
         except Exception:            # noqa: BLE001
             time.sleep(0.2)
     return False
+
+
+def _find_window(title):
+    """FindWindowW 按标题精确找顶层窗口，找到返回 True。"""
+    import ctypes
+    return bool(ctypes.windll.user32.FindWindowW(None, title))
 
 
 def focus_existing():
@@ -255,26 +276,46 @@ class Tray:
         except Exception:            # noqa: BLE001
             pass
 
+    def hide_to_tray(self, icon=None, item=None):
+        try:
+            self.window.hide()
+        except Exception:            # noqa: BLE001
+            pass
+
     def quit(self, icon=None, item=None):
+        """真退出：窗、托盘、后台服务一并收掉。
+
+        服务由本壳经 keepalive 拉起的才归我们管；app_ctl.stop() 按 -Root
+        圈定本目录进程，误伤不了别的项目。
+        """
         self.quitting = True
-        self.stop_service()
         try:
             self.window.destroy()
         except Exception:            # noqa: BLE001
             pass
         if self.icon:
-            self.icon.stop()
+            try:
+                self.icon.stop()
+            except Exception:        # noqa: BLE001
+                pass
+        self.stop_service()
 
     def on_closing(self):
-        """closing 事件返回 False 取消关闭 → 隐藏进托盘；真退出放行。"""
+        """× 的语义按设置走：默认退出（主流直觉）；开了「关窗到托盘」才驻留。
+
+        微信式驻留对普通用户是惊吓——窗口没了软件还活着，找不到退出入口。
+        所以默认 × = 真退出；想常驻的人在设置里显式打开（SHELLX）。
+        """
         if self.quitting:
             return True
-        try:
-            self.window.hide()
-        except Exception:            # noqa: BLE001
-            return True              # 隐藏不了就让它关
-        self.notify_once()
-        return False
+        if close_action() == "tray":
+            try:
+                self.window.hide()
+            except Exception:        # noqa: BLE001
+                return True
+            self.notify_once()
+            return False
+        return True                  # 放行关闭；收尾统一走 webview.start 返回后
 
     def notify_once(self):
         """首次藏进托盘时气泡告知，点 × 找不到窗口的用户才知道软件还在。
@@ -288,7 +329,7 @@ class Tray:
             flag.parent.mkdir(parents=True, exist_ok=True)
             flag.write_text("ok", encoding="utf-8")
             if self.icon:
-                self.icon.notify("程序没有退出：它最小化到了屏幕右下角的托盘"
+                self.icon.notify("程序最小化到了屏幕右下角的托盘"
                                  "（可能收在 ^ 里）。点这里或双击图标即可回来。",
                                  "格式工坊")
         except Exception:            # noqa: BLE001
@@ -298,9 +339,9 @@ class Tray:
         import pystray
         menu = pystray.Menu(
             pystray.MenuItem("打开 格式工坊", self.show_window, default=True),
-            pystray.MenuItem("停止后台服务", self.stop_service),
+            pystray.MenuItem("隐藏窗口", self.hide_to_tray),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("退出（并停止服务）", self.quit),
+            pystray.MenuItem("退出", self.quit),
         )
         self.icon = pystray.Icon(window_title(), self._image(), window_title(), menu)
         self.window.events.closing += self.on_closing
@@ -330,6 +371,31 @@ def start_tray(window):
 def stop_tray():
     if _TRAY:
         _TRAY.stop()
+
+
+def stop_service_if_owned():
+    """收尾停服：只停**本目录**的 keepalive/app.py（app_ctl.stop 的 -Root
+    口径）。使用版与开发版各管各的，关一个不动另一个。
+
+    必须剥离成独立进程去跑：关窗路径上 WinForms 的 Application.Exit 会在
+    closed 事件触发后立刻终结整个进程，回调线程来不及跑完 app_ctl.stop()
+    （内部要起 powershell 子进程，秒级耗时）。DETACHED 起一个 python
+    -c 一行流，壳死也不影响它把服务停完。
+    """
+    exe = Path(sys.executable)
+    pyw = exe.with_name("pythonw.exe")
+    runner = pyw if pyw.exists() else exe
+    code = ("import sys, os; sys.path.insert(0, r'"
+            + str(ROOT / "tools") + "'); import app_ctl; "
+            + f"app_ctl.stop()")
+    try:
+        subprocess.Popen(
+            [str(runner), "-c", code], cwd=str(ROOT),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x00000008 | 0x00000200)   # DETACHED | NEW_GROUP
+    except Exception:                # noqa: BLE001
+        pass
 
 
 def main():
@@ -362,7 +428,45 @@ def main():
             win.load_html(FAIL.format(port=PORT))
 
     threading.Thread(target=boot, daemon=True).start()
-    start_tray(win)
+
+    # ×=退出（默认）路径的收尾保障：不依赖事件回调——实测订阅 closing 后，
+    # closed 事件与 main() 尾部代码都可能不触发，壳进程会以无窗状态空转。
+    # 唯一可靠的「窗口真没了」信号是 FindWindowW（与单实例同款；native.Visible
+    # 在关窗后仍返回 True，是坑）。窗口消失 → 存几何、剥离停服、带走进程。
+    # 停服必须剥离成独立进程：os._exit 前起 DETACHED 子进程，壳死它照常跑完
+    # （app_ctl.stop 内部要起 powershell，秒级耗时，等不得）。
+    if close_action() != "tray":
+        def reap_when_window_gone():
+            # 启动页→页面阶段窗口可能重建，先等它出现，出现 3 秒后才开始盯
+            title = window_title()
+            first_seen = None
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if _find_window(title):
+                    if first_seen is None:
+                        first_seen = time.time()
+                    if time.time() - first_seen >= 3:
+                        break
+                time.sleep(0.5)
+            else:
+                return               # 窗口迟迟没出现，放弃（别误收）
+            while True:
+                if not _find_window(title):
+                    # 连续两次确认（1 秒），防切主题/闪屏误判
+                    time.sleep(1)
+                    if not _find_window(title):
+                        break
+                time.sleep(0.5)
+            save_window_state(win)
+            stop_service_if_owned()
+            stop_tray()
+            os._exit(0)              # 事件循环自己退不干净，直接带走进程
+        threading.Thread(target=reap_when_window_gone, daemon=True).start()
+
+    if close_action() == "tray":
+        # 托盘只在「关窗驻留」模式下存在；默认语义（×=退出）下它是噪音——
+        # 每次启动都多一个图标，菜单里的「退出」和点 × 完全等价
+        start_tray(win)
 
     # 标题栏融色要等原生句柄就绪（webview.start 起事件循环后才有），放线程里刷。
     # WinForms 后端：win.native 是 BrowserForm，句柄在 .Handle——pythonnet 的
@@ -387,6 +491,7 @@ def main():
     icon = ROOT / "static" / "favicon.ico"
     webview.start(icon=str(icon) if icon.is_file() else None)
     stop_tray()
+    stop_service_if_owned()      # 兜底：closed 回调没跑成时（异常路径）再试一次
     return 0
 
 
