@@ -365,13 +365,16 @@ def main():
     start_tray(win)
 
     # 标题栏融色要等原生句柄就绪（webview.start 起事件循环后才有），放线程里刷。
-    # WinForms 后端：win.native 是窗体对象，句柄在 .Handle（pythonnet 的 IntPtr）
+    # WinForms 后端：win.native 是 BrowserForm，句柄在 .Handle——pythonnet 的
+    # IntPtr 不能 int() 强转（TypeError），必须走 .ToInt64()（探针实测）
     def tint_when_ready():
         deadline = time.time() + 10
         while time.time() < deadline:
+            hwnd = 0
             try:
                 native = getattr(win, "native", None)
-                hwnd = int(native.Handle) if native is not None else 0
+                if native is not None:
+                    hwnd = int(native.Handle.ToInt64())
             except Exception:            # noqa: BLE001
                 hwnd = 0
             if hwnd:
