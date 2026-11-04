@@ -39,8 +39,16 @@ CFG = ROOT / "config" / "window.json"
 
 
 # ---------------------------------------------------------------- 单实例
+# 窗口标题按版本区分：使用版与开发版可能同时开在桌面上，单实例检查按标题
+# 精确匹配——同名会互相把对方认成自己（dist 壳启动时撞上源码壳的窗口就
+# 退出，还以为已经聚焦了自己的），这是实测踩过的坑。
+def window_title():
+    suffix = " · 开发版" if (ROOT / ".venv").is_dir() else ""
+    return f"格式工坊{suffix}"
+
+
 def focus_existing():
-    """已有壳窗口就把它带到前台并返回 True——exe 连点两下不该开两个窗。
+    """已有本版壳窗口就带到前台并返回 True——exe 连点两下不该开两个窗。
 
     用窗口标题精确匹配（FindWindowW），不查端口：服务由 keepalive 常驻，
     端口活着不代表窗口开着（用户可能只关了窗、留着服务）。
@@ -48,7 +56,8 @@ def focus_existing():
     if os.name != "nt":
         return False
     import ctypes
-    hwnd = ctypes.windll.user32.FindWindowW(None, "格式工坊")
+    title = window_title()
+    hwnd = ctypes.windll.user32.FindWindowW(None, title)
     if not hwnd:
         return False
     user32 = ctypes.windll.user32
@@ -172,6 +181,99 @@ FAIL = ("<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
         "</body></html>")
 
 
+# ---------------------------------------------------------------- 托盘
+class Tray:
+    """关窗不退场：窗口收到 closing 时隐藏进托盘，托盘菜单提供退出。
+
+    为什么关窗=隐藏：服务由 keepalive 常驻，窗口一关用户就失去了「软件
+    还在跑」的可见性，任务栏里也没了落点。托盘把控制权还回来：点开主窗、
+    直接停服、或彻底退出（窗+托盘；服务留给下次秒开）。
+    """
+
+    def __init__(self, window):
+        self.window = window
+        self.icon = None
+        self.quitting = False
+
+    def _image(self):
+        from PIL import Image
+        ico = ROOT / "static" / "favicon.ico"
+        if ico.is_file():
+            return Image.open(ico)
+        return Image.new("RGB", (64, 64), "#143b33")
+
+    def show_window(self, icon=None, item=None):
+        w = self.window
+        try:
+            w.show()
+            w.restore()
+        except Exception:            # noqa: BLE001
+            pass
+
+    def stop_service(self, icon=None, item=None):
+        try:
+            app_ctl.stop()
+        except Exception:            # noqa: BLE001
+            pass
+
+    def quit(self, icon=None, item=None):
+        self.quitting = True
+        self.stop_service()
+        try:
+            self.window.destroy()
+        except Exception:            # noqa: BLE001
+            pass
+        if self.icon:
+            self.icon.stop()
+
+    def on_closing(self):
+        """closing 事件返回 False 取消关闭 → 隐藏进托盘；真退出放行。"""
+        if self.quitting:
+            return True
+        try:
+            self.window.hide()
+        except Exception:            # noqa: BLE001
+            return True              # 隐藏不了就让它关
+        return False
+
+    def run(self):
+        import pystray
+        menu = pystray.Menu(
+            pystray.MenuItem("打开 格式工坊", self.show_window, default=True),
+            pystray.MenuItem("停止后台服务", self.stop_service),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("退出（并停止服务）", self.quit),
+        )
+        self.icon = pystray.Icon(window_title(), self._image(), window_title(), menu)
+        self.window.events.closing += self.on_closing
+        threading.Thread(target=self.icon.run, daemon=True).start()
+
+    def stop(self):
+        if self.icon:
+            try:
+                self.icon.stop()
+            except Exception:        # noqa: BLE001
+                pass
+
+
+_TRAY = None
+
+
+def start_tray(window):
+    global _TRAY
+    try:
+        _TRAY = Tray(window)
+        _TRAY.run()
+    except Exception:                # noqa: BLE001
+        # 托盘起不来（缺 pystray/Pillow 等）不挡主流程：关窗即退出
+        _TRAY = None
+
+
+def stop_tray():
+    if _TRAY:
+        _TRAY.stop()
+
+
 def main():
     import webview
 
@@ -181,7 +283,7 @@ def main():
     # 秒开：先出窗（启动页盖住服务冷启的 2~4s），就绪后原地换页
     st = load_window_state()
     win = webview.create_window(
-        "格式工坊", html=SPLASH, js_api=SaveBridge(),
+        window_title(), html=SPLASH, js_api=SaveBridge(),
         width=st.get("w", 1280), height=st.get("h", 860),
         x=st.get("x") or None, y=st.get("y") or None,
         min_size=(980, 640), text_select=True)
@@ -202,9 +304,11 @@ def main():
             win.load_html(FAIL.format(port=PORT))
 
     threading.Thread(target=boot, daemon=True).start()
+    start_tray(win)
 
     icon = ROOT / "static" / "favicon.ico"
     webview.start(icon=str(icon) if icon.is_file() else None)
+    stop_tray()
     return 0
 
 

@@ -121,6 +121,24 @@ const syncSubmit=()=>{convertButton.disabled=!fileInput.files.length||!document.
 const updateFile=()=>{dropZone.classList.remove('has-error');const f=fileInput.files[0];if(!f){fileSelected.hidden=true;uploadNotes.hidden=false;fileStatus.classList.remove('ready');fileStatus.querySelector('span').textContent='等待上传 DOCX / DOC 稿件';syncSubmit();return}if(!/\.(docx|doc)$/i.test(f.name)){fileInput.value='';dropZone.classList.add('has-error');toast('仅支持 DOCX / DOC 稿件');updateFile();return}if(f.size>maxSize){fileInput.value='';dropZone.classList.add('has-error');toast('文件不能超过 80 MB');updateFile();return}fileName.textContent=f.name;fileName.title=f.name;sepJoin(fileMeta,[formatSize(f.size),(/\.doc$/i.test(f.name)?'DOC（将自动转为 DOCX）':'DOCX 文档')]);fileSelected.hidden=false;uploadNotes.hidden=true;fileStatus.classList.add('ready');fileStatus.querySelector('span').textContent=f.name;syncSubmit()};
 fileInput.addEventListener('change',updateFile);document.getElementById('removeFile').addEventListener('click',()=>{fileInput.value='';updateFile()});
 ['dragover','dragenter'].forEach(type=>dropZone.addEventListener(type,e=>{e.preventDefault();dropZone.classList.add('on')}));['dragleave','drop'].forEach(type=>dropZone.addEventListener(type,e=>{e.preventDefault();dropZone.classList.remove('on')}));dropZone.addEventListener('drop',e=>{if(e.dataTransfer.files.length){fileInput.files=e.dataTransfer.files;updateFile()}});
+/* 全窗拖放：稿件拖到窗口任意位置都接住（不再要求精准命中左侧虚线框）。
+   计数器防子元素 dragenter/dragleave 抖动闪烁；仅拖的是文件时才亮提示。 */
+  let dragDepth=0;
+  const overlay=document.createElement('div');
+  overlay.id='dropOverlay';
+  overlay.style.cssText='position:fixed;inset:0;z-index:200;display:none;place-items:center;background:rgba(12,37,32,.45);backdrop-filter:blur(4px);pointer-events:none';
+  overlay.innerHTML='<div style="background:#fff;border:2px dashed var(--accent);border-radius:16px;padding:34px 52px;text-align:center;font-size:var(--fs-title);color:var(--accent);font-weight:600">松开即导入稿件</div>';
+  document.body.appendChild(overlay);
+  window.addEventListener('dragenter',e=>{if(!e.dataTransfer||![...e.dataTransfer.types].includes('Files'))return;e.preventDefault();dragDepth++;overlay.style.display='grid'});
+  window.addEventListener('dragover',e=>{e.preventDefault()});
+  window.addEventListener('dragleave',e=>{if(--dragDepth<=0){dragDepth=0;overlay.style.display='none'}});
+  window.addEventListener('drop',e=>{
+    dragDepth=0;overlay.style.display='none';
+    if(!e.dataTransfer||!e.dataTransfer.files.length)return;
+    e.preventDefault();
+    fileInput.files=e.dataTransfer.files;updateFile();
+    dropZone.scrollIntoView({behavior:'smooth',block:'center'});
+  });
 const pickerBtn=document.getElementById('pickerBtn'),pickerPop=document.getElementById('pickerPop'),pickName=document.getElementById('pickName'),pickEn=document.getElementById('pickEn'),pickMeta=document.getElementById('pickMeta'),pickStatus=document.getElementById('pickStatus'),pickSpec=document.getElementById('pickSpec');
 const openPicker=()=>{const r=pickerBtn.getBoundingClientRect(),w=Math.max(330,r.width);pickerPop.style.width=w+'px';pickerPop.style.left=Math.max(8,Math.min(r.left,window.innerWidth-w-8))+'px';pickerPop.style.top=(r.bottom+6)+'px';pickerPop.hidden=false;pickerBtn.setAttribute('aria-expanded','true');const cur=document.querySelector('input[name=journal]:checked');if(cur)cur.closest('.jcard').scrollIntoView({block:'nearest'});setTimeout(()=>document.getElementById('journalSearch').focus({preventScroll:true}),40)};
 const closePicker=()=>{pickerPop.hidden=true;pickerBtn.setAttribute('aria-expanded','false')};

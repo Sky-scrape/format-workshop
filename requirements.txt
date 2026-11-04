@@ -7,5 +7,8 @@ python-docx>=1.1
 PyMuPDF>=1.24,<2
 
 # 桌面壳（desktop.py）：pywebview 借 WebView2（Win10/11 自带）画原生窗口，
-# 使用版与开发版的双击入口都走它；Windows 后端连带装 pythonnet
+# 使用版与开发版的双击入口都走它；Windows 后端连带装 pythonnet。
+# pystray+Pillow 给关窗后的托盘常驻（可见性 + 一键停服）
 pywebview>=5
+pystray>=0.19
+Pillow>=10
