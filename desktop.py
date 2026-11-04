@@ -43,14 +43,41 @@ CFG = ROOT / "config" / "window.json"
 def close_action():
     """× 按钮的行为，读 config/close.json：exit（默认）| tray。
 
-    托盘驻留是微信式习惯，喜欢的人在设置里显式打开；默认必须是最直觉的
-    「关了就是关了」。
+    exit 下点 × 会弹三选对话框（最小化/直接关闭/取消）；tray 下直接驻留
+    不弹——两个习惯各自固定，对话框只服务还没定习惯的人。
     """
     try:
         d = json.loads((ROOT / "config" / "close.json").read_text(encoding="utf-8"))
         return "tray" if d.get("action") == "tray" else "exit"
     except Exception:                # noqa: BLE001
         return "exit"
+
+
+# 三选对话框的返回值（MessageBoxW 的 IDYES/IDNO/IDCANCEL）
+IDC_MINIMIZE = 6                   # IDYES →「最小化窗口」
+IDC_CLOSE = 7                      # IDNO  →「直接关闭」
+
+
+def ask_on_close():
+    """原生三选对话框：最小化窗口 / 直接关闭 / 取消。
+
+    用 Win32 MessageBoxW 而不是网页 dialog：× 是原生窗口消息，弹原生框
+    才同层（网页弹窗盖不住标题栏，且 HTML dialog 出不来这三颗按钮）。
+    MB_TOPMOST 防对话框被主窗压住点不到；消息框句柄取不到就拿主窗标题。
+    """
+    if os.name != "nt":
+        return IDC_CLOSE
+    import ctypes
+    MB_YESNOCANCEL = 0x3
+    MB_TOPMOST = 0x40000
+    MB_SETFOREGROUND = 0x10000
+    text = ("要最小化到任务栏（后台服务继续运行），\n还是直接退出格式工坊？")
+    title = window_title()
+    flags = MB_YESNOCANCEL | MB_TOPMOST | MB_SETFOREGROUND
+    # MB_DEFBUTTON3=0x200：默认焦点给「取消」，回车手滑不会误退
+    flags |= 0x200
+    r = ctypes.windll.user32.MessageBoxW(0, text, title, flags)
+    return {6: IDC_MINIMIZE, 7: IDC_CLOSE}.get(r, 2)   # 其余（取消=2）归取消
 
 
 # ---------------------------------------------------------------- 单实例
@@ -127,52 +154,19 @@ def focus_existing():
 
 
 # ---------------------------------------------------------------- 窗口记忆
-def _visible_screens():
-    """枚举所有显示器的可见区域（VirtualScreen + 主屏工作区兜底）。"""
-    import ctypes
-    user32 = ctypes.windll.user32
-    screens = []
-    try:
-        # SM_XVIRTUALSCREEN=76..SM_CYVIRTUALSCREEN=79：全虚拟桌面
-        vx = user32.GetSystemMetrics(76)
-        vy = user32.GetSystemMetrics(77)
-        vw = user32.GetSystemMetrics(78)
-        vh = user32.GetSystemMetrics(79)
-        if vw > 0 and vh > 0:
-            screens.append((vx, vy, vx + vw, vy + vh))
-    except Exception:                    # noqa: BLE001
-        pass
-    if not screens:
-        # 兜底：主屏（SM_CXSCREEN=0/1）——至少保证「主屏可见」这一档
-        try:
-            w, h = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-            if w > 0 and h > 0:
-                screens.append((0, 0, w, h))
-        except Exception:                # noqa: BLE001
-            pass
-    return screens
-
-
 def load_window_state():
-    """读窗口几何；坐标必须与某块屏幕可见区域有交集，否则丢弃（回居中）。
+    """只记尺寸，不记位置：位置每次交给 Windows 居中级联（SHELLPOS）。
 
-    「坐标不校、OS 能兜」是实测错的：副屏拔掉/改分辨率后窗口会落在屏幕外，
-    用户看到的就是「打开就跑到右下角」——Win32 不给不可见窗口自动搬家。
+    「记住位置」在小屏单屏机上弊大于利——恢复出来的旧位置永远不如居中
+    舒服，还出过「副屏拔掉后窗口落在屏幕外」的事故（已修过一轮越界校验，
+    但校验放行的合法旧位置照样贴角落）。Windows 的级联规则自己会把连续
+    打开的窗口排得整整齐齐，比记忆可靠。
     """
     try:
         d = json.loads(CFG.read_text(encoding="utf-8"))
         w, h = int(d.get("w", 0)), int(d.get("h", 0))
-        if not (500 <= w <= 8000 and 400 <= h <= 4000):
-            return {}
-        x, y = int(d.get("x") or 0), int(d.get("y") or 0)
-        screens = _visible_screens()
-        ok = any(x + w > sx1 and x < sx2 and y + h > sy1 and y < sy2
-                 for sx1, sy1, sx2, sy2 in screens) if screens else True
-        if not ok:
-            return {"w": w, "h": h, "x": None, "y": None,
-                    "maximized": bool(d.get("maximized"))}
-        return {"w": w, "h": h, "x": x, "y": y,
-                "maximized": bool(d.get("maximized"))}
+        if 500 <= w <= 8000 and 400 <= h <= 4000:
+            return {"w": w, "h": h, "maximized": bool(d.get("maximized"))}
     except Exception:                    # noqa: BLE001
         pass
     return {}
@@ -183,7 +177,7 @@ def save_window_state(window):
         CFG.parent.mkdir(parents=True, exist_ok=True)
         CFG.write_text(json.dumps({
             "w": window.width, "h": window.height,
-            "x": window.x, "y": window.y, "maximized": window.maximized,
+            "maximized": window.maximized,
         }, ensure_ascii=False), encoding="utf-8")
     except Exception:                    # noqa: BLE001
         pass
@@ -338,21 +332,31 @@ class Tray:
         self.stop_service()
 
     def on_closing(self):
-        """× 的语义按设置走：默认退出（主流直觉）；开了「关窗到托盘」才驻留。
+        """× 的语义按设置走：默认弹三选对话框；开了「关窗到托盘」直接驻留。
 
-        微信式驻留对普通用户是惊吓——窗口没了软件还活着，找不到退出入口。
-        所以默认 × = 真退出；想常驻的人在设置里显式打开（SHELLX）。
+        三选（MB_YESNOCANCEL，原生 MessageBox）：最小化到托盘 / 直接关闭 /
+        取消——许多用户既不想丢后台服务，也不想要「关了就是关了」的一刀切，
+        每次给一次选择权（SHELLX 里仍可改默认行为，close.json=tray 时不弹）。
         """
         if self.quitting:
             return True
         if close_action() == "tray":
             try:
                 self.window.hide()
-            except Exception:        # noqa: BLE001
+            except Exception:            # noqa: BLE001
                 return True
             self.notify_once()
             return False
-        return True                  # 放行关闭；收尾统一走 webview.start 返回后
+        choice = ask_on_close()
+        if choice == IDC_MINIMIZE:       # 最小化窗口（任务栏还在，服务照跑）
+            try:
+                self.window.minimize()
+            except Exception:            # noqa: BLE001
+                pass
+            return False                 # 取消本次关闭
+        if choice == IDC_CLOSE:          # 直接关闭：放行，收尾走 reap 线程
+            return True
+        return False                     # 取消（含关掉对话框/ESC）
 
     def notify_once(self):
         """首次藏进托盘时气泡告知，点 × 找不到窗口的用户才知道软件还在。
@@ -424,13 +428,16 @@ def stop_service_if_owned():
     runner = pyw if pyw.exists() else exe
     code = ("import sys, os; sys.path.insert(0, r'"
             + str(ROOT / "tools") + "'); import app_ctl; "
-            + f"app_ctl.stop()")
+            + "app_ctl.stop()")
     try:
+        # CREATE_NO_WINDOW(0x08000000) 必带：DETACHED(0x8) 只是脱离父控制台，
+        # console 程序（python.exe/存根转手）仍会给自己分配新控制台——闪黑窗
+        # 就是它（实测）。pythonw 优先，转手/回退链路也压住。
         subprocess.Popen(
             [str(runner), "-c", code], cwd=str(ROOT),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=0x00000008 | 0x00000200)   # DETACHED | NEW_GROUP
+            creationflags=0x00000008 | 0x00000200 | 0x08000000)
     except Exception:                # noqa: BLE001
         pass
 
@@ -442,13 +449,11 @@ def main():
         return 0
 
     # 秒开：先出窗（启动页盖住服务冷启的 2~4s），就绪后原地换页。
-    # x/y 直接走 create_window 参数（None=系统默认居中级联），别事后赋值——
-    # 那要等事件循环起来才生效，且与 maximize 恢复顺序打架
+    # 不传 x/y：Windows 居中级联——每次打开都在舒服的位置（SHELLPOS）
     st = load_window_state()
     win = webview.create_window(
         window_title(), html=SPLASH, js_api=SaveBridge(),
         width=st.get("w", 1280), height=st.get("h", 860),
-        x=st.get("x"), y=st.get("y"),
         min_size=(980, 640), text_select=True)
 
     win.events.closed += lambda: save_window_state(win)
