@@ -11,9 +11,10 @@
     格式工坊.bat status     # 状态自检
     格式工坊.bat shortcut   # 桌面建带图标的快捷方式（pythonw 直启，无控制台）
 
-开发版.bat 转发到同一个 app_ctl.py，只是固定 PAPER_PORT=5001、只用 .venv 的
-解释器：源码目录配好 .venv 后与使用版（便携包/安装版，5000 端口）并存，启动、
-停止、状态互不越界（stop 按启动目录圈定进程，见 stop() 与 kill_by_cmdline.ps1）。
+开发版.bat 无参数时走根目录 desktop.py（pywebview 原生窗口，端口默认 5001），
+带参数（stop/status/shortcut/quiet）仍转发到这里；只用 .venv 的解释器，源码
+目录配好 .venv 后与使用版（便携包/安装版，5000 端口）并存，启动、停止、状态
+互不越界（stop 按启动目录圈定进程，见 stop() 与 kill_by_cmdline.ps1）。
 
 打开页面的形态：默认优先用 Edge/Chrome 的 --app 模式弹独立窗口（无地址栏、
 任务栏有自己的图标，体感是桌面软件）；找不到这两家浏览器、或设了
@@ -159,24 +160,24 @@ def shortcut():
     重定向的用户（%USERPROFILE%\\Desktop 不存在）只有这条路找得对。
 
     开发环境（PAPER_PORT 不是 5000，比如经 开发版.bat 启动）lnk 名加
-    「·开发版」后缀，不覆盖使用版的同名快捷方式；端口还得写进 Arguments，
-    explorer 拉起 lnk 时拿不到创建时的环境变量，只改名字固化不了端口。
+    「·开发版」后缀，不覆盖使用版的同名快捷方式；指向桌面壳 desktop.py
+    （原生窗口）——端口不用写进 Arguments，desktop.py 自身默认 5001，
+    explorer 拉起 lnk 时拿不到创建时的环境变量也不怕。
     """
     dev = PORT != 5000
     name = "格式工坊·开发版.lnk" if dev else "格式工坊.lnk"
     if (ROOT / "python" / "pythonw.exe").is_file():
         target = str(ROOT / "python" / "pythonw.exe")   # 便携包自带解释器
         args = f'"{ROOT / "tools" / "app_ctl.py"}"'
-    else:
-        sibling = Path(sys.executable).with_name("pythonw.exe")
-        if sibling.is_file():
-            target = str(sibling)
+    elif Path(sys.executable).with_name("pythonw.exe").is_file():
+        target = str(Path(sys.executable).with_name("pythonw.exe"))
+        if dev:
+            args = f'"{ROOT / "desktop.py"}"'
+        else:
             args = f'"{ROOT / "tools" / "app_ctl.py"}"'
-        else:                       # 连 pythonw 都没有：退回 .bat，带控制台但能用
-            target = str(ROOT / "格式工坊.bat")
-            args = ""
-    if dev:
-        args = f"{args} --port {PORT}"
+    else:                       # 连 pythonw 都没有：退回 .bat，带控制台但能用
+        target = str(ROOT / "格式工坊.bat")
+        args = ""
     icon = ROOT / "static" / "favicon.ico"
     icon_loc = f"{icon},0" if icon.is_file() else target
     ps = (

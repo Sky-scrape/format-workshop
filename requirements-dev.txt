@@ -1,2 +1,6 @@
 -r requirements.txt
 pytest>=8.0
+
+# 源码版桌面壳（desktop.py）：pywebview 借 WebView2（Win10/11 自带）画原生
+# 窗口，替代浏览器页。仅源码开发环境用；便携包仍走 --app 窗口，不装这个
+pywebview>=5

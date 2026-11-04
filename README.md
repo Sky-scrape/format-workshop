@@ -183,7 +183,7 @@ python tools/build_installer.py           # 再打成 dist\格式工坊-setup-<�
   .venv\Scripts\python -m pip install -r requirements-dev.txt
   ```
 
-  之后开发一律走根目录的 `开发版.bat`：只用 `.venv` 的解释器、固定占 **5001** 端口，启动 / 停止 / 状态 / 快捷方式与 `格式工坊.bat` 是同一套命令（`开发版.bat stop` 只停开发版）。跑测试同样用它：`.venv\Scripts\python -m pytest`。
+  之后开发一律双击根目录的 `开发版.bat`：弹出的是**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳），不再开浏览器；服务固定占 **5001** 端口，`stop` / `status` / `shortcut` 等子命令与 `格式工坊.bat` 同一套（`开发版.bat stop` 只停开发版）。跑测试：`.venv\Scripts\python -m pytest`。
 
 隔离是四层的：解释器（便携包 `python\` vs 源码 `.venv\`）、端口（5000 vs 5001）、进程清理（stop 按启动目录圈定进程，见 `tools/kill_by_cmdline.ps1` 的 `-Root`）、工作产物（`outputs\` 各在各的目录里）。本目录的 `格式工坊.bat` 检测到 `.venv` 时也会优先用它，但端口仍是 5000——与使用版并存时请走 `开发版.bat`；日常使用更要以使用版那份为准，若仍用本源码目录常驻 5000，开发版与它同目录，`stop` 无法按目录区分，会一起停掉。
 
