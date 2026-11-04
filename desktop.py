@@ -273,7 +273,26 @@ class Tray:
             self.window.hide()
         except Exception:            # noqa: BLE001
             return True              # 隐藏不了就让它关
+        self.notify_once()
         return False
+
+    def notify_once(self):
+        """首次藏进托盘时气泡告知，点 × 找不到窗口的用户才知道软件还在。
+
+        只提示一次（记 config/tray-hint.flag）——每次都弹就成了骚扰。
+        """
+        flag = ROOT / "config" / "tray-hint.flag"
+        if flag.exists():
+            return
+        try:
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text("ok", encoding="utf-8")
+            if self.icon:
+                self.icon.notify("程序没有退出：它最小化到了屏幕右下角的托盘"
+                                 "（可能收在 ^ 里）。点这里或双击图标即可回来。",
+                                 "格式工坊")
+        except Exception:            # noqa: BLE001
+            pass
 
     def run(self):
         import pystray
