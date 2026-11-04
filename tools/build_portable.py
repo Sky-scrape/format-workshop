@@ -49,10 +49,9 @@ EXCLUDE_TOP = {
 # 任意层级都不带的目录名
 EXCLUDE_DIRS = {"__pycache__", ".git", ".pytest_cache", ".idea", ".vscode"}
 # 单个文件级别排除：ai.json 里可能有 API key，开发依赖与 CI 配置也用不上；
-# 开发版.bat 只在源码目录有意义（便携包没有 .venv，点了只会看到报错）；
-# desktop.py 是源码版桌面壳，便携包的 site-packages 没装 pywebview
+# 开发版.bat 只在源码目录有意义（便携包没有 .venv，端口判据也会判错）
 EXCLUDE_FILES = {"config/ai.json", "pytest.ini", "requirements-dev.txt",
-                 ".gitignore", ".gitattributes", "开发版.bat", "desktop.py"}
+                 ".gitignore", ".gitattributes", "开发版.bat"}
 EXCLUDE_SUFFIX = {".pyc", ".pyo", ".log", ".tmp", ".bak", ".swp"}
 
 
@@ -116,6 +115,22 @@ def configure_pth(py_dir: Path, ver: str) -> None:
         encoding="ascii")
 
 
+# 只有 sdist、没有轮子的纯 Python 依赖。install_deps 用 --only-binary=:all:
+# 跨版本装依赖（防 cp313 轮子混进 cp312 包），会把这些误杀——先在本机把
+# sdist 转成 none-any 通用轮子放进 build/wheels，再用 --find-links 取用：
+# 通用轮子对任何目标环境都合法。
+SDIST_ONLY = ("proxy-tools",)
+
+
+def ensure_pure_wheels() -> None:
+    out = ROOT / "build" / "wheels"
+    out.mkdir(parents=True, exist_ok=True)
+    for pkg in SDIST_ONLY:
+        print(f"  本机补轮子 {pkg} → build/wheels")
+        subprocess.run([sys.executable, "-m", "pip", "wheel", pkg,
+                        "--no-deps", "-w", str(out)], check=True)
+
+
 def install_deps(py_dir: Path, ver: str) -> None:
     """用本机 pip 把依赖装进目标目录。
 
@@ -133,6 +148,7 @@ def install_deps(py_dir: Path, ver: str) -> None:
            "--implementation", "cp",
            "--abi", f"cp{major}{minor}",
            "--only-binary=:all:",
+           "--find-links", str(ROOT / "build" / "wheels"),
            "-r", str(ROOT / "requirements.txt")]
     print("  安装依赖：", " ".join(cmd[3:6]), f"→ {dest}")
     subprocess.run(cmd, check=True)
@@ -217,6 +233,7 @@ def main():
         configure_pth(py_dir, ver)
 
     if not a.skip_deps:
+        ensure_pure_wheels()
         install_deps(py_dir, ver)
     # 每次构建都清：--skip-deps 复用旧目录时，上一轮留下的缓存也在里面
     site_packages = py_dir / "Lib" / "site-packages"

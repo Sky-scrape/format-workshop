@@ -148,7 +148,7 @@ python app.py --port 5001      # 换端口
 python app.py --no-browser     # 不自动开浏览器
 ```
 
-Windows 下也可直接双击根目录的 `格式工坊.bat`（静默后台启动，双击第二次是打开页面）。页面默认以 Edge/Chrome 的 `--app` 模式弹出**独立窗口**（无地址栏、任务栏有自己的图标，像桌面软件）；想回普通标签页，设环境变量 `PAPER_OPEN=browser` 再启动。
+Windows 下也可直接双击根目录的 `格式工坊.bat`：弹出**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳——无地址栏、无浏览器边框，服务未起会经 keepalive 自动拉起）；`stop` / `status` / `shortcut` / `quiet` 等子命令转发给 `tools/app_ctl.py`。
 
 还可以把桌面快捷方式一次性建好（pythonw 直启，双击无控制台黑窗，图标同页面）：
 
@@ -160,7 +160,7 @@ Windows 下也可直接双击根目录的 `格式工坊.bat`（静默后台启�
 
 ### 分发：便携包与安装版
 
-不想装 Python 的使用者用绿色便携包：`python tools/build_portable.py --zip` 产出 `dist\格式工坊-<版本>.zip`，对方解压后双击里面的 `格式工坊.bat` 即可，解释器与依赖都在包里。
+不想装 Python 的使用者用绿色便携包：`python tools/build_portable.py --zip` 产出 `dist\格式工坊-<版本>.zip`，对方解压后双击里面的 `格式工坊.bat` 即可——弹出的是**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳），解释器与依赖都在包里。
 
 标准安装包则是：
 

@@ -6,6 +6,6 @@ python-docx>=1.1
 # 读页面尺寸、抽文字、取字体这些基础接口。1.27 是纯轮子、零依赖，已验证。
 PyMuPDF>=1.24,<2
 
-# 可选：扫描版稿约 PDF 的 OCR。装了才会启用，不装也能跑
-# （文字层 PDF 不受影响，只有纯图片 PDF 需要它）
-# rapidocr-onnxruntime>=1.3
+# 桌面壳（desktop.py）：pywebview 借 WebView2（Win10/11 自带）画原生窗口，
+# 使用版与开发版的双击入口都走它；Windows 后端连带装 pythonnet
+pywebview>=5

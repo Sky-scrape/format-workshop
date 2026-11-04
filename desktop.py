@@ -1,14 +1,14 @@
-"""格式工坊 · 源码版桌面壳：原生窗口替代浏览器页。
+"""格式工坊 · 桌面壳：原生窗口替代浏览器页（使用版与开发版同一入口）。
 
-为什么有这个文件：Flask 应用本体不变，但双击 开发版.bat 弹出的不该是浏览器
+为什么有这个文件：Flask 应用本体不变，但双击 bat 弹出的不该是浏览器
 ——pywebview 借 WebView2（Win10/11 自带）画一个真正的原生窗口：没有地址栏、
-没有浏览器边框，体感是桌面软件。使用版继续走 Edge --app 独立窗口。
+没有浏览器边框，体感是桌面软件。
 
 进程模型刻意沿用既有链路：窗口只负责「看」，服务仍由 keepalive 常驻守护，
-开发版.bat stop 照常能停；窗口随关随走，不留进程。
+bat 的 stop 照常能停；窗口随关随走，不留进程。
 
 用法：
-    pythonw desktop.py                  # 原生窗口（开发版.bat 双击即此）
+    pythonw desktop.py                  # 原生窗口（格式工坊.bat 双击即此）
     PAPER_PORT=5002 python desktop.py   # 指定端口、控制台日志可见
 """
 
@@ -19,10 +19,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# 开发版默认 5001（与 开发版.bat 固定值一致）。必须先定端口再 import app_ctl：
-# app_ctl 在导入时读 PAPER_PORT 算 PORT，spawn_keepalive 把这个值传给 keepalive，
-# 顺序反了守护就会去拉 5000。
-os.environ.setdefault("PAPER_PORT", "5001")
+# 端口默认值按环境判：便携包（无 .venv）服务常驻 5000；源码目录（有 .venv）
+# 开发版在 5001（开发版.bat 也会显式设 PAPER_PORT）。explorer 拉起快捷方式时
+# 拿不到环境变量，只能靠这个判据。必须先定端口再 import app_ctl：app_ctl 在
+# 导入时读 PAPER_PORT 算 PORT，spawn_keepalive 把它传给 keepalive，顺序反了
+# 便携包的守护就会去拉 5001。
+os.environ.setdefault(
+    "PAPER_PORT", "5001" if (ROOT / ".venv").is_dir() else "5000")
 PORT = int(os.environ["PAPER_PORT"])
 
 sys.path.insert(0, str(ROOT / "tools"))
