@@ -47,6 +47,45 @@ def window_title():
     return f"格式工坊{suffix}"
 
 
+# ---------------------------------------------------------------- 标题栏融色
+def tint_title_bar(hwnd, timeout=5.0):
+    """把系统标题栏刷成页面顶栏色（DWMWA_CAPTION_COLOR，Win10 1806+/11）。
+
+    为什么不 frameless 自绘：拖动、双击最大化、Win+方向键、窗口阴影、系统
+    动画全是系统白送的，自绘要逐个兜回来。DWM 刷色零交互代价——只是把那条
+    灰黑系统栏换成与页面同源的底色，视觉上「融」进网页顶栏。
+
+    颜色取 base.html :root 的 --surface(#fff) 与 --ink(#18332e)：标题栏白底、
+    墨绿字，与顶栏浑然一体。Windows 老于 1806 时 DWM 调用静默无效，不影响
+    启动（那台机器看到原色标题栏，仅此而已）。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # 窗口刚创建时句柄有效但 DWM 属性可能不生效，重试几次
+            if not user32.IsWindow(hwnd):
+                time.sleep(0.2)
+                continue
+
+            def color_int(rgb_hex):
+                r, g, b = (int(rgb_hex[i:i + 2], 16) for i in (1, 3, 5))
+                return r | (g << 8) | (b << 16)     # COLORREF 是 0x00BBGGRR
+
+            surface = color_int("#ffffff")          # --surface
+            ink = color_int("#18332e")              # --ink
+            dwm = ctypes.windll.dwmapi.DwmSetWindowAttribute
+            for attr, val in ((35, surface),       # DWMWA_CAPTION_COLOR
+                              (36, ink),           # DWMWA_TEXT_COLOR
+                              (34, surface)):      # DWMWA_BORDER_COLOR
+                dwm(int(hwnd), attr, ctypes.byref(ctypes.c_int(val)), 4)
+            return True
+        except Exception:            # noqa: BLE001
+            time.sleep(0.2)
+    return False
+
+
 def focus_existing():
     """已有本版壳窗口就带到前台并返回 True——exe 连点两下不该开两个窗。
 
@@ -305,6 +344,23 @@ def main():
 
     threading.Thread(target=boot, daemon=True).start()
     start_tray(win)
+
+    # 标题栏融色要等原生句柄就绪（webview.start 起事件循环后才有），放线程里刷。
+    # WinForms 后端：win.native 是窗体对象，句柄在 .Handle（pythonnet 的 IntPtr）
+    def tint_when_ready():
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                native = getattr(win, "native", None)
+                hwnd = int(native.Handle) if native is not None else 0
+            except Exception:            # noqa: BLE001
+                hwnd = 0
+            if hwnd:
+                tint_title_bar(hwnd)
+                return
+            time.sleep(0.2)
+
+    threading.Thread(target=tint_when_ready, daemon=True).start()
 
     icon = ROOT / "static" / "favicon.ico"
     webview.start(icon=str(icon) if icon.is_file() else None)
