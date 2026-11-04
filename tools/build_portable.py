@@ -48,9 +48,10 @@ EXCLUDE_TOP = {
 }
 # 任意层级都不带的目录名
 EXCLUDE_DIRS = {"__pycache__", ".git", ".pytest_cache", ".idea", ".vscode"}
-# 单个文件级别排除：ai.json 里可能有 API key，开发依赖与 CI 配置也用不上
+# 单个文件级别排除：ai.json 里可能有 API key，开发依赖与 CI 配置也用不上；
+# 开发版.bat 只在源码目录有意义（便携包没有 .venv，点了只会看到报错）
 EXCLUDE_FILES = {"config/ai.json", "pytest.ini", "requirements-dev.txt",
-                 ".gitignore", ".gitattributes"}
+                 ".gitignore", ".gitattributes", "开发版.bat"}
 EXCLUDE_SUFFIX = {".pyc", ".pyo", ".log", ".tmp", ".bak", ".swp"}
 
 
@@ -226,8 +227,12 @@ def main():
     n = copy_project(out)
     print(f"  复制项目文件 {n} 个")
 
-    # 产物目录与运行日志目录：程序会自建，但先建好能让双击后的第一屏更干净
-    (out / "outputs").mkdir(exist_ok=True)
+    # 产物目录：清空重建——冒烟测试留下的运行日志不该进分发包（--skip-deps
+    # 复用目录时它不在清除范围内，尤其会带）。程序会自建，先建好第一屏更干净
+    outputs = out / "outputs"
+    if outputs.exists():
+        shutil.rmtree(outputs)
+    outputs.mkdir()
 
     size = dir_size(out)
     print(f"\n完成：{out}")

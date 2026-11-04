@@ -148,7 +148,44 @@ python app.py --port 5001      # 换端口
 python app.py --no-browser     # 不自动开浏览器
 ```
 
-Windows 下也可直接双击根目录的 `格式工坊.bat`（静默后台启动，双击第二次是打开页面）。
+Windows 下也可直接双击根目录的 `格式工坊.bat`（静默后台启动，双击第二次是打开页面）。页面默认以 Edge/Chrome 的 `--app` 模式弹出**独立窗口**（无地址栏、任务栏有自己的图标，像桌面软件）；想回普通标签页，设环境变量 `PAPER_OPEN=browser` 再启动。
+
+还可以把桌面快捷方式一次性建好（pythonw 直启，双击无控制台黑窗，图标同页面）：
+
+```bash
+格式工坊.bat shortcut
+```
+
+不想用了就 `格式工坊.bat stop` 停止后台服务、删掉桌面的 `格式工坊.lnk` 即可，无其他残留。
+
+### 分发：便携包与安装版
+
+不想装 Python 的使用者用绿色便携包：`python tools/build_portable.py --zip` 产出 `dist\格式工坊-<版本>.zip`，对方解压后双击里面的 `格式工坊.bat` 即可，解释器与依赖都在包里。
+
+标准安装包则是：
+
+```bash
+python tools/build_portable.py            # 先产出绿色包
+python tools/build_installer.py           # 再打成 dist\格式工坊-setup-<版本>.exe
+```
+
+需要机器上有 Inno Setup（自动探测盘符根的 `Inno Setup 6/7` 目录与 Program Files，找不到就用 `--iscc` 指路）。安装包为中文向导：可选「给所有用户 / 仅当前用户」（机房无管理员权限也能装）、建开始菜单与桌面快捷方式、升级前自动停旧服务；卸载会带走全部程序文件，但保留 `outputs\` 里的稿件与日志。
+
+### 源码开发：与使用版并存
+
+电脑上同时保留「日常在用的版本」和「改代码的版本」，两边解释器、端口、停止范围、工作产物全部独立，互不影响：
+
+- **使用版**：`dist\格式工坊\`（便携包）或安装版，自带 `python\` 解释器，占 **5000** 端口，日常双击它里面的 `格式工坊.bat` 或桌面快捷方式。
+- **开发版**：本源码目录配一份虚拟环境（一次性）：
+
+  ```bash
+  py -3 -m venv .venv
+  .venv\Scripts\python -m pip install -r requirements-dev.txt
+  ```
+
+  之后开发一律走根目录的 `开发版.bat`：只用 `.venv` 的解释器、固定占 **5001** 端口，启动 / 停止 / 状态 / 快捷方式与 `格式工坊.bat` 是同一套命令（`开发版.bat stop` 只停开发版）。跑测试同样用它：`.venv\Scripts\python -m pytest`。
+
+隔离是四层的：解释器（便携包 `python\` vs 源码 `.venv\`）、端口（5000 vs 5001）、进程清理（stop 按启动目录圈定进程，见 `tools/kill_by_cmdline.ps1` 的 `-Root`）、工作产物（`outputs\` 各在各的目录里）。本目录的 `格式工坊.bat` 检测到 `.venv` 时也会优先用它，但端口仍是 5000——与使用版并存时请走 `开发版.bat`；日常使用更要以使用版那份为准，若仍用本源码目录常驻 5000，开发版与它同目录，`stop` 无法按目录区分，会一起停掉。
 
 ### 可选依赖
 

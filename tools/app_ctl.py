@@ -9,10 +9,20 @@
     格式工坊.bat quiet      # 只启动，不开浏览器（开机自启用）
     格式工坊.bat stop       # 停止守护与服务
     格式工坊.bat status     # 状态自检
+    格式工坊.bat shortcut   # 桌面建带图标的快捷方式（pythonw 直启，无控制台）
+
+开发版.bat 转发到同一个 app_ctl.py，只是固定 PAPER_PORT=5001、只用 .venv 的
+解释器：源码目录配好 .venv 后与使用版（便携包/安装版，5000 端口）并存，启动、
+停止、状态互不越界（stop 按启动目录圈定进程，见 stop() 与 kill_by_cmdline.ps1）。
+
+打开页面的形态：默认优先用 Edge/Chrome 的 --app 模式弹独立窗口（无地址栏、
+任务栏有自己的图标，体感是桌面软件）；找不到这两家浏览器、或设了
+PAPER_OPEN=browser 时，回落为系统默认浏览器的标签页。
 """
 
 import http.client
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -22,6 +32,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
+
+# 快捷方式的形态是「pythonw app_ctl.py --port 5001」（开发版 shortcut 把端口写
+# 进 Arguments——explorer 拉起 lnk 时拿不到创建时的环境变量）。先把 --port 摘
+# 出来写回 PAPER_PORT，下面的 PORT/URL 与模式分发就都按它来；再从 sys.argv 删
+# 掉，免得「5001」被当成启动模式。
+_args = sys.argv[1:]
+if "--port" in _args:
+    _i = _args.index("--port")
+    if _i + 1 < len(_args):
+        os.environ["PAPER_PORT"] = _args[_i + 1]
+        sys.argv = sys.argv[:1] + _args[:_i] + _args[_i + 2:]
+
 PORT = int(os.environ.get("PAPER_PORT", "5000"))
 URL = f"http://127.0.0.1:{PORT}"
 
@@ -53,7 +75,7 @@ def spawn_keepalive():
     target = str(pyw if pyw.exists() else exe)
     flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0
     subprocess.Popen(
-        [target, str(TOOLS / "keepalive.py")],
+        [target, str(TOOLS / "keepalive.py"), "--port", str(PORT)],
         cwd=str(ROOT), close_fds=True,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=flags,
@@ -84,11 +106,105 @@ def run_ps1(name, *args):
     return run_ps1_full(name, *args)[0]
 
 
+def find_browser_exe():
+    """按常见安装位置找 Edge / Chrome，找不到返回 None。
+
+    Win10/11 必带 Edge，所以这条路几乎总走得通；which 兜住加了 PATH 的场景。
+    """
+    candidates = []
+    for env in ("ProgramFiles(x86)", "ProgramFiles", "LocalAppData"):
+        base = os.environ.get(env)
+        if not base:
+            continue
+        candidates.append(Path(base) / r"Microsoft\Edge\Application\msedge.exe")
+        candidates.append(Path(base) / r"Google\Chrome\Application\chrome.exe")
+    for p in candidates:
+        if p.is_file():
+            return str(p)
+    for name in ("msedge", "chrome"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def open_page(url=URL):
+    """优先 --app 独立窗口，回落系统默认浏览器。
+
+    --app 是无地址栏、无标签页的独立窗口，任务栏图标取自站点 favicon
+    （app.py 的 /favicon.ico → static/favicon.ico），整个像桌面软件；
+    webbrowser.open 则在现有浏览器窗口里塞一个标签页，容易被淹没。
+    PAPER_OPEN=browser 强制走标签页（调试时看地址栏、开 devtools 方便）。
+    """
+    if os.environ.get("PAPER_OPEN", "").lower() != "browser":
+        exe = find_browser_exe()
+        if exe:
+            subprocess.Popen([exe, f"--app={url}"],
+                             stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+    webbrowser.open(url)
+
+
+def _ps_quote(s):
+    """PowerShell 单引号字符串转义：内部一个 ' 写成两个。"""
+    return s.replace("'", "''")
+
+
+def shortcut():
+    """在桌面建「格式工坊」快捷方式（开发环境是「格式工坊·开发版」）。
+
+    直指 pythonw + app_ctl.py，双击无控制台闪屏（.bat 会带出一个黑窗）；
+    图标用 static/favicon.ico。桌面路径让 PowerShell 解析——桌面被 OneDrive
+    重定向的用户（%USERPROFILE%\\Desktop 不存在）只有这条路找得对。
+
+    开发环境（PAPER_PORT 不是 5000，比如经 开发版.bat 启动）lnk 名加
+    「·开发版」后缀，不覆盖使用版的同名快捷方式；端口还得写进 Arguments，
+    explorer 拉起 lnk 时拿不到创建时的环境变量，只改名字固化不了端口。
+    """
+    dev = PORT != 5000
+    name = "格式工坊·开发版.lnk" if dev else "格式工坊.lnk"
+    if (ROOT / "python" / "pythonw.exe").is_file():
+        target = str(ROOT / "python" / "pythonw.exe")   # 便携包自带解释器
+        args = f'"{ROOT / "tools" / "app_ctl.py"}"'
+    else:
+        sibling = Path(sys.executable).with_name("pythonw.exe")
+        if sibling.is_file():
+            target = str(sibling)
+            args = f'"{ROOT / "tools" / "app_ctl.py"}"'
+        else:                       # 连 pythonw 都没有：退回 .bat，带控制台但能用
+            target = str(ROOT / "格式工坊.bat")
+            args = ""
+    if dev:
+        args = f"{args} --port {PORT}"
+    icon = ROOT / "static" / "favicon.ico"
+    icon_loc = f"{icon},0" if icon.is_file() else target
+    ps = (
+        "$ws = New-Object -ComObject WScript.Shell;"
+        "$d = [Environment]::GetFolderPath('Desktop');"
+        f"$s = $ws.CreateShortcut((Join-Path $d '{_ps_quote(name)}'));"
+        f"$s.TargetPath = '{_ps_quote(target)}';"
+        f"$s.Arguments = '{_ps_quote(args)}';"
+        f"$s.WorkingDirectory = '{_ps_quote(str(ROOT))}';"
+        f"$s.IconLocation = '{_ps_quote(icon_loc)}';"
+        "$s.Save();"
+        "Write-Output ok"
+    )
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    if r.returncode == 0 and r.stdout.strip() == "ok":
+        print(f"已在桌面创建快捷方式：{name}")
+        return 0
+    print(f"快捷方式创建失败（exit {r.returncode}）：{r.stderr.strip()[:200]}")
+    return 1
+
+
 def start(open_browser=True):
     if port_alive():
         print(f"服务已在运行：{URL}")
         if open_browser:
-            webbrowser.open(URL)
+            open_page()
         return 0
 
     print("正在启动服务，请稍候……")
@@ -98,7 +214,7 @@ def start(open_browser=True):
         if port_alive():
             print(f"已启动：{URL}")
             if open_browser:
-                webbrowser.open(URL)
+                open_page()
             return 0
     print("启动失败或超时，请查看 outputs\\keepalive.log")
     return 1
@@ -190,6 +306,8 @@ def main():
         return status()
     if mode in ("quiet", "silent"):
         return start(open_browser=False)
+    if mode in ("shortcut", "快捷方式"):
+        return shortcut()
     return start(open_browser=True)
 
 
