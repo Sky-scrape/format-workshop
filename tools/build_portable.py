@@ -223,13 +223,37 @@ def write_build_info(out: Path, ver: str, py_ver: str) -> None:
     (out / "BUILD-INFO.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def working_tree_dirty() -> bool:
+    """发布纪律的机器闸门：工作区不干净就不许打包。
+
+    便携包是日常版的唯一来源，BUILD-INFO 里的 git rev 是它唯一的出处锚点
+    ——树上有未提交改动时打包，包内容就领先/偏离任何提交，锚点失真（发生过：
+    包内容对应 da78114，BUILD-INFO 却记 6261d5d）。顺序只能是：改完 → 提交 →
+    再打包。--allow-dirty 是显式逃生口，每次都要亲手打出来才会走。
+    """
+    try:
+        r = subprocess.run(["git", "status", "--porcelain"], cwd=str(ROOT),
+                           capture_output=True, text=True, timeout=30)
+    except Exception:                    # noqa: BLE001
+        return False                     # 非 git 环境（罕见）不拦，维持旧行为
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--python", default=DEFAULT_PY, help=f"embeddable 版本，默认 {DEFAULT_PY}")
     ap.add_argument("--out", default=str(ROOT / "dist"))
     ap.add_argument("--skip-deps", action="store_true", help="跳过 pip（复用已有依赖）")
     ap.add_argument("--zip", action="store_true", help="构建后打包成 zip")
+    ap.add_argument("--allow-dirty", action="store_true",
+                    help="工作区不干净时仍打包（不推荐：BUILD-INFO 的 git rev 会失真）")
     a = ap.parse_args()
+
+    # 脏树闸门放在一切破坏性操作（rmtree 旧包）之前：发布必须锚到一个提交
+    if working_tree_dirty() and not a.allow_dirty:
+        raise SystemExit(
+            "工作区有未提交改动，拒绝打包——BUILD-INFO 的 git rev 会失真。\n"
+            "先提交再构建；确要带脏树打包，用 --allow-dirty 显式放行。")
 
     # zip 名用软件版本（app.py 的 APP_VERSION），不是 --python——3.12.10 是
     # 解释器版本，放在文件名里没人知道对应软件的哪一版（D-10）
