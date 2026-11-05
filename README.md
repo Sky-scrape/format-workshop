@@ -341,6 +341,15 @@ pip install -r requirements-dev.txt
 
 三处曾经是空白，现在补上了：审计条目带**机器可读的规则引用**（`typography.body.size_pt` 这种，可解析回规则集）、**正文套版**逐条进报告、**推定项**在报告里自报家门。每一条都有用例守着，防止回退。
 
+## 发布
+
+正式版只从 GitHub Releases 下发，改动只进开发版源码树；本地重建 dist 仅用于测试打包：
+
+1. 开发版改完 → 全量测试全绿 → 提交 → 推送；
+2. `py -3 tools/release.py` —— 构建 `dist/格式工坊-<版本>.zip` 与 `dist/格式工坊-setup-<版本>.exe`。工作区不干净会被拒绝（产物必须锚定已提交状态，包内 BUILD-INFO 记录精确 git rev）；构建完只打印产物，**不会外发**；
+3. `py -3 tools/release.py --upload` —— 构建并上传 Release（tag `v<版本>`，发布说明自动取上个 tag 以来的提交）。上传前会核对本地 HEAD 与远端一致——没推送就没有发布；
+4. 新版本 = 从 GitHub Releases 下载安装，开发者自己的机器也走这条路径。
+
 ---
 
 ## 期刊规则库与开源边界
