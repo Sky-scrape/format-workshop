@@ -55,3 +55,14 @@ def test_source_pins():
     assert "upstream_synced()" in src
     assert "working_tree_dirty()" in src
     assert src.count("shell=False") >= 6
+
+
+def test_upload_stages_ascii_asset_names():
+    """GitHub 资产名剥非 ASCII（v1.0.0 首发把「格式工坊-1.0.0.zip」剥成了
+    「-1.0.0.zip」）：上传前必须先拷成 format-workshop-<ver> ASCII 名。"""
+    src = (TOOLS / "release.py").read_text(encoding="utf-8")
+    assert '"format-workshop-" + ver + ".zip"' in src
+    assert '"format-workshop-setup-" + ver + ".exe"' in src
+    assert "shutil.copy2(zip_path, up_zip)" in src
+    assert "#格式工坊 " in src        # 中文留在显示标签
+    assert "shutil.rmtree(stage" in src  # 暂存目录用完即清

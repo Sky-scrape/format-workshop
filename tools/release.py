@@ -15,6 +15,7 @@ r"""发布链：构建产物 →（显式）上传 GitHub Releases。正式版�
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -113,11 +114,25 @@ def main():
             "的提交上，先 push 再 --upload。")
     tag = "v" + ver
     notes = release_notes(last_tag())
-    print("→ 上传 " + tag + "（github.com/Sky-scrape/format-workshop）")
-    r = subprocess.run(["gh", "release", "create", tag, str(zip_path), str(setup_path),
-                        "--title", "格式工坊 " + ver, "--notes", notes,
-                        "--target", head_sha],
-                       cwd=str(ROOT), shell=False)
+    # GitHub 资产名不含非 ASCII 字符：中文文件名上传会被剥成 "-1.0.0.zip"
+    # （v1.0.0 首发实际发生过，靠 API 事后改名救回）。上传前把产物拷成
+    # ASCII 名（与仓库名 format-workshop 一致），中文留在 # 显示标签里。
+    stage = ROOT / "dist" / "upload"
+    stage.mkdir(exist_ok=True)
+    up_zip = stage / ("format-workshop-" + ver + ".zip")
+    up_setup = stage / ("format-workshop-setup-" + ver + ".exe")
+    try:
+        shutil.copy2(zip_path, up_zip)
+        shutil.copy2(setup_path, up_setup)
+        print("→ 上传 " + tag + "（github.com/Sky-scrape/format-workshop）")
+        r = subprocess.run(["gh", "release", "create", tag,
+                            str(up_zip) + "#格式工坊 " + ver + " 绿色免安装包",
+                            str(up_setup) + "#格式工坊 " + ver + " 安装包",
+                            "--title", "格式工坊 " + ver, "--notes", notes,
+                            "--target", head_sha],
+                           cwd=str(ROOT), shell=False)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
     if r.returncode != 0:
         raise SystemExit("gh release create 失败（exit " + str(r.returncode) + "）")
     print("已发布：https://github.com/Sky-scrape/format-workshop/releases/tag/" + tag)
