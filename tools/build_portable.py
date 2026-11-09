@@ -54,7 +54,8 @@ EXCLUDE_TOP = {
 EXCLUDE_DIRS = {"__pycache__", ".git", ".pytest_cache", ".idea", ".vscode"}
 # 单个文件级别排除：ai.json 里可能有 API key，开发依赖与 CI 配置也用不上；
 # 开发版.bat 只在源码目录有意义（便携包没有 .venv，开发版判据也判不成）
-EXCLUDE_FILES = {"config/ai.json", "pytest.ini", "requirements-dev.txt",
+EXCLUDE_FILES = {"config/ai.json", "config/window.json", "config/close.json",
+                 "config/tray-hint.flag", "pytest.ini", "requirements-dev.txt",
                  ".gitignore", ".gitattributes", "开发版.bat"}
 EXCLUDE_SUFFIX = {".pyc", ".pyo", ".log", ".tmp", ".bak", ".swp"}
 

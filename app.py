@@ -58,15 +58,27 @@ if sys.stderr is None:
 
 ROOT = Path(__file__).resolve().parent
 PY = sys.executable
+
+sys.path.insert(0, str(ROOT / "tools"))
+import app_paths        # noqa: E402  可写数据目录（只读安装时回退到用户目录）
+
+# 程序目录可写（绿色包/开发版）时数据仍留在程序目录；装到 Program Files
+# 这类只读位置时回退到 %LOCALAPPDATA%\格式工坊，普通用户也能跑。
+def data_root():
+    """跟随 ROOT 动态解析：测试会 monkeypatch ROOT，不能钉死在 import 时。"""
+    return app_paths.data_root(ROOT)
+
+
+DATA_ROOT = data_root()
+
 RULES_DIR = ROOT / "rules" / "journal"
 DRAFT_DIR = RULES_DIR / "_drafts"
-WORK = ROOT / "outputs" / "web"
+WORK = DATA_ROOT / "outputs" / "web"
 JOB_RE = re.compile(r"^[0-9a-f]{12}$")
 JID_RE = re.compile(r"^[a-z0-9_]{2,24}$")
 JOB_TTL = 24 * 3600
 STEP_TIMEOUT = 300
 
-sys.path.insert(0, str(ROOT / "tools"))
 import ai_assist        # noqa: E402  AI 配置与调用
 import atomic_io        # noqa: E402  原子写（小配置文件）
 import docx_meta        # noqa: E402  DOCX 元数据隐私闸门
@@ -1180,7 +1192,7 @@ def journals():
                            drafts=draft_list())
 
 
-APP_VERSION = "1.0.0"       # 版本真源：构建脚本经 tools/app_version.py 解析这里（D-10）
+APP_VERSION = "1.0.1"       # 版本真源：构建脚本经 tools/app_version.py 解析这里（D-10）
 
 
 @app.route("/healthz")
@@ -1249,7 +1261,7 @@ def settings():
             success = "已保存。改动下一次转换即可生效。"
     cfg = ai_assist.load_config()
     try:
-        shell_cfg = json.loads((ROOT / "config" / "close.json").read_text(encoding="utf-8"))
+        shell_cfg = json.loads((data_root() / "config" / "close.json").read_text(encoding="utf-8"))
     except Exception:
         shell_cfg = {}
     return render_template("settings.html", cfg=cfg, error=error, success=success,
@@ -1264,7 +1276,7 @@ def settings_shell():
     action = request.form.get("close_action", "exit")
     # 原子写：进程被硬杀不留半截 JSON（读侧 read_json_safe 本就按半截兜底）
     atomic_io.write_text(
-        ROOT / "config" / "close.json",
+        data_root() / "config" / "close.json",
         json.dumps({"action": "tray" if action == "tray" else "exit"}))
     return redirect(url_for("settings", shell_saved=1))
 
@@ -2461,7 +2473,7 @@ def setup_logging(name="server.log"):
     desktop.log——两个进程各持一个 RotatingFileHandler 写同一文件时，
     轮转 rename 在 Windows 上会互相踩（WinError 32）。
     """
-    path = ROOT / "outputs" / name
+    path = data_root() / "outputs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -2530,7 +2542,7 @@ def install_lifecycle_hooks(log):
     import faulthandler
     import signal
 
-    crash = ROOT / "outputs" / "crash.log"
+    crash = data_root() / "outputs" / "crash.log"
     crash.parent.mkdir(parents=True, exist_ok=True)
     # 必须持有文件引用，否则被 GC 后 faulthandler 写不进去
     fh = crash.open("a", encoding="utf-8", buffering=1)
@@ -2600,7 +2612,7 @@ if __name__ == "__main__":
             if port_in_use(args.port):
                 print(f"已在后台启动，窗口可以关闭：{url}")
                 raise SystemExit(0)
-        print("后台启动失败：端口没有起来，请查看 outputs/server.log")
+        print(f"后台启动失败：端口没有起来，请查看 {data_root() / 'outputs' / 'server.log'}")
         raise SystemExit(1)
 
     if port_in_use(args.port):
@@ -2609,10 +2621,10 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     log = init_app()
-    log_path = ROOT / "outputs" / "server.log"
+    log_path = data_root() / "outputs" / "server.log"
     app.logger.info(f"服务启动 {url} pid={os.getpid()} 日志={log_path.name}")
     print("格式工坊 · 本地服务已启动 → " + url)
-    print(f"日志文件：{log_path.relative_to(ROOT)}（超过 1 MB 自动轮转）")
+    print(f"日志文件：{log_path}（超过 1 MB 自动轮转）")
     print("关闭这个窗口即可停止服务；或在浏览器里按 Ctrl+C。")
     if not args.no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()

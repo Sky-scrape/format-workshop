@@ -134,7 +134,9 @@ python tools/build_journal.py rules/journal/{id}.json
 
 ## 快速开始
 
-需要 Python 3.10+。
+**只想装上用**：直接看 [使用说明.md](使用说明.md)——安装、首次启动、三步转换、文件在哪、升级/卸载与常见问题都在那一页。
+
+想从源码跑：需要 Python 3.10+。
 
 ```bash
 pip install -r requirements.txt
@@ -169,7 +171,7 @@ python tools/build_portable.py            # 先产出绿色包
 python tools/build_installer.py           # 再打成 dist\格式工坊-setup-<版本>.exe
 ```
 
-需要机器上有 Inno Setup（自动探测盘符根的 `Inno Setup 6/7` 目录与 Program Files，找不到就用 `--iscc` 指路）。安装包为中文向导：可选「给所有用户 / 仅当前用户」（机房无管理员权限也能装）、建开始菜单与桌面快捷方式、升级前自动停旧服务；卸载会带走全部程序文件，但保留 `outputs\` 里的稿件与日志。
+需要机器上有 Inno Setup（自动探测盘符根的 `Inno Setup 6/7` 目录与 Program Files，找不到就用 `--iscc` 指路）。安装包为中文向导：**默认装给当前用户**（`%LocalAppData%\Programs\格式工坊`，不需要管理员权限），需要给本机所有用户安装时用 `setup.exe /ALLUSERS`。程序目录不可写时（例如手动装进 Program Files），任务、日志与配置会自动回退到 `%LocalAppData%\格式工坊`。卸载会带走全部程序文件，但保留 `outputs\` 里的稿件与日志。
 
 ### 源码开发：与使用版并存
 
@@ -185,7 +187,7 @@ python tools/build_installer.py           # 再打成 dist\格式工坊-setup-<�
 
   之后开发一律双击根目录的 `开发版.bat`：弹出的是**原生桌面窗口**（`desktop.py`，pywebview 借 WebView2 画壳），不再开浏览器；页面由进程内引擎直接应答，**不监听端口、不起后台服务**，关窗即退。`stop` / `status` / `shortcut` 等子命令与 `格式工坊.bat` 同一套（`stop` / `status` 只针对浏览器服务模式）。跑测试：`.venv\Scripts\python -m pytest`。
 
-隔离靠解释器与工作目录：便携包用自带的 `python\`、开发版用源码 `.venv\`，两边的 `outputs\` 各在各的目录里；桌面壳不占端口，两个版本可以同时打开、互不冲突。只有显式跑 `python app.py` 的浏览器服务模式才需要 5000/5001 端口区分。
+隔离靠解释器与工作目录：便携包用自带的 `python\`、开发版用源码 `.venv\`，两边的 `outputs\` 各在各的目录里（程序目录只读时回退到 `%LocalAppData%\格式工坊`）；桌面壳不占端口，两个版本可以同时打开、互不冲突。只有显式跑 `python app.py` 的浏览器服务模式才需要 5000/5001 端口区分。
 
 ### 可选依赖
 

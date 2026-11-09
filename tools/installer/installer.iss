@@ -8,7 +8,7 @@
 ; 放在本目录随仓库走，构建机不需要另装语言包（Inno 7 自带的官方中文包也行）。
 
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #endif
 
 [Setup]
@@ -17,6 +17,12 @@ AppId={{A38A8939-8EB1-4A1F-9C31-61D0A9898B4C}
 AppName=格式工坊
 AppVersion={#MyAppVersion}
 AppVerName=格式工坊 {#MyAppVersion}
+; 默认只装当前用户（PrivilegesRequired=lowest，不弹 UAC）：{autopf} 在非
+; 提权模式下解析为 %LocalAppData%\Programs，目录可写；程序把任务、日志与
+; 配置写在安装目录，Program Files 对普通用户不可写（曾导致装完全部用户
+; 后普通双击启动失败）。需要给所有用户安装可显式传 /ALLUSERS，此时
+; {autopf} 落 Program Files，数据目录自动回退到 %LOCALAPPDATA%\格式工坊
+; （见 tools/app_paths.py），两种装法都能跑。
 DefaultDirName={autopf}\格式工坊
 DefaultGroupName=格式工坊
 UninstallDisplayName=格式工坊
@@ -29,9 +35,8 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 DisableProgramGroupPage=yes
-; 允许装给所有用户（Program Files）或仅当前用户（%LocalAppData%\Programs）：
-; 机房/公用机没有管理员权限的学生也能装。{autopf} 会按选择自动落对位置
-PrivilegesRequiredOverridesAllowed=commandline dialog
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=commandline
 
 [Languages]
 Name: "chinese"; MessagesFile: "ChineseSimplified.isl"

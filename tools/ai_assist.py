@@ -32,6 +32,7 @@
 import ipaddress
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -39,7 +40,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = ROOT / "config" / "ai.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app_paths        # noqa: E402  只读安装时把配置落到用户目录
+
+CONFIG_PATH = app_paths.data_root(ROOT) / "config" / "ai.json"
 # 环境变量统一前缀：PAPER_AI_<SUFFIX>
 _ENV_PREFIX = "PAPER_AI_"
 

@@ -1,0 +1,94 @@
+name: 问题反馈
+description: 转换、启动、安装或规则内容有问题时，用这个表单
+title: "[问题] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先谢谢你把问题写清楚。没有日志的问题通常很难定位，请尽量带上 `outputs\desktop.log` 或 `outputs\server.log` 的末尾几十行。
+        安装与首次启动的问题，先看 [使用说明](https://github.com/Sky-scrape/format-workshop/blob/main/使用说明.md)。
+
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本
+      description: 安装目录下 BUILD-INFO.txt 里的“软件版本”和 git 版本
+      placeholder: "例如 1.0.0 / bdb3d88"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式
+      options:
+        - 安装版（setup.exe）
+        - 绿色包（zip）
+        - 源码运行（python app.py / 开发版.bat）
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: "例如 Windows 11 23H2 / Windows 10 22H2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你期望的结果 vs 实际看到的结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 上传 xx.docx
+        2. 选择 xx 期刊
+        3. 点击开始转换
+        4. 看到...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: outputs\desktop.log 或 outputs\server.log 的末尾几十行（先检查有没有 API Key、论文全文等敏感内容）
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: ai
+    attributes:
+      label: 是否启用了 AI 辅助
+      options:
+        - 未启用（默认）
+        - 已启用
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: journal
+    attributes:
+      label: 目标期刊 / 稿件类型
+      placeholder: "例如 财经研究 / 中文实证论文；留空表示与期刊无关"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 我已检查日志与附件，其中不含未发表论文全文、API Key 等敏感内容
+          required: true

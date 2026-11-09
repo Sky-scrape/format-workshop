@@ -16,7 +16,10 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LOG = ROOT / "outputs" / "watch.log"
+sys.path.insert(0, str(ROOT / "tools"))
+import app_paths        # noqa: E402  只读安装时日志落用户目录
+
+LOG = app_paths.data_root(ROOT) / "outputs" / "watch.log"
 
 
 def probe(port, timeout=0.5):

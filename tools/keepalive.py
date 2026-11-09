@@ -20,8 +20,11 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+import app_paths        # noqa: E402  只读安装时日志落用户目录
+
 APP = ROOT / "app.py"
-LOG = ROOT / "outputs" / "keepalive.log"
+LOG = app_paths.data_root(ROOT) / "outputs" / "keepalive.log"
 
 
 def log(msg):

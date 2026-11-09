@@ -262,7 +262,7 @@ body.has-statusbar .home-shell,body.has-statusbar .workspace-shell{height:calc(1
   <div class="dialog-body"><p>解析、排版、审计与报告生成仍在本地完成。但你启用了 AI 辅助，因此部分内容会发送到你配置的模型服务。</p><div class="help-step"><b>A</b><div><strong>发出去的是结构判定的片段</strong><p>{% if ai_send_mode == 'full' %}当前设为「发全文」：待判定的段落会整段发出。{% else %}当前设为「只发片段」：每个待判定段落只发首尾片段，不发全文。{% endif %}改动这个范围在「设置」里。</p></div></div><div class="help-step"><b>B</b><div><strong>正文文字不会被改写</strong><p>AI 只回答「这段是什么」，不产出任何正文。转换前后做文本指纹比对，不一致则整批作废。</p></div></div><div class="help-step"><b>C</b><div><strong>想彻底不出网</strong><p>到「设置」关掉 AI，或把它指向本机的 Ollama，全站即按纯规则运行。</p></div></div></div>
   {% else %}
   <div class="dialog-head"><h2>你的稿件，留在本机</h2><button class="dialog-close" type="button" data-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
-  <div class="dialog-body"><p>上传、解析、格式转换与报告生成均由本地程序完成，不会将论文发送到第三方服务器。</p><div class="help-step"><b>A</b><div><strong>本地文件处理</strong><p>原稿与生成文件仅保存在当前项目的 outputs/web 工作目录。</p></div></div><div class="help-step"><b>B</b><div><strong>内容边界明确</strong><p>正文和表格字词不做改写，允许的规范化改动全部进入审计报告。</p></div></div></div>
+  <div class="dialog-body"><p>上传、解析、格式转换与报告生成均由本地程序完成，不会将论文发送到第三方服务器。</p><div class="help-step"><b>A</b><div><strong>本地文件处理</strong><p>原稿与生成文件仅保存在本机的 outputs/web 工作目录（安装目录不可写时在 %LocalAppData%\格式工坊）。</p></div></div><div class="help-step"><b>B</b><div><strong>内容边界明确</strong><p>正文和表格字词不做改写，允许的规范化改动全部进入审计报告。</p></div></div></div>
   {% endif %}
 </dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

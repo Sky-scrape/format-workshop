@@ -2,7 +2,7 @@ r"""把 dist/格式工坊 打成 setup.exe 安装包（Inno Setup 6 + tools/inst
 
 前置
 ----
-    python tools/build_portable.py     # 先有绿色包，安装包就是把它铺进 Program Files
+    python tools/build_portable.py     # 先有绿色包，安装包就是把它铺进用户目录
 
 ISCC 从哪找：--iscc 参数 → 环境变量 INNO_SETUP → %LocalAppData%\Programs\Inno Setup 6
 （官方安装器 /CURRENTUSER 的默认落点，不需要管理员）→ Program Files 两处。

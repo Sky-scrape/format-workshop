@@ -40,6 +40,14 @@ import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+import app_paths        # noqa: E402  只读安装时日志落用户目录
+
+def data_root():
+    """跟随 ROOT 动态解析：测试会 monkeypatch ROOT，不能钉死在 import 时。"""
+    return app_paths.data_root(ROOT)
+
+
 TOOLS = ROOT / "tools"
 
 # 旧版快捷方式（开发版 lnk 曾把端口写进 Arguments：「pythonw app_ctl.py
@@ -470,7 +478,7 @@ def status():
     # 壳与守护、服务同为 status 的一等公民（D-04），它的故障留痕
     # （outputs/desktop.log）也要进状态自检，不然壳的异常无处可见（评审⑥）
     for name in ("keepalive.log", "server.log", "desktop.log"):
-        p = ROOT / "outputs" / name
+        p = data_root() / "outputs" / name
         if not p.exists():
             continue
         tail = p.read_text(encoding="utf-8", errors="replace").splitlines()[-3:]

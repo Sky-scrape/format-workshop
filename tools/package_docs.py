@@ -1,14 +1,14 @@
 """分发包根目录允许携带的文档白名单（D-08）。
 
 AGPL 包必须带 LICENSE 与项目文档，但根目录散落的内部材料不随包外流——
-实测报告引用私有稿件（训练论文/…）与本机完整规则库规模（23 本），两者
-都是仓库刻意不公开的素材（.gitignore 的排除理由）。build_portable 复制时
-按此白名单过滤根目录 *.md，build_installer 对旧构建残留的 dist 再清一遍。
+实测报告引用私有稿件（训练论文/…）与本机完整规则库规模，两者都是仓库
+刻意不公开的素材（.gitignore 的排除理由）。build_portable 复制时按此
+白名单过滤根目录 *.md，build_installer 对旧构建残留的 dist 再清一遍。
 """
 
 from pathlib import Path
 
-ROOT_DOC_WHITELIST = {"README.md", "DESIGN.md", "CONTRIBUTING.md"}
+ROOT_DOC_WHITELIST = {"README.md", "DESIGN.md", "CONTRIBUTING.md", "使用说明.md"}
 
 
 def is_private_doc(rel_parts, name):

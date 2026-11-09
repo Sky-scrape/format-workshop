@@ -33,12 +33,19 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
+import app_paths        # noqa: E402  只读安装时把窗口状态/日志落到用户目录
+
 # 站内页面的虚拟主机：请求不出进程，由下面的 WSGI 桥直接应答。不带端口，
 # 页面里的相对链接、重定向与 request.host 都按 http://127.0.0.1 走。
 LOCAL_URL = "http://127.0.0.1"
 LOCAL_HOST = "127.0.0.1"
 
-CFG = ROOT / "config" / "window.json"
+def data_root():
+    """跟随 ROOT 动态解析：测试会 monkeypatch ROOT，不能钉死在 import 时。"""
+    return app_paths.data_root(ROOT)
+
+
+CFG = data_root() / "config" / "window.json"
 
 
 # ---------------------------------------------------------------- 壳侧日志
@@ -50,8 +57,8 @@ def log_line(text):
     静默（D-02）。FAIL 页让用户来查这个文件，它必须真的有内容。
     """
     try:
-        (ROOT / "outputs").mkdir(parents=True, exist_ok=True)
-        with (ROOT / "outputs" / "desktop.log").open("a", encoding="utf-8") as f:
+        (data_root() / "outputs").mkdir(parents=True, exist_ok=True)
+        with (data_root() / "outputs" / "desktop.log").open("a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}\n")
     except Exception:                    # noqa: BLE001
         pass
@@ -76,7 +83,7 @@ def close_action():
     已随死代码一并删除。
     """
     try:
-        d = json.loads((ROOT / "config" / "close.json").read_text(encoding="utf-8"))
+        d = json.loads((data_root() / "config" / "close.json").read_text(encoding="utf-8"))
         return "tray" if d.get("action") == "tray" else "exit"
     except Exception:                # noqa: BLE001
         return "exit"
@@ -679,7 +686,7 @@ class ShellBridge:
         （setup_logging 在 engine() 里），import 阶段失败时按旧文案去找
         server.log 是扑空——干脆打开整个 outputs 文件夹（D-13）。
         """
-        out = ROOT / "outputs"
+        out = data_root() / "outputs"
         try:
             out.mkdir(parents=True, exist_ok=True)
             if os.name != "nt":
@@ -709,7 +716,7 @@ FAIL = ("<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
         "<h2 style='color:#18332e;margin:0 0 10px'>软件启动失败</h2>"
         "<p style='color:#52655f;font-size:14px;line-height:1.9;margin:0 0 22px'>"
         "内置引擎没能启动。请点击重试；若反复出现，点下面第二个按钮打开 "
-        "outputs 文件夹，把里面的日志发给我们。</p>"
+        "outputs 文件夹，把里面的日志发到 GitHub Issues（地址见使用说明.md）。</p>"
         "<div style='display:flex;gap:10px'>"
         "<button id='retry' style='border:0;background:#176b57;color:#fff;"
         "border-radius:9px;padding:10px 22px;font-size:14px;cursor:pointer'>重试</button>"
@@ -730,7 +737,7 @@ FAIL = ("<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
         "n.style.display='block'})});"
         "document.getElementById('openLogs').addEventListener('click',function(){"
         "api('open_outputs').catch(function(){var n=document.getElementById('note');"
-        "n.textContent='打不开文件夹：请手动到软件目录下找 outputs';"
+        "n.textContent='打不开文件夹：请手动到数据目录找 outputs（只读安装时在 %LocalAppData%\\\\格式工坊）';"
         "n.style.display='block'})});"
         "</script>"
         "</body></html>")
@@ -836,7 +843,7 @@ class Tray:
         此后永不补发气泡（D-11 实核的失败面）。没有 icon 时不写 flag——
         下次藏进托盘（托盘就绪后）再补。
         """
-        flag = ROOT / "config" / "tray-hint.flag"
+        flag = data_root() / "config" / "tray-hint.flag"
         if flag.exists() or not self.icon:
             return
         try:

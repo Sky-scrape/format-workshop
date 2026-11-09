@@ -18,9 +18,9 @@ import build_portable
 
 
 def test_the_internal_report_is_excluded():
-    """实测报告按私有文档处理；三份项目文档照常进包。"""
+    """实测报告按私有文档处理；项目文档照常进包。"""
     assert is_private_doc(("测试报告-2026-11-01.md",), "测试报告-2026-11-01.md")
-    for name in ("README.md", "DESIGN.md", "CONTRIBUTING.md"):
+    for name in ("README.md", "DESIGN.md", "CONTRIBUTING.md", "使用说明.md"):
         assert not is_private_doc((name,), name), f"{name} 是项目文档，要进包"
 
 
@@ -41,7 +41,7 @@ def test_strip_private_docs_cleans_stale_dists(tmp_path):
     """旧构建残留的包：散落的私有 md 删掉，白名单与子目录不动。"""
     portable = tmp_path / "格式工坊"
     (portable / "rules").mkdir(parents=True)
-    for name in ("README.md", "DESIGN.md", "CONTRIBUTING.md",
+    for name in ("README.md", "DESIGN.md", "CONTRIBUTING.md", "使用说明.md",
                  "测试报告-2026-11-01.md"):
         (portable / name).write_text("x", encoding="utf-8")
     (portable / "rules" / "notes.md").write_text("keep", encoding="utf-8")
