@@ -50,7 +50,7 @@ def run_info(rpr):
 def analyze(path):
     z = zipfile.ZipFile(path)
     names = z.namelist()
-    doc = xmlsafe.fromstring(z.read("word/document.xml"))
+    doc = xmlsafe.fromstring(xmlsafe.read_part(z, "word/document.xml"))
     body = doc.find(q("body"))
 
     paras = list(body.iter(q("p")))
@@ -58,7 +58,7 @@ def analyze(path):
 
     style_of = {}
     try:
-        sty = xmlsafe.fromstring(z.read("word/styles.xml"))
+        sty = xmlsafe.fromstring(xmlsafe.read_part(z, "word/styles.xml"))
         for s in sty.findall(q("style")):
             sid = s.get(q("styleId"))
             nm = s.find(q("name"))
@@ -173,7 +173,7 @@ def analyze(path):
     # 脚注尾注
     for f in ("word/footnotes.xml", "word/endnotes.xml"):
         if f in names:
-            root = xmlsafe.fromstring(z.read(f))
+            root = xmlsafe.fromstring(xmlsafe.read_part(z, f))
             items = [x for x in root if x.tag in (q("footnote"), q("endnote"))]
             real = [x for x in items if x.get(q("type")) in (None, "normal")]
             print(f"\n-- {f}: 共 {len(real)} 条")

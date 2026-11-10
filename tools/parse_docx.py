@@ -138,13 +138,17 @@ def para_text(p):
     """
     parts = []
 
-    def walk(node):
+    def walk(node, depth=1):
+        if depth > XML_MAX_DEPTH:
+            # DEPTHCAP：parse() 入口已先整树把关，正常到不了这里；
+            # 兜住绕过入口直接拿深树调本函数的路径（F2-2）
+            raise ValueError(f"段落 XML 嵌套超过 {XML_MAX_DEPTH} 层，疑似异常文档，已拒收")
         for child in node:
             if child.tag == W + "txbxContent":
                 continue
             if child.tag == W + "t":
                 parts.append(child.text or "")
-            walk(child)
+            walk(child, depth + 1)
 
     walk(p)
     return "".join(parts).strip()
@@ -202,7 +206,10 @@ def scan_fields(p):
     out = []
     stack = []  # 每层：{"instr": [...], "result": [...], "phase": "instr"|"result"}
 
-    def walk(node):
+    def walk(node, depth=1):
+        if depth > XML_MAX_DEPTH:
+            # DEPTHCAP：与 para_text 同口径（F2-2），入口闸之外的兜底
+            raise ValueError(f"段落 XML 嵌套超过 {XML_MAX_DEPTH} 层，疑似异常文档，已拒收")
         for child in node:
             tag = child.tag
             if tag == W + "txbxContent":
@@ -224,7 +231,7 @@ def scan_fields(p):
                 stack[-1]["instr"].append(child.text or "")
             elif tag == W + "t" and stack and stack[-1]["phase"] == "result":
                 stack[-1]["result"].append(child.text or "")
-            walk(child)
+            walk(child, depth + 1)
 
     walk(p)
     return out
@@ -454,6 +461,15 @@ def has_drawing(p):
 SDT_MAX_DEPTH = 8
 
 
+# XML 嵌套深度上限（DEPTHCAP）：para_text / scan_fields 的子树递归没有
+# SDTCAP 那样的下钻限制（F2-2），普通段落里 2000 层嵌套的 w:r 链会把
+# Python 递归打穿 RecursionError——解析器整篇崩掉。真实文档的段落/单元格
+# 子树（嵌套表格、文本框、多层 OMML 公式）远到不了这个数：两个 walk 各自
+# 带同口径深度计数，超限拒收。整树级不限——sdt 链的深度由 SDTCAP 单独
+# 管（超深内容控件计数进 unsupported，对象原样保留），文档其余部分照常解析。
+XML_MAX_DEPTH = 100
+
+
 def _sdt_blocks(content, depth=1):
     """sdtContent 递归下钻：返回（可处理块元素列表, 未识别叶节点数）。
 
@@ -635,7 +651,7 @@ def apply_ai(blocks, cfg, log=None):
 
 def parse(path, ai_cfg=None):
     z = zipfile.ZipFile(path)
-    doc = xmlsafe.fromstring(z.read("word/document.xml"))
+    doc = xmlsafe.fromstring(xmlsafe.read_part(z, "word/document.xml"))
     body = doc.find(W + "body")
 
     blocks = []
