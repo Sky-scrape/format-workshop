@@ -26,7 +26,15 @@ start "" "%PYW%" "%~dp0desktop.py"
 exit /b 0
 
 :forward
+rem app_ctl reports (stop / status / shortcut) go to stdout, and pythonw has
+rem no console -- sys.stdout/stderr are None there, so every print is dropped
+rem and the user only sees a silent window. Forward with the console python;
+rem only the no-argument shell launch keeps pythonw (double-click must not
+rem flash a console window).
+set "PYC=%PYW:pythonw.exe=python.exe%"
+if "%PYC%"=="pythonw" set "PYC=python"
+if not exist "%PYC%" set "PYC=%PYW%"
 rem Quotes matter: the portable package may sit in a path with spaces
-rem ("C:\Program Files\..."), and an unquoted %PYW% would split there.
-"%PYW%" "tools\app_ctl.py" %*
+rem ("C:\Program Files\..."), and an unquoted %PYC% would split there.
+"%PYC%" "tools\app_ctl.py" %*
 if errorlevel 1 pause

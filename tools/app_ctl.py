@@ -62,8 +62,36 @@ if "--port" in _args:
         os.environ["PAPER_PORT"] = _args[_i + 1]
         sys.argv = sys.argv[:1] + _args[:_i] + _args[_i + 2:]
 
-PORT = int(os.environ.get("PAPER_PORT", "5000"))
+PORT_BAD = False
+
+
+def _port_from_env():
+    """PAPER_PORT 解析：非数字坏值回落默认端口 5000，不炸入口。
+
+    模块级裸 int() 曾让 import 期直接 ValueError——经 bat+pythonw 转发时
+    traceback 无处显示，stop/status/start/shortcut 整个入口静默失效；旧
+    快捷方式把「--port <值>」写回 PAPER_PORT（上面 _args 分支）同样撞这里。
+    坏值在 status/start 里补一句提示（_port_note）。
+    """
+    global PORT_BAD
+    raw = os.environ.get("PAPER_PORT", "")
+    try:
+        return int(raw)
+    except ValueError:
+        PORT_BAD = True
+        return 5000
+
+
+PORT = _port_from_env()
 URL = f"http://127.0.0.1:{PORT}"
+
+
+def _port_note():
+    """PAPER_PORT 坏值的一句提示；端口正常返回 None（不提示）。"""
+    if not PORT_BAD:
+        return None
+    return (f"PAPER_PORT={os.environ.get('PAPER_PORT', '')} 不是数字，"
+            f"已回落默认端口 {PORT}")
 
 # 子进程一律不弹控制台：桌面壳的收尾（停服）经无窗进程调到这里，powershell/
 # netstat/taskkill 都是 console 程序，不加 CREATE_NO_WINDOW 每次都闪黑窗。
@@ -320,6 +348,9 @@ def shortcut():
 
 
 def start(open_browser=True):
+    note = _port_note()
+    if note:
+        print(note)
     if port_alive():
         # 不能只看 TCP connect 成功就认自家服务：别的程序占了 5000 时，把用户
         # 领去看陌生页面等于冒名。身份核验两道（D-06）：先问 /healthz 的身份
@@ -437,6 +468,9 @@ def status():
     print("=" * 46)
     print("  格式工坊 · 状态")
     print("=" * 46)
+    note = _port_note()
+    if note:
+        print(note)
     pids = sorted(listener_pids(wildcard=True))
     if not pids:
         print(f"\n[1] 端口 {PORT}：无进程监听（浏览器服务未运行）")
@@ -449,8 +483,11 @@ def status():
             note += f"；非 python 占用者：{'、'.join(foreign)}——不是本软件的形态"
         print(f"\n[1] 端口 {PORT}：{note}")
     print("\n[2] 守护、服务与桌面壳进程：")
-    # ps1 只输出 pid|role|parent，中文在这里组装，避免 PowerShell 输出编码不一致
-    rows = [ln.strip() for ln in run_ps1("proc_report.ps1").splitlines() if ln.count("|") == 2]
+    # ps1 只输出 pid|role|parent，中文在这里组装，避免 PowerShell 输出编码不一致。
+    # -Root 圈定与 stop 的 kill_by_cmdline 同款（F48）：别家项目同名的
+    # python 进程（app.py/keepalive/desktop.py）不许被报成本软件的。
+    rows = [ln.strip() for ln in run_ps1("proc_report.ps1", "-Root",
+            str(ROOT)).splitlines() if ln.count("|") == 2]
     if not rows:
         print("     （无）")
     for row in rows:
@@ -473,7 +510,10 @@ def status():
             label = "服务"
         print(f"     pid={pid}  {label}  {note}")
     code = http_ok()
-    print("\n[3] HTTP 探测：", f"HTTP {code}  OK" if code else "FAILED - 无法连接")
+    # 只有 200 缀 OK：端口被别的 HTTP 服务占着回 404 时，「HTTP 404  OK」
+    # 与上面 [1] 的占用者报告同屏自相矛盾
+    print("\n[3] HTTP 探测：", f"HTTP {code}  OK" if code == 200 else
+          (f"HTTP {code}" if code else "FAILED - 无法连接"))
     print("\n[4] 最近日志：")
     # 壳与守护、服务同为 status 的一等公民（D-04），它的故障留痕
     # （outputs/desktop.log）也要进状态自检，不然壳的异常无处可见（评审⑥）

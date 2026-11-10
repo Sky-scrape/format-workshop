@@ -6,8 +6,18 @@
 #     file data-only avoids encoding mismatches between PowerShell stdout and
 #     Python.
 
+param(
+    [Parameter(Mandatory = $true)][string]$Root
+)
+
+# -Root scopes the report to this project, same rule as kill_by_cmdline.ps1
+# (F48): another project's python processes carrying the same keywords
+# (app.py / keepalive / desktop.py) used to be reported as ours.
+$rootPath = $Root.TrimEnd('\')
 $procs = @(Get-CimInstance Win32_Process | Where-Object {
-    $_.Name -match '^(python|pythonw)\.exe$' -and $_.CommandLine -match 'app\.py|keepalive|desktop\.py'
+    $_.Name -match '^(python|pythonw)\.exe$' -and $_.CommandLine -and
+    $_.CommandLine -match 'app\.py|keepalive|desktop\.py' -and
+    $_.CommandLine.IndexOf($rootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 })
 
 foreach ($p in $procs) {

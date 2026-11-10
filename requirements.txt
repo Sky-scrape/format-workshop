@@ -9,6 +9,9 @@ PyMuPDF>=1.24,<2
 # 桌面壳（desktop.py）：pywebview 借 WebView2（Win10/11 自带）画原生窗口，
 # 使用版与开发版的双击入口都走它；Windows 后端连带装 pythonnet。
 # pystray+Pillow 给关窗后的托盘常驻（可见性 + 一键停服）
-pywebview>=5
+# 上限是硬性的：SAVE_DIALOG 的返回形状按大版本分叉（5.x 返回 str，6.x
+# 返回 1-元组，另存为曾因契约错位全废）；save_as 已两种都兼容，7.x 形状
+# 未知，锁死在大版本内再评估。
+pywebview>=5,<7
 pystray>=0.19
 Pillow>=10

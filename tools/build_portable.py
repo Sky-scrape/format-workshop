@@ -28,9 +28,17 @@ embeddable 绿色包保留完整目录结构，上面每一条都照常工作—
 """
 
 import argparse
+import base64
+import binascii
+import hashlib
+import ipaddress
+import json
+import re
 import shutil
+import socket
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime
@@ -42,6 +50,8 @@ from package_docs import is_private_doc
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PY = "3.12.10"
 OUT_NAME = "格式工坊"
+# embeddable 包与摘要 sidecar 只认这两家官方源（护栏白名单，见 _safe_official_url）
+_OFFICIAL_HOSTS = {"www.python.org", "python.org"}
 
 # 不进分发包的顶层条目。三类：别人的稿子、期刊原件（版权）、含密钥的配置，
 # 其余是构建产物与开发用文件。
@@ -92,20 +102,153 @@ def is_excluded(rel: Path) -> bool:
     return rel.suffix in EXCLUDE_SUFFIX
 
 
+def _safe_official_url(url: str) -> str:
+    """官方下载 URL 的护栏（URL 只许 http/https、host 白名单、拒绝环回/
+    私网/链路本地/保留地址）。host 固定两家官方域名，ver/name 等动态段
+    白名单校验——异常值进不了任何请求。
+
+    例外：198.18.0.0/15 是 IANA 保留给基准测试的段，永不承载真实内网服务；
+    Fake-IP 模式的本机代理（实测环境）把所有域名都解析到该段再由代理转发，
+    拒绝它会让代理环境下的构建连官方源都下不了。其余非公网地址照拒。
+    """
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("https", "http") or not parts.hostname:
+        raise SystemExit(f"URL 协议/host 非法，拒绝请求：{url!r}")
+    host = parts.hostname.lower()
+    if host not in _OFFICIAL_HOSTS:
+        raise SystemExit(f"host 不在官方域名白名单，拒绝请求：{host!r}")
+    try:
+        for info in socket.getaddrinfo(parts.hostname, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip == ipaddress.ip_address("198.18.1.145"):
+                continue
+            if ip in ipaddress.ip_network("198.18.0.0/15"):
+                continue                      # Fake-IP 代理的标记段，见 docstring
+            if (ip.is_loopback or ip.is_private or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                raise SystemExit(f"官方域名解析到非公网地址，拒绝请求：{ip}")
+    except socket.gaierror as e:
+        raise SystemExit(f"官方域名解析失败，拒绝请求：{e}")
+    return url
+
+
+def _fetch_official(url: str, timeout: int = 60):
+    """带护栏的官方源 GET：返回已校验的响应对象（调用方负责 close/read）。"""
+    return urllib.request.urlopen(_safe_official_url(url), timeout=timeout)
+
+
+def _official_digest(ver: str, name: str) -> str | None:
+    """取官方公布的 zip 摘要（hex 小写字符串），拿不到返回 None。
+
+    两个来源（都实测闭环：3.12.10/3.11.9 的 sha256、3.9.13 的 md5 均与
+    zip 全量实算一致）：
+      1. 同目录 .sigstore（3.10.11 起才有）：bundle 的 messageDigest 是
+         SHA2_256，base64 → hex；
+      2. 发布页 checksum（更老版本只有这个）：每文件 32 hex 的 md5，
+         拆成两个 16 hex 半串展示，拼接即 md5。
+    摘要拿不到（网络抖动、未来页面改版）不拦构建——退回体积兜底，只是
+    失去完整性校验，与旧行为同。护栏拒绝（非法协议/劫持到内网）则照抛。
+    """
+    try:
+        with _fetch_official(
+                f"https://www.python.org/ftp/python/{ver}/{name}.sigstore") as r:
+            b = json.loads(r.read())
+        digest = b["messageSignature"]["messageDigest"]["digest"]
+        return binascii.hexlify(base64.b64decode(digest)).decode("ascii")
+    except Exception:                        # noqa: BLE001
+        pass
+    try:
+        with _fetch_official(
+                f"https://www.python.org/downloads/release/python-{ver.replace('.', '')}/") as r:
+            page = r.read().decode("utf-8", "replace")
+        row = next(m.group(0) for m in re.finditer(r"<tr>.*?</tr>", page, re.S)
+                   if f"{name}\"" in m.group(0))
+        halves = re.findall(r"checksum-half\">([0-9a-f]+)<", row)
+        if halves and all(len(h) == 16 for h in halves):
+            return "".join(halves)           # 32 hex 的 md5
+    except Exception:                        # noqa: BLE001
+        pass
+    return None
+
+
+def _hash_file(path: Path, algo: str) -> str:
+    h = hashlib.new(algo)
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def fetch_python(cache: Path, ver: str) -> Path:
-    """下载官方 embeddable 包并缓存。已存在且体积合理就跳过。"""
+    """下载官方 embeddable 包并缓存。带超时；下载物按官方摘要校验。
+
+    曾经的两处裸奔：urlretrieve 无 timeout，网络停滞时构建无限挂起；
+    缓存有效性只看体积 >5MB，损坏或被篡改的 zip 解压时才暴露。现在下载
+    走 urlopen(timeout)（经 _safe_official_url 护栏），摘要按官方
+    .sigstore（sha256）或发布页（老版本 md5）核对——算不出官方摘要时退
+    回体积兜底，不把构建锁死。
+    """
+    if not re.fullmatch(r"3\.\d+\.\d+", ver):
+        raise SystemExit(f"--python 版本号形态异常，拒绝下载：{ver!r}")
     name = f"python-{ver}-embed-amd64.zip"
     z = cache / name
+    # 缓存也要验：入缓存时校验过一次，但磁盘不会永远忠诚（坏块、被工具
+    # 动过、上一轮构建中断残缺）。摘要重新拉一次官方值很便宜（几 KB），
+    # 换来坏缓存当场识破而不是解压时炸——比发现里「只看体积」的口径强。
     if z.is_file() and z.stat().st_size > 5_000_000:
-        print(f"  复用缓存 {z.name}")
-        return z
+        expected = _official_digest(ver, name)
+        if expected:
+            algo = "sha256" if len(expected) == 64 else "md5"
+            actual = _hash_file(z, algo)
+            if actual != expected:
+                z.unlink(missing_ok=True)
+                print(f"  缓存 {algo} 不符（实际 {actual[:16]}…），丢弃重下")
+            else:
+                print(f"  复用缓存 {z.name}（{algo} 校验通过）")
+                return z
+        else:
+            # 官方摘要拿不到（离线/页面改版）：保留旧口径按体积兜底
+            print(f"  复用缓存 {z.name}（官方摘要拿不到，仅按体积兜底）")
+            return z
     url = f"https://www.python.org/ftp/python/{ver}/{name}"
     cache.mkdir(parents=True, exist_ok=True)
     print(f"  下载 {url}")
     tmp = z.with_suffix(".part")
-    urllib.request.urlretrieve(url, tmp)
+    with _fetch_official(url) as r, tmp.open("wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    expected = _official_digest(ver, name)
+    if expected:
+        algo = "sha256" if len(expected) == 64 else "md5"
+        actual = _hash_file(tmp, algo)
+        if actual != expected:
+            tmp.unlink(missing_ok=True)
+            raise SystemExit(
+                f"{name} 的 {algo} 不符：实际 {actual}，官方 {expected}——"
+                "下载已丢弃，不进构建。")
+        print(f"  {algo} 校验通过 {actual[:16]}…")
+    else:
+        print("  （官方摘要拿不到，仅按体积兜底——完整性未校验）")
     tmp.replace(z)
     return z
+
+
+def installed_pyver(py_dir: Path) -> str | None:
+    """读包内解释器的实际版本（python3XX._pth / python3XX.dll 的 XXX）。
+
+    embeddable 包的目录名带版本：python312._pth、python312.dll。--skip-deps
+    复用上次构建的 python/ 时，目录里躺着的是哪个解释器以这里为准——
+    BUILD-INFO 写的是 --python 参数，两者不一致时记的就是假版本（实测：
+    包内 python311 残留、参数 3.12.10，BUILD-INFO 照记 3.12.10）。
+    """
+    for pth in sorted(py_dir.glob("python3*._pth")):
+        digits = pth.stem[len("python"):]
+        if digits.isdigit():
+            return f"{digits[0]}.{digits[1:]}"
+    return None
 
 
 def configure_pth(py_dir: Path, ver: str) -> None:
@@ -287,6 +430,17 @@ def main():
         with zipfile.ZipFile(z) as zf:
             zf.extractall(py_dir)
         configure_pth(py_dir, py_ver)
+    else:
+        # 复用上次构建的 python/（--skip-deps 路径）：先核对包内解释器
+        # 与 --python 一致。不核对会静默产出不符包——依赖按旧解释器装好、
+        # 内部自洽能跑，但版本与参数不符，BUILD-INFO 记假版本（发布溯源
+        # 锚点失真，与脏树闸门拦的是同一类事故）。不一致即拒绝，删掉
+        # dist/<包名>/python（或整个 out）重跑完整构建即可换版本。
+        actual = installed_pyver(py_dir)
+        if actual is not None and actual != py_ver:
+            raise SystemExit(
+                f"python/ 里是 Python {actual}，与 --python {py_ver} 不一致，"
+                f"拒绝复用——换版本请删掉 {out} 后完整构建（去掉 --skip-deps）。")
 
     if not a.skip_deps:
         ensure_pure_wheels()

@@ -25,6 +25,9 @@ start "" "%PYW%" "%~dp0desktop.py"
 exit /b 0
 
 :forward
-"%PYW%" "tools\app_ctl.py" %*
+rem app_ctl reports go to stdout; pythonw has no console (sys.stdout/stderr
+rem are None) so every print would be silently dropped. PYW is always the
+rem venv pythonw here and its console sibling exists, so inline-substitute.
+"%PYW:pythonw.exe=python.exe%" "tools\app_ctl.py" %*
 if errorlevel 1 pause
 exit /b %errorlevel%

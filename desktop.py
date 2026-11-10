@@ -45,7 +45,20 @@ def data_root():
     return app_paths.data_root(ROOT)
 
 
-CFG = data_root() / "config" / "window.json"
+CFG = None
+
+
+def cfg_file():
+    """窗口几何配置文件：每次使用时动态解析（同 data_root() 口径）。
+
+    import 时解析 data_root() 可能两处候选都不可写、当场抛 OSError——模块
+    顶层一旦抛，__main__ 的 log_exc 兜底还没进 try，pythonw 下双击即静默
+    消失，desktop.log 零痕迹（连日志都落不了，正是 D-02 要消灭的形态）。
+    测试显式替换 desktop.CFG 的口径不变：非 None 直接用，None 才动态解析。
+    """
+    if CFG is not None:
+        return CFG
+    return data_root() / "config" / "window.json"
 
 
 # ---------------------------------------------------------------- 壳侧日志
@@ -61,7 +74,16 @@ def log_line(text):
         with (data_root() / "outputs" / "desktop.log").open("a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}\n")
     except Exception:                    # noqa: BLE001
-        pass
+        # 数据目录两处候选都不可写时 desktop.log 本身就落不了——主兜底再
+        # 兜一层：%TEMP%（用户目录总可写）留同款时间戳一行，异常链至少有
+        # 一处可查，绝不回到零痕迹形态（D-02）。
+        try:
+            import tempfile
+            with (Path(tempfile.gettempdir()) / "格式工坊-诊断.log").open(
+                    "a", encoding="utf-8", errors="replace") as f:
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}\n")
+        except Exception:                # noqa: BLE001
+            pass
 
 
 def log_exc(context, extra=""):
@@ -219,6 +241,36 @@ def focus_existing():
     return True
 
 
+def _mutex_name():
+    """互斥量名与窗口标题同源（带「 · 开发版」后缀）：使用版与开发版并存
+    时互不锁——与标题检查同一个坑（见 window_title 注释）。Local\\ 前缀把
+    名字圈在本登录会话里，同机多用户各开各的互不干扰。"""
+    return "Local\\" + window_title()
+
+
+def claim_single_instance(name=None):
+    """命名互斥量做单实例闸：新建成功返回 True，已存在返回 False。
+
+    标题查询挡不住竞态：FindWindowW 发生在原生窗口创建之前（要等
+    webview.start），连点两下两个进程都查不到对方窗口就都继续跑。互斥量
+    创建即判定，没有竞态窗口；句柄不关，进程存活期由内核持有，退出（含
+    os._exit）即释放，不会留下死锁。name 参数给测试传专名验证机制，不碰
+    真名。互斥量建不出来（权限等罕见情形，last error 不是 0/183）退回
+    标题检查：宁可有旧竞态，也不把第二个实例挡在门外还聚焦不到旧窗。
+    """
+    if os.name != "nt":
+        return True                     # 非 Windows 没有互斥量，标题检查兜底
+    import ctypes
+    ERROR_ALREADY_EXISTS = 183
+    ctypes.windll.kernel32.CreateMutexW(None, False, name or _mutex_name())
+    err = ctypes.GetLastError()
+    if err == 0:
+        return True                     # 新建：本进程是第一个实例
+    if err == ERROR_ALREADY_EXISTS:
+        return False                    # 同名互斥量已在：另一个实例在跑
+    return not _find_window(window_title())
+
+
 # ---------------------------------------------------------------- 窗口记忆
 _GEOMETRY_SAVED = False
 
@@ -232,7 +284,7 @@ def load_window_state():
     打开的窗口排得整整齐齐，比记忆可靠。
     """
     try:
-        d = json.loads(CFG.read_text(encoding="utf-8"))
+        d = json.loads(cfg_file().read_text(encoding="utf-8"))
         w, h = int(d.get("w", 0)), int(d.get("h", 0))
         if 500 <= w <= 8000 and 400 <= h <= 4000:
             return {"w": w, "h": h, "maximized": bool(d.get("maximized"))}
@@ -306,7 +358,7 @@ def save_window_state(window):
         return
     try:
         import atomic_io
-        atomic_io.write_text(CFG, json.dumps(geo, ensure_ascii=False))
+        atomic_io.write_text(cfg_file(), json.dumps(geo, ensure_ascii=False))
         _GEOMETRY_SAVED = True
     except Exception as e:               # noqa: BLE001
         log_line(f"save_window_state failed: {e!r}")
@@ -659,6 +711,12 @@ class ShellBridge:
                 return {"ok": False, "message": "窗口不存在"}
             target = owner.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=name)
+            # 返回形状按版本分叉：6.x 是 1-元组（winforms.py「A tuple of
+            # selected files」），5.x 是 str，取消统一 falsy（None）。requirements
+            # 曾对 pywebview 只写了 >=5 无上限，便携包实际捆的就是 6.x——两种
+            # 契约都接住，否则每次另存为都在 Path(元组) 上抛 TypeError。
+            if isinstance(target, (tuple, list)) and target:
+                target = target[0]
             if not target:
                 return {"ok": False}      # 用户取消：静默
             Path(target).write_bytes(data)
@@ -778,7 +836,14 @@ class Tray:
             pass
 
     def quit(self, icon=None, item=None):
-        """真退出：窗与托盘一并收掉；引擎跟着进程走，没有后台服务可停。"""
+        """真退出：窗与托盘一并收掉；引擎跟着进程走，没有后台服务可停。
+
+        转换进行中先弹与 × 同款的原生确认（D-05）：托盘菜单退出同样会经
+        reap 的 os._exit 带走整进程，× 有确认而这里不确认，等于留了一条
+        无确认硬杀在途转换的路。拒绝则什么都不动，托盘原样驻留。
+        """
+        if conversion_busy() and not _confirm_interrupt_box():
+            return
         self.quitting = True
         save_window_state(self.window)   # destroy 前窗口还活着（D-01）
         try:
@@ -915,7 +980,13 @@ def webview_udf():
 def main():
     import webview
 
-    if focus_existing():
+    # 单实例两道：互斥量创建即判定（上面的 claim_single_instance），标题
+    # 查询只剩「把已有实例带到前台」的职责——它挡不住连点两下（TOCTOU），
+    # 但首窗还在启动中时短暂重试等它出现。
+    if not claim_single_instance():
+        deadline = time.time() + 2.0
+        while not focus_existing() and time.time() < deadline:
+            time.sleep(0.2)
         return 0
 
     # 页面里的普通下载（历史页等）交给 WebView2 的原生「另存为」；

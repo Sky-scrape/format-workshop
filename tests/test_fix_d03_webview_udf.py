@@ -58,7 +58,16 @@ def test_main_starts_webview_with_fixed_storage():
     assert "private_mode=False" in main_body
     assert "storage_path=str(udf)" in main_body
     assert "udf = webview_udf()" in main_body
-    assert "import tempfile" not in src, "壳自身不再制造临时 profile 目录"
+    # 钉的是「不造临时 profile 目录」：webview_udf 的文档串还留着 D-03 的
+    # 历史叙述（提 tempfile.TemporaryDirectory），只约束真调用——代码里
+    # tempfile 只许出现在 log_line 的 %TEMP% 诊断兜底一处（D-02/F7-4），
+    # 且必须不是 gettempdir() 建目录那种「当 home 用」的形态。
+    code = "\n".join(
+        ln for ln in src.splitlines()
+        if not ln.lstrip().startswith("#") and "——每次启动冷建一套完整浏览器" not in ln)
+    assert "TemporaryDirectory(" not in code, "壳自身不再造临时 profile 目录"
+    assert code.count("tempfile.gettempdir") == 1, \
+        "%TEMP% 只许诊断兜底一处，不给 profile 用"
 
 
 def test_installer_removes_the_cached_udf():

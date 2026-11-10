@@ -110,7 +110,7 @@ def test_real_proc_report_still_parses():
     """真脚本冒烟：改动后的 ps1 在真 PowerShell 下可解析，输出行形合法。"""
     r = subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-         "-File", str(TOOLS / "proc_report.ps1")],
+         "-File", str(TOOLS / "proc_report.ps1"), "-Root", str(ROOT)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=120)
     assert r.returncode == 0, f"proc_report.ps1 应 exit 0，实际 {r.returncode}"
