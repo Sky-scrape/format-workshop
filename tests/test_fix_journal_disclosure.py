@@ -166,9 +166,42 @@ def test_assumptions_stay_readable(draft):
 
 
 def test_written_paths_covers_grouped_items():
-    """written_paths 必须把成组项的落盘路径也算进去，否则叶子 diff 会误报继承。"""
+    """written_paths 必须把成组项的落盘路径也算进去，否则叶子 diff 会误报继承。
+
+    登记粒度必须与 iter_leaves 的叶子产出同口径：父路径匹配不上任何叶子，
+    等于没登记（行距抽到基线同值时曾把叶子又报成「沿用基线」）。
+    """
     used = {"body_line": {}, "heading_levels": {}}
     ps = ej.written_paths(used, name_zh="某刊")
-    assert ("typography", "body", "line_spacing") in ps
+    assert ("typography", "body", "line_spacing", "mode") in ps
+    assert ("typography", "body", "line_spacing", "value_pt") in ps
+    assert ("typography", "body", "line_spacing", "value") in ps
+    assert ("typography", "body", "line_spacing", "equivalent_exact_pt") in ps
     assert ("headings", "levels") in ps and ("headings", "max_level") in ps
     assert ("journal", "id") in ps and ("journal", "name_zh") in ps
+
+
+def test_extracted_line_spacing_never_double_counted():
+    """行距抽到且与基线同值时，line_spacing 叶子不得再进 inherited 双计（F6-5）。"""
+    rules, report = ej.build(
+        {"body_line_mode": "exact", "body_line_value": 20},
+        {"body_line_value": "行距固定 20 磅"},
+        "投稿须知：行距固定 20 磅。", jid="demol", name_zh="演示期刊戊")
+    assert report["stats"]["extracted"] == 1
+    inherited_keys = {it["key"] for it in
+                      rules["verification"]["extraction"]["inherited"]}
+    assert "typography.body.line_spacing.mode" not in inherited_keys
+    assert "typography.body.line_spacing.value_pt" not in inherited_keys
+
+
+def test_used_reflects_grouped_override():
+    """heading_levels 覆写 max_level 时，used 里的 heading_max_level 必须是生效值（F6-3）。"""
+    rules, report = ej.build(
+        {"heading_max_level": 4, "heading_levels": ["一、", "（一）"]},
+        {"heading_max_level": "标题层级最多四级", "heading_levels": "一、（一）"},
+        "投稿须知：标题层级最多四级，编号写作一、（一）。", jid="demom", name_zh="演示期刊己")
+    assert rules["headings"]["max_level"] == 2
+    ext = rules["verification"]["extraction"]
+    assert ext["used"]["heading_max_level"]["value"] == 2
+    assert "why" in ext["used"]["heading_max_level"]
+    assert report["stats"]["extracted"] == 2

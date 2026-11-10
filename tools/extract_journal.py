@@ -21,6 +21,7 @@
 
 import argparse
 import json
+import math
 import re
 import sys
 from copy import deepcopy
@@ -105,7 +106,8 @@ GROUPED = {"body_line_mode", "body_line_value", "heading_levels"}
 ENUM_HINT = """
 - journal_language: zh 或 en
 - page_size: A4 / B5 / 16开
-- body_align / heading_level1_align: both（两端对齐）/ left / center
+- body_align: both（两端对齐）/ left / justify
+- heading_level1_align: center（居中）/ left
 - heading_numbering: cn-hierarchical（一、（一）1.）/ arabic（1 / 1.1 / 1.1.1）/ none
 - citation_system: numbered（顺序编码制，正文标 [1]）/ author-year（作者年制，正文标（张三，2020））
 - limit_total_metric: A（字符数不计空格）/ B（中文字符数+英文单词数，对应 Word 中文版『字数』）/ C（字符数计空格）
@@ -166,9 +168,16 @@ def _cast(value, kind):
             v = str(value).strip()
             return (v, "") if v else (None, "空串")
         if kind == "float":
-            return float(str(value).replace("pt", "").strip()), ""
+            v = float(str(value).replace("pt", "").strip())
+            # Infinity/1e400 能被 float 收下，写进 JSON 会变非严格 JSON
+            if not math.isfinite(v):
+                return None, "数值超出范围"
+            return v, ""
         if kind == "int":
-            return int(float(str(value).strip())), ""
+            v = float(str(value).strip())
+            if not math.isfinite(v):
+                return None, "数值超出范围"
+            return int(v), ""
         if kind == "bool":
             if isinstance(value, bool):
                 return value, ""
@@ -182,9 +191,17 @@ def _cast(value, kind):
             opts = kind[5:].split("|")
             s = str(value).strip()
             return (s, "") if s in opts else (None, f"不在 {opts} 内")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None, "类型不符"
     return None, "未知类型"
+
+
+def _displayable(v):
+    """dropped/unverified 的 value 只作复核展示：非有限浮点转字符串，
+    否则裸 Infinity 会写进草稿 JSON，产出非严格 JSON。"""
+    if isinstance(v, float) and not math.isfinite(v):
+        return str(v)
+    return v
 
 
 def _set_path(root, path, value):
@@ -281,8 +298,15 @@ def iter_leaves(node, path=()):
 
 # 抽取会覆写的非 FACTS 路径（成组项）。继承披露的分界线靠它算：
 # 路径在这里面 → 值来自本次抽取；不在 → 值与基线刊相同，必须逐条披露。
+# 必须登记 iter_leaves 产出的叶子粒度：父路径永远匹配不上叶子，已抽取的
+# 字段会被再报成「沿用基线」（出处失实、计数虚增）。
 _GROUPED_PATHS = {
-    "body_line": (("typography", "body", "line_spacing"),),
+    "body_line": (
+        ("typography", "body", "line_spacing", "mode"),
+        ("typography", "body", "line_spacing", "value_pt"),
+        ("typography", "body", "line_spacing", "value"),
+        ("typography", "body", "line_spacing", "equivalent_exact_pt"),
+    ),
     "heading_levels": (("headings", "levels"), ("headings", "max_level")),
 }
 
@@ -315,7 +339,8 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
         path, kind, label = FACTS[key]
         val, why = _cast(raw, kind)
         if val is None:
-            dropped.append({"key": key, "label": label, "value": raw, "why": why})
+            dropped.append({"key": key, "label": label,
+                            "value": _displayable(raw), "why": why})
             continue
         quote = str(evidence.get(key) or "").strip()
         if not quote:
@@ -347,6 +372,15 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
         else:
             try:
                 v = float(value)
+            except (TypeError, ValueError):
+                v = None
+            if v is None or not math.isfinite(v):
+                # 成组项绕过 _cast 直接 float()，inf/1e400 在这里同样拦下，
+                # 不能让非有限值经引文闸写进规则集
+                dropped.append({"key": "body_line_value", "label": "行距",
+                                "value": value,
+                                "why": "不是数字" if v is None else "数值超出范围"})
+            else:
                 size = rules["typography"]["body"].get("size_pt") or 10.5
                 ls = {"mode": mode}
                 if mode == "exact":
@@ -357,9 +391,6 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
                 rules["typography"]["body"]["line_spacing"] = ls
                 used["body_line"] = {"label": "行距", "value": f"{mode} {v}",
                                      "evidence": quote}
-            except (TypeError, ValueError):
-                dropped.append({"key": "body_line_value", "label": "行距",
-                                "value": value, "why": "不是数字"})
 
     levels = extracted.get("heading_levels")
     if isinstance(levels, list) and levels and all(isinstance(x, str) and x.strip() for x in levels):
@@ -377,6 +408,14 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
             rules["headings"]["max_level"] = min(len(levels), 4)
             used["heading_levels"] = {"label": "标题编号", "value": rules["headings"]["levels"],
                                       "evidence": quote}
+            if "heading_max_level" in used:
+                # 编号写法派生的层级数覆写了单值事实的落盘值：used 里留着
+                # 模型读到的旧值，复核页证据表会与草稿实际值矛盾——改写成
+                # 生效值并注明原因，证据引文本身不动
+                used["heading_max_level"]["value"] = rules["headings"]["max_level"]
+                used["heading_max_level"]["why"] = (
+                    "与标题编号同时抽出，最大层级按编号写法的条数取 "
+                    f"{rules['headings']['max_level']}")
 
     # 刊物标识：以用户在页面上填的为准，AI 抽到的只作补充
     rules["journal"]["id"] = jid

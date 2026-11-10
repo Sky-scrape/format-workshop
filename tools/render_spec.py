@@ -237,9 +237,10 @@ def build(rules, sample_pdf=None):
     rl = ci["reference_list"]
     it = ci["in_text"]
     if ci["system"] == "numbered":
-        # 编号制的正文引用是上标序号，不是作者—年份；规则集给了说明就以它为准
+        # 编号制的正文引用是上标序号，不是作者—年份；规则集给了说明就以它为准，
+        # 没给也不推定细则（如「实引一一对应」只有个别刊明文写过），只交代默认体例
         in_text = (it.get("note") or it.get("format")
-                   or "正文用上标方括号序号 [n]，与文末条目一一对应（实引制）")
+                   or "正文用上标方括号序号 [n]（规则集未单列正文标注细则，此处按顺序编码制默认体例说明）")
         sort_text = SORT_LABEL.get(rl["sort"], rl["sort"])
         num_text = rl.get("number_format", "[序号]") + (
             f"，序号后 {rl['space_after_number']} 个空格" if "space_after_number" in rl else "")
@@ -302,7 +303,12 @@ def build(rules, sample_pdf=None):
         span = f"{kw['min']}–{kw['max']}" if kw.get("min") else f"不超过 {kw['max']}"
         lim_rows.append(row("关键词", f"{span} 个"))
     if lim.get("classification_code_count"):
-        lim_rows.append(row("分类号", f"{lim['classification_code_count']} 个（{rules['blocks'][2].get('scheme','') if len(rules['blocks'])>2 else ''}）"))
+        # scheme 按 type 查 blocks（与 rules_ref 的 blocks 语法同口径），不按位置硬猜；
+        # 查不到就省略括号，不渲染成空括号
+        cls = next((b for b in rules["blocks"] if b["type"] == "classification_code"), None)
+        scheme = cls.get("scheme", "") if cls else ""
+        lim_rows.append(row("分类号", f"{lim['classification_code_count']} 个"
+                                  + (f"（{scheme}）" if scheme else "")))
     if lim.get("title_chars_max"):
         lim_rows.append(row("标题长度", f"不超过 {lim['title_chars_max']} 字"))
     lim_rows.append(row("处理方式", "仅提醒，不修改稿件内容"))

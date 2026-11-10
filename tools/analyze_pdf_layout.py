@@ -57,18 +57,22 @@ def measure(path, anchor=None):
     page_lines = []          # (页号, 基线y, 行字号)
     h1_sizes = []
     note_sizes = []
-    x0 = y0 = 1e9
-    x1 = y1 = -1e9
+    x0 = 1e9
+    x1 = -1e9
     readable = 0
 
     for pno, page in enumerate(doc):
+        ph = page.rect.height
         for blk in page.get_text("dict").get("blocks", []):
             if blk.get("type") != 0:
                 continue
-            bx0, by0, bx1, by1 = blk["bbox"]
-            x0, y0 = min(x0, bx0), min(y0, by0)
-            x1, y1 = max(x1, bx1), max(y1, by1)
             for line in blk.get("lines", []):
+                # 版心宽只统计正文行：真实期刊的页眉/页脚常外凸出正文边界
+                # （页码、页眉线），整页 bbox 一并累进会把 text_width_mm 撑宽
+                # 数十毫米。排除整体落在每页上下 10% 带内的行。
+                bb = line.get("bbox")
+                if bb and (bb[3] > 0.10 * ph and bb[1] < 0.90 * ph):
+                    x0, x1 = min(x0, bb[0]), max(x1, bb[2])
                 txt = "".join(s.get("text", "") for s in line.get("spans", [])).strip()
                 sz = max((s["size"] for s in line.get("spans", [])), default=0)
                 if txt:

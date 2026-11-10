@@ -47,7 +47,7 @@ vertical-align:1px}
       <h1>{{ journal.name_zh or jid }}</h1>
       <p>AI 从 <code>{{ ext.source_file }}</code> 抽取的规则集草稿。共 {{ ext.pages or '?' }} 页，模型 {{ ext.ai_model or '未记录' }}。
         {% if ext.text_method == 'ocr' %}全文由 <strong>OCR 识别</strong>（{{ ext.ocr_engine }}）。
-        {% elif ext.text_method == 'mixed' %}第 {{ ext.ocr_pages|join('、') }} 页无文字层，其余取自文字层。
+        {% elif ext.text_method == 'mixed' %}{% if ext.ocr_failed_pages %}第 {{ ext.ocr_failed_pages|map(attribute='page')|join('、') }} 页识别失败、内容缺失{% if ext.ocr_pages %}，第 {{ ext.ocr_pages|join('、') }} 页由 OCR 识别{% endif %}，其余取自文字层。{% else %}第 {{ ext.ocr_pages|join('、') }} 页无文字层，其余取自文字层。{% endif %}
         {% else %}文字取自 PDF 原生文字层，逐字精确。{% endif %}</p>
     </div>
     <a class="btn-light btn" href="/journals" style="text-decoration:none">返回规则库</a>
@@ -63,7 +63,9 @@ vertical-align:1px}
     <div class="kpi"><strong>{{ report.errors|length }}</strong><span>阻断性错误</span></div>
   </div>
 
-  {% if ext.text_method in ('ocr', 'mixed') %}
+  {# 失败页既没有 OCR 文本也没有文字层内容（F6-7）：只有真有 OCR 文本时
+     才亮「OCR 警示」黄档，纯失败场景交给下方失败红档 #}
+  {% if ext.text_method == 'ocr' or (ext.text_method == 'mixed' and ext.ocr_pages) %}
   <div class="flash warn"><strong>这份稿约是扫描件，文字由 OCR 识别。</strong>
     数字、字号、上下标最容易被读错（例如「小五」读成「小五号」、下标丢失）。
     下面每条的引文都是从 OCR 文本里取的，能对上原文，但<strong>对得上不等于读对了</strong>——请对着 PDF 原件核一遍数值。
@@ -117,7 +119,7 @@ vertical-align:1px}
       {% for key, it in evidence.items() %}
         <tr>
           <td class="k">{{ it.label }}</td>
-          <td class="v">{{ it.value }}</td>
+          <td class="v">{{ it.value }}{% if it.why %} <span style="color:var(--ink3)">（{{ it.why }}）</span>{% endif %}</td>
           <td class="q"><em>{{ it.evidence }}</em></td>
         </tr>
       {% endfor %}

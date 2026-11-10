@@ -235,6 +235,9 @@ def low_text_warnings(meta):
 def extract_pdf_text(path, *, dpi=DEFAULT_DPI, max_chars=24000, log=None):
     """返回 (text, meta)。meta.method: text_layer / ocr / mixed。
 
+    有识别失败页时 method 必为 mixed——失败页的内容是缺失的，不能标成
+    「全部来自文字层」。
+
     meta.ocr_failed_pages 逐页记录识别失败（含原因）——失败页的内容是静默
     丢失的，上游必须有机会知道并报警，而不是拿到一份看似完整的文本。
     meta.ocr_low_text_pages 逐页记录文字层字符数 < LOW_TEXT_CHARS 的页
@@ -279,7 +282,12 @@ def extract_pdf_text(path, *, dpi=DEFAULT_DPI, max_chars=24000, log=None):
             + (f"（识别失败页：{[f['page'] for f in failed]}）" if failed else "")
             + "。如果是扫描件，请确认图像清晰、不是整页手写或表格截图。")
 
-    if not ocr_pages:
+    # method 口径：有识别失败页时绝不能标 text_layer——失败页既没有文字层
+    # 内容也没有 OCR 文本，标「文字层逐字精确」会与失败披露自相矛盾；
+    # 「ocr」仍要求每一页都成功识别，其余（含部分失败）一律 mixed
+    if failed:
+        method = "mixed"
+    elif not ocr_pages:
         method = "text_layer"
     elif len(ocr_pages) == len(pages):
         method = "ocr"
