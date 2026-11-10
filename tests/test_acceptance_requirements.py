@@ -215,16 +215,31 @@ def test_cross_journal_details_keep_previous_values(
 
 
 def test_shipped_journals_have_all_three_artifacts():
-    """B-22：规则集、样板、规格页三件齐全；规格页不是空白壳。"""
+    """B-22：规则集、样板、规格页三件齐全；规格页不是空白壳。
+
+    样板 docx 是 build_journal 的渲染产物，gitignore 不放行（72631b6 的
+    needs_sample 同因）：公开检出里没有它，缺样本时跳过样板断言而不是假红；
+    规格页三本照常核验，CI 上不丢这部分覆盖。
+    """
     for jid in SHIPPED_JOURNALS:
         rules = _rules(jid)
-        sample = RULES / f"{jid}.sample.docx"
         spec = RULES / f"{jid}.spec.html"
-        assert sample.is_file(), f"{jid} 缺样板 docx"
         assert spec.is_file(), f"{jid} 缺规格页"
         html = spec.read_text(encoding="utf-8")
         assert rules["journal"]["name_zh"] in html
         assert "成品样式预览" in html or "规格" in html
+    # 规格页内嵌的预览图来自同刊样张 PDF；三本都在场时才校验，少一本就
+    # 跳过整段（公开检出只有规格页，样张 PDF 不入库）。
+    missing = [jid for jid in SHIPPED_JOURNALS
+               if not (RULES / f"{jid}.sample.docx").is_file()
+               or not (RULES / f"{jid}.sample.pdf").is_file()]
+    if missing:
+        pytest.skip(
+            "样板 docx / 样张 pdf 由 build_journal 生成，不进开源仓库："
+            + "、".join(missing))
+    for jid in SHIPPED_JOURNALS:
+        assert (RULES / f"{jid}.sample.docx").is_file(), f"{jid} 缺样板 docx"
+        assert (RULES / f"{jid}.sample.pdf").is_file(), f"{jid} 缺样张 pdf"
 
 
 # ---------------------------------------------------------------- 设置页
