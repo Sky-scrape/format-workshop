@@ -32,6 +32,7 @@
 import ipaddress
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -59,6 +60,9 @@ DEFAULTS = {
     "send_mode": "snippet",
     "snippet_chars": 60,
     "retries": 1,
+    # 内网端点 opt-in：默认拒绝私网地址，确有内网模型服务才在
+    # config/ai.json 显式设 true（_validate_endpoint 读这个键）
+    "allow_lan_endpoint": False,
 }
 
 # 允许 AI 判定的类型。table / figure / equation* 是结构性块，由 XML 直判，
@@ -200,12 +204,31 @@ def test_connection(cfg=None, timeout=None):
         cfg["timeout"] = timeout
 
     fake = [{"type": "body", "text": "一、引言", "idx": 0, "confidence": None}]
+    # 不走 propose_types：它把一切异常收敛成空字典（转换管线需要这种沉默），
+    # 测试连接却必须分清「连不上」和「连上了但模型没回合法标签」——
+    # 都报「连通但…」会把网络/地址问题误导成模型 JSON 输出问题。
+    # 复用 propose_types 的同一条请求路径（端点守卫、response_format 降级
+    # 重试都生效），只是让异常按类别冒到这一层。
+    cfg = {**DEFAULTS, **cfg}
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(
+            {"blocks": _candidate_payload(fake, fake, cfg)},
+            ensure_ascii=False, separators=(",", ":"))},
+    ]
     try:
-        prop = propose_types(fake, fake, cfg)
-    except Exception as e:  # propose_types 内部已兜住，这里是最后一道
-        return False, f"{type(e).__name__}: {e}"
+        prop = _parse_labels(_chat(cfg, messages))
+    except urllib.error.HTTPError as e:
+        # 有 HTTP 响应说明网络是通的，问题出在地址、密钥或模型名
+        return False, f"接口返回 HTTP {e.code}（{e.reason}），检查接口地址、API Key 与模型名"
+    except json.JSONDecodeError:
+        return False, "接口已连通，但返回的不是 JSON，确认接口地址是否为 OpenAI 兼容的 /v1 端点"
+    except (urllib.error.URLError, OSError) as e:
+        return False, f"无法连接到接口，检查网络与接口地址：{getattr(e, 'reason', None) or e}"
+    except ValueError as e:  # 剩余 ValueError 来自端点校验（私网地址未放行等）
+        return False, str(e)
     if not prop:
-        return False, "连通但没拿到合法标签，检查模型是否支持 JSON 输出"
+        return False, "接口已连通，但没拿到合法标签，检查模型是否支持 JSON 输出"
     # 不认 idx：有的服务会改写请求里的序号，能回出类型就说明链路是通的
     got = next(iter(prop.values()), {}).get("type")
     if got != "heading1":
@@ -226,6 +249,18 @@ def text_unchanged(before, after):
 
 # ---------------------------------------------------------------- 请求
 
+def _check_ip(cfg, addr, host):
+    """单个地址按守卫口径判定：环回放行，其余非全局地址需显式 opt-in。"""
+    ip = ipaddress.ip_address(addr)
+    if ip.is_loopback:
+        return
+    if not ip.is_global and cfg.get("allow_lan_endpoint") is not True:
+        raise ValueError(
+            f"AI 端点指向私网地址 {host}（解析到 {addr}）。若模型服务确在内网，"
+            '请在 config/ai.json 设置 "allow_lan_endpoint": true'
+        )
+
+
 def _validate_endpoint(cfg, url):
     """端点只允许 http(s)；环回地址放行，其余私网 IP 需显式 opt-in。
 
@@ -233,6 +268,11 @@ def _validate_endpoint(cfg, url):
     明确支持的零外发选项（DESIGN §14.3 的本地 Ollama）。其余私网段可能是
     内网第三方服务，默认不发；确有内网模型服务时在 config/ai.json 设
     "allow_lan_endpoint": true。
+
+    域名不能只看字面量就放行（F2-4）：DNS 可把看似常规的域名解析到私网。
+    这里对 getaddrinfo 返回的全部地址逐一按同一口径判定，任一不过即拒。
+    解析与连接之间仍有换址（rebinding）竞态窗口，彻底封死需要绑定首次
+    解析的 IP 直连，本地工具暂不做这一层。
     """
     if not url.lower().startswith(("http://", "https://")):
         # urllib 对 file:// 等协议照发不误；端点只该是 http(s)。
@@ -243,16 +283,35 @@ def _validate_endpoint(cfg, url):
     if host == "localhost" or host.endswith(".localhost"):
         return
     try:
-        ip = ipaddress.ip_address(host)
+        ipaddress.ip_address(host)
     except ValueError:
-        return  # 常规域名，边界交给 http(s) scheme
-    if ip.is_loopback:
+        pass  # 不是 IP 字面量，按域名走下面的解析判定
+    else:
+        _check_ip(cfg, host, host)
         return
-    if not ip.is_global and cfg.get("allow_lan_endpoint") is not True:
-        raise ValueError(
-            f"AI 端点指向私网地址 {host}。若模型服务确在内网，"
-            '请在 config/ai.json 设置 "allow_lan_endpoint": true'
-        )
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as e:
+        raise ValueError(f"AI 端点主机 {host} 无法解析：{e}")
+    for info in infos:
+        # IPv6 链路本地地址可能带 scope 后缀（fe80::1%eth0），先去掉再判
+        _check_ip(cfg, info[4][0].split("%", 1)[0], host)
+
+
+class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
+    """30x 重定向的每一跳都复跑端点守卫（F2-4）。
+
+    urlopen 默认跟随重定向且只校验初始 URL，公网端点可借一跳 302 把请求
+    （连同凭据头）转投私网地址；守卫挂在这里逐跳执行，非 http(s) 的跳转
+    （urllib 自身放行 ftp）也会被拒。
+    """
+
+    def __init__(self, cfg):
+        self._cfg = cfg
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_endpoint(self._cfg, newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _post(cfg, payload, timeout):
@@ -263,7 +322,8 @@ def _post(cfg, payload, timeout):
         "Content-Type": "application/json",
         "Authorization": "Bearer " + str(cfg["api_key"]),
     })
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    opener = urllib.request.build_opener(_GuardedRedirect(cfg))
+    with opener.open(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
