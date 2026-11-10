@@ -10,6 +10,7 @@
 """
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -81,12 +82,19 @@ REQUIRED_RULE_KEYS = [
     ("typography.body.size_pt", "num"),
     ("typography.body.line_spacing", "dict"),
     # value 只在倍数行距声明下消费（固定值行距走 value_pt，可落到代码缺省），
-    # 条件断言避免误杀 exact 模式的规则集
-    ("typography.body.line_spacing", "keys_when", {"mode": "multiple"}, "value"),
+    # 条件断言避免误杀 exact 模式的规则集；value:num 断言其是数值（给了
+    # 字符串，渲染中途 f"{value:g}" 会裸崩）。存在性由 value:num 一并管，
+    # 不再单列 value——两列会把「缺失」报成两条
+    ("typography.body.line_spacing", "keys_when", {"mode": "multiple"}, "value:num"),
     ("typography.body.first_line_indent_chars", "num"),
     ("typography.title", "dict"),
     ("headings.level1", "dict"),
-    ("headings.levels", "list"),
+    # levels 只够「条目里每个编号模板各是字符串」还不够：少于 max_level 时
+    # 高层标题在渲染中途 IndexError（[None]*4 只兜整条缺失）——条目形态由
+    # each_keys 断言（含非 list），条数由 levels_len 断言，都在入口拦下。
+    # max_level 未声明时 levels_len 只要求至少 1 项（level1 分支无守卫下标）
+    ("headings.levels", "each_keys", "str"),
+    ("headings.levels", "levels_len"),
     ("blocks", "each_keys", "type"),
     ("page.size", "str"),
     ("page.size_mm.width", "num"),
@@ -128,9 +136,11 @@ def missing_required_keys(rules):
     """返回规则集缺失的必填键（点路径列表），一次报全。
 
     元组项是深一层断言（形态见 REQUIRED_RULE_KEYS）：缺子键报成
-    「路径.子键」，list 条目缺子键报成「路径[].子键」；形态不符（该是
-    dict/数值的键给了别的类型，F13STR）报成「路径 形态不符：期望 X」——
-    与存在性缺口在同一份清单里一次报全。
+    「路径.子键」，list 条目缺子键报成「路径[].子键」；子键名带 `:num`
+    后缀时断言该子键是数值（渲染中途会当数字消费），形态不符报成
+    「路径.子键 形态不符：期望 数值」。形态不符（该是 dict/数值/字符串
+    的键给了别的类型，F13STR）报成「路径 形态不符：期望 X」——与存在性
+    缺口在同一份清单里一次报全。
     """
     missing = []
     for item in REQUIRED_RULE_KEYS:
@@ -147,15 +157,41 @@ def missing_required_keys(rules):
         if kind == "keys_when":
             cond, subkeys = args[0], args[1:]
             if isinstance(node, dict) and all(node.get(k) == v for k, v in cond.items()):
-                missing.extend(f"{path}.{s}" for s in subkeys if s not in node)
+                for s in subkeys:
+                    if s.endswith(":num"):
+                        key, shape = s[:-4], "num"
+                        if key not in node:
+                            missing.append(f"{path}.{key}")
+                        elif not _SHAPE_CHECK[shape](node[key]):
+                            missing.append(f"{path}.{key} 形态不符：期望 {_SHAPE_NAME[shape]}")
+                    elif s not in node:
+                        missing.append(f"{path}.{s}")
         elif kind == "each_keys":
             if not isinstance(node, list):
                 missing.append(f"{path} 形态不符：期望 {_SHAPE_NAME['list']}")
                 continue
             for e in node:
-                absent = args if not isinstance(e, dict) \
-                    else tuple(s for s in args if s not in e)
+                if isinstance(e, dict):
+                    absent = tuple(s for s in args if s not in e)
+                elif "str" in args:
+                    absent = () if isinstance(e, str) else ("str",)
+                else:
+                    absent = args
                 missing.extend(f"{path}[].{s}" for s in absent)
+        elif kind == "levels_len":
+            # levels 条数少于标题层级时高层标题会裸 IndexError（F13 拦渲染
+            # 中途崩）：声明了 max_level 就要求 levels 覆盖到它；未声明时
+            # 只要求至少 1 项（level1 分支同样无守卫地下标 levels[0]）。
+            # 单层编号刊（levels 仅 1 项、未声明 max_level）是合法形态，不误杀。
+            if not isinstance(node, list):
+                continue          # 形态不符已由 "list" 断言报，这里不重复
+            max_level = _required_walk(rules, "headings.max_level")
+            need = max_level if isinstance(max_level, int) and not isinstance(max_level, bool) \
+                else 1
+            if len(node) < need:
+                missing.append(f"headings.levels 条目不足：{len(node)} 项，"
+                               f"需要 {need} 项（headings.max_level "
+                               f"{'=' + str(max_level) if isinstance(max_level, int) and not isinstance(max_level, bool) else '未声明'}）")
         elif not _SHAPE_CHECK[kind](node):
             missing.append(f"{path} 形态不符：期望 {_SHAPE_NAME[kind]}")
     return missing
@@ -309,22 +345,43 @@ SEMANTIC = {
 }
 
 
+def reject_sig(text):
+    """驳回键用的块文本指纹（改前文本的短哈希）。
+
+    键若用「块序号|动作」，补录注入（apply_details 重排 body 子元素）会让
+    全部序号平移，上一轮保存的 reject.json 在注入后的下一轮会驳到错误的块
+    ——用户要保留的原文改动照常执行且无提示。指纹与块在文档里的位置无关；
+    各轮渲染都从原稿重出，同一块的改前文本不变，键才真正跨轮恒定。
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12] if text else ""
+
+
 class Audit:
     def __init__(self, rejects=None):
         self.items = []
         self.sec = "前置"
-        # 驳回记录用「块序号|动作」定位：同一稿件、同一规则集重跑时该键恒定，
-        # 因此驳回可以跨次复用，不需要依赖易变的数组下标
+        # 驳回键 = 「块文本指纹|动作」（见 reject_sig）。指纹为空（取不到
+        # 文本的块）退回「块序号|动作」；旧版保存的「块序号|动作」清单在
+        # 序号未漂移时也继续被认（见 blocked），升级前的驳回决定不失效。
         self.rejects = set(rejects or [])
         # 逐块核对过的块数。报告要能回答「你没改的那些块，是看过还是漏了」——
         # 只列改动项，用户无从判断覆盖率；把核对总数报出来，才谈得上可审计。
         self.blocks_seen = 0
 
-    def blocked(self, idx, action):
-        return f"{idx}|{action}" in self.rejects
+    @staticmethod
+    def key(idx, action, sig=""):
+        """审计条目 id／驳回键：有指纹用指纹，没有退回块序号。"""
+        return f"{sig or idx}|{action}"
+
+    def blocked(self, idx, action, sig=""):
+        # 新键「块指纹|动作」与位置无关；旧键「块序号|动作」只在序号恰好
+        # 没漂移时才命中——它本身不含文本信息，漂移场景无从迁移，认出
+        # 多少算多少（好过整份作废）
+        return (self.key(idx, action, sig) in self.rejects
+                or f"{idx}|{action}" in self.rejects)
 
     def add(self, idx, btype, action, before="", after="", note="", rejected=False, rule="",
-            changed=True):
+            changed=True, sig=""):
         """rule 是本条改动的依据，指向规则集里的具体字段（见 rules_ref.py）。
 
         结尾带 `~` 表示该键在部分规则集里可缺省，缺省时按代码内约定取值。
@@ -332,8 +389,12 @@ class Audit:
         changed=False 表示本条是「说明」而非「改动」（跳过、原样保留、域锁定）：
         它必须出现在报告里——「这里看过、但没动」和「这里漏了」是两件事——
         但不能计入改动数，否则报告自己就在虚报。
+
+        sig 是驳回键的块文本指纹：可驳回动作的条目必须与 blocked() 用同一
+        指纹，勾选框提交回来的 id 下一轮才命中同一块（见 reject_sig）。
         """
-        self.items.append({"id": f"{idx}|{action}", "idx": idx, "sec": self.sec, "block": btype,
+        self.items.append({"id": self.key(idx, action, sig), "idx": idx, "sec": self.sec,
+                           "block": btype,
                            "action": action, "before": before, "after": after, "note": note,
                            "rule": rule, "rejected": bool(rejected), "changed": bool(changed)})
 
@@ -346,8 +407,10 @@ def fmt_snapshot(p):
     会被误判成没变化，审计漏记（F25；字间距同病，PB2）。
     run 范围与 restyle 同口径（段落自身的全部 run）：只看 p.runs 时，
     超链接里的 run 改了字号快照却看不见，审计会漏记这笔版式改动。
+    hAnsi 也要进快照：set_run 写 ascii 时一并重写 hAnsi，不看它的话
+    「仅 hAnsi 不同」的真改动就成了静默改动（同 table_snapshot 的做法）。
     """
-    sizes, cns, latins, bolds, spacings = set(), set(), set(), set(), set()
+    sizes, cns, latins, bolds, spacings, hansis = set(), set(), set(), set(), set(), set()
     for r in para_runs(p):
         cn_f, latin_f, sz, bold = run_style(r)
         if sz is not None:
@@ -357,6 +420,9 @@ def fmt_snapshot(p):
         if latin_f:
             latins.add(latin_f)
         bolds.add(bold)
+        hansi_f = run_hansi(r)
+        if hansi_f:
+            hansis.add(hansi_f)
         rpr = r.find(qn("w:rPr"))
         sp = rpr.find(qn("w:spacing")) if rpr is not None else None
         if sp is not None:
@@ -369,7 +435,7 @@ def fmt_snapshot(p):
     ind_el = ppr.find(qn("w:ind")) if ppr is not None else None
     ind = tuple(sorted(ind_el.attrib.items())) if ind_el is not None else None
     sb, sa = pf.space_before, pf.space_after
-    return {"sizes": sizes, "cn": cns, "latin": latins, "bold": bolds,
+    return {"sizes": sizes, "cn": cns, "latin": latins, "bold": bolds, "hansi": hansis,
             "spacing": spacings,
             "line": line, "rule": pf.line_spacing_rule, "jc": p.alignment,
             "ind": ind,
@@ -384,7 +450,7 @@ def fmt_delta(before, after, target):
     不换值也是行距改动，不能拆成两条两个名字。
     """
     names = {"sizes": "字号", "cn": "中文字体", "latin": "西文字体", "bold": "加粗",
-             "spacing": "字间距",
+             "spacing": "字间距", "hansi": "西文字体(hAnsi)",
              "jc": "对齐", "ind": "缩进", "sb": "段前距", "sa": "段后距"}
     changed = [label for key, label in sorted(names.items()) if before[key] != after[key]]
     if (before["line"], before["rule"]) != (after["line"], after["rule"]):
@@ -885,16 +951,17 @@ def strip_leading_indent_audited(p, audit, idx, btype, indent):
     if not m:
         return
     rule = "typography.body.first_line_indent_chars"
-    if audit.blocked(idx, "段首缩进空格删除"):
+    sig = reject_sig(before_txt)
+    if audit.blocked(idx, "段首缩进空格删除", sig):
         audit.add(idx, btype, "段首缩进空格删除", _frag(before_txt), _frag(before_txt),
                   f"已驳回：保留段首空格，首行缩进仍按 {indent:g} 字符设置",
-                  rejected=True, rule=rule)
+                  rejected=True, rule=rule, sig=sig)
         return
     strip_leading_indent(p)
     audit.add(idx, btype, "段首缩进空格删除", _frag(before_txt), _frag(block_text(p)),
               f"删除段首 {m.end()} 个缩进空白（全角/半角空格、制表符），"
               f"首行缩进改由段落设置 {indent:g} 字符接管",
-              rule=rule)
+              rule=rule, sig=sig)
 
 
 def split_keywords(text, sep):
@@ -1251,12 +1318,14 @@ def reorder_notes(elems, ir, rules, audit):
         seq = [rank.get(kind_of(n["text"]), 99) for n in notes]
         if seq == sorted(seq):
             continue
-        if audit.blocked(b["idx"], "表注／图注层序调整"):
+        if audit.blocked(b["idx"], "表注／图注层序调整",
+                         reject_sig(" / ".join(kind_of(n["text"]) for n in notes))):
             audit.add(b["idx"], b["type"], "表注／图注层序调整",
                       " / ".join(kind_of(n["text"]) for n in notes),
                       " / ".join(kind_of(n["text"]) for n in notes),
                       "已驳回：保持原层序", rejected=True,
-                      rule=f"{b['type']}s.note_layers")
+                      rule=f"{b['type']}s.note_layers",
+                      sig=reject_sig(" / ".join(kind_of(n["text"]) for n in notes)))
             continue
         if b["type"] == "table":
             anchor = elem_of(b, elems)._tbl
@@ -1274,7 +1343,8 @@ def reorder_notes(elems, ir, rules, audit):
         audit.add(b["idx"], b["type"], "表注／图注层序调整",
                   " / ".join(kind_of(n["text"]) for n in notes),
                   " / ".join(kind_of(n["text"]) for n in ordered),
-                  rule=f"{b['type']}s.note_layers")
+                  rule=f"{b['type']}s.note_layers",
+                  sig=reject_sig(" / ".join(kind_of(n["text"]) for n in notes)))
 
 
 # 文献表排序体例（F21）：行为完全由规则集 citation.reference_list.sort 声明
@@ -1427,7 +1497,7 @@ def apply_citation(doc, elems, ir, rules, audit):
                else f"该刊引用体例声明为「{system or '未声明'}」，仅 author-year 才转")
         audit.add(-3, "citation", "引用体系转换（已跳过）",
                   note=f"{why}（citation.system，正文编号引用与文献表保持原样）",
-                  rule="citation.system")
+                  rule="citation.system", changed=False)
         return
 
     index = cr.build_index([block_text(p) for _, p in refs])
@@ -1455,7 +1525,8 @@ def apply_citation(doc, elems, ir, rules, audit):
     if problems:
         audit.add(-3, "citation", "引用体系转换（已跳过）",
                   note="；".join(problems[:4]) + ("…" if len(problems) > 4 else ""),
-                  rule="citation.reference_list.must_require_bidirectional_match")
+                  rule="citation.reference_list.must_require_bidirectional_match",
+                  changed=False)
         return
 
     # ---- 正文引用点 ----
@@ -1481,7 +1552,7 @@ def apply_citation(doc, elems, ir, rules, audit):
         audit.add(idx, btype, "编号样文本未转换",
                   note="形似引用但紧邻数量/区间说法，无法安全判定，原样保留："
                        + "；".join(frags),
-                  rule="citation.in_text")
+                  rule="citation.in_text", changed=False)
 
     # ---- 文献条目重排体例并按目标刊排序 ----
     rewritten = []
@@ -1523,21 +1594,40 @@ def apply_citation(doc, elems, ir, rules, audit):
         for b in ir["blocks"]:
             if b["type"] == "references_heading":
                 el = elem_of(b, elems)
-                anchor = getattr(el, "_p", None)
+                if el is None:
+                    # IR 与文档失配时 elem_of 返回 None（按设计），换下一个
+                    # 标题候选；在 None 上 break 会让 anchor 落进兜底
+                    continue
+                anchor = el._p
                 break
+        moving = {p._p for _, p, _e in ordered}
         if anchor is None:
-            anchor = ordered[0][1]._p.getprevious()
-        if anchor is not None:
-            for _, p, _e in ordered:
-                p._p.getparent().remove(p._p)
-            for _, p, _e in ordered:
-                anchor.addnext(p._p)
-                anchor = p._p
-            changed = [x[0] for x in ordered] != [x[0] for x in rewritten]
-            if changed or (scheme not in SORT_NOTE
-                           and scheme not in APPEARANCE_SCHEMES):
-                audit.add(-4, "reference_item", "文献表排序",
-                          note=sort_note, rule=sort_rule)
+            # 没有标题时的兜底：条目的文档前驱。ordered 是排序序而非文档序，
+            # ordered[0] 的前驱完全可能是另一条待搬条目——不校验「不在待搬
+            # 集合」就把锚点自己摘掉，整段文献表会以脱挂碎片的形式静默丢失。
+            cand = ordered[0][1]._p.getprevious()
+            if cand is not None and cand not in moving:
+                anchor = cand
+        if anchor is None:
+            # 找不到安全的锚点：宁可不搬（条目文字已按目标刊体例重写，只是
+            # 保持原文档序），审计如实说明——静默丢整段文献表比不排序严重
+            audit.add(-4, "reference_item", "文献表排序",
+                      note="找不到不会跟着搬家的锚点（IR 无可解析的文献表标题，"
+                           "条目的文档前驱也在待搬集合），条目保持原文档序",
+                      rule=sort_rule, changed=False)
+            return
+        for _, p, _e in ordered:
+            p._p.getparent().remove(p._p)
+        for _, p, _e in ordered:
+            anchor.addnext(p._p)
+            anchor = p._p
+        changed = [x[0] for x in ordered] != [x[0] for x in rewritten]
+        # 顺序没变（或声明不支持本就不排）时条目是零改动的说明——
+        # changed=False，否则说明型条目虚报进改动数（见 Audit.add 约定）
+        if changed or (scheme not in SORT_NOTE
+                       and scheme not in APPEARANCE_SCHEMES):
+            audit.add(-4, "reference_item", "文献表排序",
+                      note=sort_note, rule=sort_rule, changed=changed)
 
 
 def main():
@@ -1814,16 +1904,17 @@ def main():
                          if b["type"] == "references" and b.get("label")), None)
             old = block_text(p)
             if want and old.strip() != want:
-                if audit.blocked(blk["idx"], "文献表标题归一"):
+                sig = reject_sig(old)
+                if audit.blocked(blk["idx"], "文献表标题归一", sig):
                     audit.add(blk["idx"], t, "文献表标题归一", old, old,
                               "已驳回：保留原写法", rejected=True,
-                              rule="blocks:references/label")
+                              rule="blocks:references/label", sig=sig)
                 elif text_locked(blk):
                     locked_note(audit, blk, "文献表标题归一", "blocks:references/label")
                 else:
                     replace_text(p, want)
                     audit.add(blk["idx"], t, "文献表标题归一", old, want, "仅改标题写法，条目未动",
-                              rule="blocks:references/label")
+                              rule="blocks:references/label", sig=sig)
             rh = rules["typography"].get("references_heading") or {}
             rh_size = rh.get("size_pt", lv1.get("size_pt") or size)
             rh_cn = rh.get("font_cn", lv1.get("font_cn", cn))
@@ -1916,10 +2007,11 @@ def main():
                 new = fill_level_template(hd["levels"][2], sec_no[3]) + core
 
             if new != old:
-                if audit.blocked(blk["idx"], "标题重新编号"):
+                sig = reject_sig(old)
+                if audit.blocked(blk["idx"], "标题重新编号", sig):
                     audit.add(blk["idx"], t, "标题重新编号", old, new,
                               "已驳回：保留原编号", rejected=True,
-                              rule="headings.numbering")
+                              rule="headings.numbering", sig=sig)
                 elif text_locked(blk):
                     # 标题里挂 SEQ 域（Word 自动章节号）时编号归域管，
                     # 改字面文字会在 F9 更新时被域盖回去
@@ -1927,7 +2019,7 @@ def main():
                 else:
                     replace_text(p, new)
                     audit.add(blk["idx"], t, "标题重新编号", old, new, "仅改编号前缀，标题文字未动",
-                              rule="headings.numbering")
+                              rule="headings.numbering", sig=sig)
             if level == 1:
                 audit.sec = core  # 后续改动都归到这个一级标题下，审计里才能定位
             # 二三级标题多数刊要求黑体，此前一律继承正文字体；字体与字号
@@ -1981,16 +2073,17 @@ def main():
                 m = re.match(r"^(内容摘要|内容提要|摘\s*要|提\s*要|关\s*键\s*词)\s*[:：]", old)
                 if m and not old.startswith(want):
                     new = want + old[m.end():]
-                    if audit.blocked(blk["idx"], "标签归一"):
+                    sig = reject_sig(old)
+                    if audit.blocked(blk["idx"], "标签归一", sig):
                         audit.add(blk["idx"], t, "标签归一", old, new,
                                   "已驳回：保留原标签", rejected=True,
-                                  rule=f"blocks:{t}/zh/label")
+                                  rule=f"blocks:{t}/zh/label", sig=sig)
                     else:
                         # 只换前缀，不整段重写：标签的加粗不该传染给整段摘要
                         replace_prefix(p, m.end(), want)
                         audit.add(blk["idx"], t, "标签归一", old, new,
                                   "仅改标签前缀，正文文字未动",
-                                  rule=f"blocks:{t}/zh/label")
+                                  rule=f"blocks:{t}/zh/label", sig=sig)
             # 关键词分隔符归一：各刊要求「；」「，」或空格，稿件里常是混的
             sep = next((b.get("separator") for b in rules["blocks"]
                         if b["type"] == "keywords" and b.get("lang") == "zh"), None)
@@ -1999,10 +2092,11 @@ def main():
                 items = split_keywords(before_kw[len(want):], sep)
                 new_kw = want + sep.join(items)
                 if new_kw != before_kw and len(items) >= 2:
-                    if audit.blocked(blk["idx"], "关键词分隔符归一"):
+                    sig = reject_sig(before_kw)
+                    if audit.blocked(blk["idx"], "关键词分隔符归一", sig):
                         audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, new_kw,
                                   "已驳回：保留原分隔符", rejected=True,
-                                  rule="blocks:keywords/zh/separator")
+                                  rule="blocks:keywords/zh/separator", sig=sig)
                     else:
                         # 同理：只重写标签之后的正文，标签本身的加粗不能扩散
                         replace_after(p, len(want), sep.join(items))
@@ -2010,7 +2104,7 @@ def main():
                         # 审计记的必须是落盘结果，不是替换前的期望值
                         audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, block_text(p),
                                   f"改为「{sep}」，共 {len(items)} 个关键词，词条文字未动",
-                                  rule="blocks:keywords/zh/separator")
+                                  rule="blocks:keywords/zh/separator", sig=sig)
             # 摘要与关键词常各自定字体（统计研究：提要宋体、关键词黑体），必须分别取
             key = ("abstract_en" if t == "abstract" else "keywords_en") if blk.get("lang") == "en" \
                 else ("abstract" if t == "abstract" else "keywords")
@@ -2080,10 +2174,11 @@ def main():
                 # 吃掉一个空格
                 if new_prefix and new_prefix.rstrip() != old_prefix.rstrip():
                     before_txt = block_text(p)
-                    if audit.blocked(blk["idx"], "文献条目编号归一"):
+                    sig = reject_sig(before_txt)
+                    if audit.blocked(blk["idx"], "文献条目编号归一", sig):
                         audit.add(blk["idx"], t, "文献条目编号归一", before_txt, before_txt,
                                   "已驳回：保留原编号写法", rejected=True,
-                                  rule="citation.reference_list.number_format")
+                                  rule="citation.reference_list.number_format", sig=sig)
                     elif text_locked(blk):
                         # EndNote 文献表是一整个 EN.REFLIST 域：条目编号是该域的
                         # 显示结果，改了前缀，用户 F9 更新就整表回滚
@@ -2093,7 +2188,7 @@ def main():
                         replace_prefix(p, len(old_prefix), new_prefix)
                         audit.add(blk["idx"], t, "文献条目编号归一", before_txt, block_text(p),
                                   f"编号写法改为 {new_prefix.strip()}，条目内容未动",
-                                  rule="citation.reference_list.number_format")
+                                  rule="citation.reference_list.number_format", sig=sig)
 
             ref_tp = rules["typography"].get("references") or {}
             r_size = ref_tp.get("size_pt", size)
@@ -2163,9 +2258,10 @@ def main():
                 old_cap = block_text(p)
                 new_cap = f"{m.group(1)}{m.group(2)}{pad}{m.group(3)}".rstrip()
                 if new_cap != old_cap:
-                    if audit.blocked(blk["idx"], "题注归一"):
+                    sig = reject_sig(old_cap)
+                    if audit.blocked(blk["idx"], "题注归一", sig):
                         audit.add(blk["idx"], t, "题注归一", old_cap, new_cap,
-                                  "已驳回：保留原题注", rejected=True, rule=gap_rule)
+                                  "已驳回：保留原题注", rejected=True, rule=gap_rule, sig=sig)
                     elif text_locked(blk):
                         # 「表1」的 1 常是 SEQ 域：改字面间隔，F9 更新后域只重出
                         # 数字，间隔照样丢，还可能把域结果变成死文本
@@ -2173,7 +2269,8 @@ def main():
                     else:
                         replace_text(p, new_cap)
                         audit.add(blk["idx"], t, "题注归一", old_cap, new_cap,
-                                  f"编号与标题间隔改为「{gap_kind}」，题注文字未动", rule=gap_rule)
+                                  f"编号与标题间隔改为「{gap_kind}」，题注文字未动",
+                                  rule=gap_rule, sig=sig)
             cap_def = ((["caption_font_cn"] if cap_font_def else [])
                        + (["body_line_pt"] if line_def else []))
             cap_rule = ("tables.caption_size_pt" if "caption_size_pt" in rules["tables"]

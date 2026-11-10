@@ -248,7 +248,10 @@ def test_label_tab_case_end_to_end(tmp_path):
            if result.block_type.get(i) == "keywords"}
     assert list(out.values()) == ["关键词：数字金融；实证"], "标签区的制表符吞了正文"
 
-    item = result.item_by_id(f"{list(out)[0]}|标签归一")
+    # 审计条目 id 现为「改前文本指纹|动作」（render_from_ir.Audit.key）；
+    # 按「块序号＋动作名」定位条目，不耦合键的具体格式。
+    item = next((i for i in result.items
+                 if i["action"] == "标签归一" and i["idx"] == list(out)[0]), None)
     assert item and not item["rejected"]
     assert item["before"] == "关键词\t：数字金融；实证"
     assert item["after"] == out[list(out)[0]], "审计 after 与成品不符"

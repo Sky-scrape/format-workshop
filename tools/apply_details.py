@@ -163,20 +163,33 @@ def fill_placeholders(doc, blocks, block_el, details):
         p = Paragraph(el, doc)
         txt = p.text
         new = txt
+        candidates = set()
         for key, val in vals.items():
             if val:
                 new, n = PLACEHOLDER[key].subn(lambda m, v=val: m.group(1) + v, new)
                 if n:
-                    done.add(key)
+                    candidates.add(key)
         if new == txt:
             continue
-        nodes = [t for r in p.runs for t in r._r.findall(qn("w:t"))]
-        if nodes:
-            nodes[0].text = new
-            nodes[0].set(XML_SPACE, "preserve")
-            for node in nodes[1:]:
-                node.text = ""
+        # 物理文字节点按段落全部后代 run 收集（不下钻文本框/删除内容）：
+        # p.runs 只取直接子级 w:r，占位符整段在 w:hyperlink 或域结果里时
+        # 它一个都看不见——只按它写 docx 会漏写，而 IR 照更新，两者就此
+        # 分叉（体检按 IR 判「已具备」，成品却还留着占位符）。此处口径与
+        # render_from_ir.para_runs 一致。
+        nodes = [t for r in p._p.xpath(".//w:r[not(ancestor::w:drawing) and "
+                                       "not(ancestor::w:pict) and not(ancestor::w:object)"
+                                       " and not(ancestor::w:del)]")
+                 for t in r.findall(qn("w:t"))]
+        if not nodes:
+            # 物理节点一个都没有：不写 docx，也不更新 IR、不算填好——
+            # 兜底注入（existing 不再添加）会补上这条信息，IR 与成品一致
+            continue
+        nodes[0].text = new
+        nodes[0].set(XML_SPACE, "preserve")
+        for node in nodes[1:]:
+            node.text = ""
         b["text"] = new
+        done |= candidates
     return done
 
 
@@ -315,7 +328,7 @@ def main():
         # 只有英文标题需要换锚点，其余英文块靠原有链式锚点（标题→作者→单位→摘要→关键词）
         # 依次接续；若把所有英文锚点都改成文末，链就断了，Summary 会跑到单位前面
         if en_at_tail and field == "english_title":
-            anchors = [("reference_item", "zh"), ("references", "zh"),
+            anchors = [("reference_item", "zh"), ("references_heading", "zh"),
                        ("author_note", "zh")] + list(anchors)
         spec.append((field, btype, lang, anchors))
 
@@ -353,9 +366,18 @@ def main():
         if note_blk:
             anchor = type_last_el.get(("reference_item", "zh"))
             if anchor is None:
-                anchor = type_last_el.get(("references", "zh"))
+                anchor = type_last_el.get(("references_heading", "zh"))
             if anchor is None:
-                anchor = list(doc.element.body)[-1]
+                # 兜底取最后一个块级元素：body 末尾的 sectPr 是节属性不是正文，
+                # addnext 到它后面会产出「节属性之后还有正文」的非法结构
+                # （ECMA-376 CT_Body 里 sectPr 必须居末），Word/WPS 重存时要
+                # 归一化搬动段落。IR 类型名是 references_heading（parse_docx
+                # 产出），不存在 "references" 类型——旧锚点键永远落空。
+                block_els = [el for el in doc.element.body
+                             if el.tag in (qn("w:p"), qn("w:tbl"))]
+                anchor = block_els[-1] if block_els else None
+                if anchor is None:
+                    anchor = doc.element.body[-1] if len(doc.element.body) else None
             p1 = add_paragraph_after(doc, anchor, note_blk.get("label") or "作者简介")
             p2 = add_paragraph_after(doc, p1._element, details["author_bio"].strip())
             inserted.append({"field": "author_note", "type": "author_note",
@@ -406,9 +428,15 @@ def main():
     children1 = list(doc.element.body)
     pos = {id(el): i for i, el in enumerate(children1)}
     new_blocks = []
+    dropped = []
     for b in blocks:
         el = block_el.get(id(b))
         if el is None:
+            # idx 越出 body 子元素范围（IR 与 docx 失配）的块会整块从
+            # filled.ir.json 里消失：致谢、基金这类块丢了，匿名工具和
+            # 合规报告就永久看不见它们——匿名稿会留着致谢段且审计零痕迹
+            # （F4-8）。注入失败有 [skip] 告警，这里同样不能静默。
+            dropped.append(f"{b['type']}：「{(b.get('text') or '')[:20]}」(idx={b['idx']})")
             continue
         nb = dict(b)
         nb["idx"] = pos[id(el)]
@@ -429,6 +457,11 @@ def main():
         print(f"作者信息页 {page_items} 行（独立成页，匿名稿会整页删除）")
     if footer_lines:
         print(f"首页脚注 {len(footer_lines)} 行：" + "；".join(l[:14] for l in footer_lines))
+    if dropped:
+        print(f"[warn] {len(dropped)} 个 IR 块的 idx 越出 body 子元素范围，"
+              "已从输出 IR 丢弃——下游（匿名/合规报告）看不到这些块，"
+              "请检查 IR 与 docx 是否同一次解析产出：" + "；".join(dropped),
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

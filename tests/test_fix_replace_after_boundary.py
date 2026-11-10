@@ -136,7 +136,10 @@ def test_full_keep_zone_without_text_node_appends():
 # ---------- 端到端：真实管线 + 真实规则集（tjyj） ----------
 
 def _kw_audit_item(result, idx):
-    return result.item_by_id(f"{idx}|关键词分隔符归一")
+    # 审计条目 id 现为「改前文本指纹|动作」（render_from_ir.Audit.key，驳回键
+    # 与位置无关）；按「块序号＋动作名」定位条目，不耦合键的具体格式。
+    return next((i for i in result.items
+                 if i["action"] == "关键词分隔符归一" and i["idx"] == idx), None)
 
 
 def test_bold_label_run_end_to_end(tmp_path):
@@ -187,6 +190,7 @@ def test_label_tab_then_separator_end_to_end(tmp_path):
     assert item and not item["rejected"]
     assert item["after"] == out[idx], "审计 after 与成品不符"
 
-    lab = result.item_by_id(f"{idx}|标签归一")
+    lab = next((i for i in result.items
+                if i["action"] == "标签归一" and i["idx"] == idx), None)
     assert lab and lab["after"] == "关键词：数字金融，实体经济", \
         "标签归一这一步的成品快照不得预先包含第二步的改动"
