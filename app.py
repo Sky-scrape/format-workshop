@@ -170,6 +170,13 @@ FOOTER_FIELDS = [
     ("corresponding", "通讯作者", "如需在首页注明，例：作者姓名，邮箱 xxx@example.com"),
 ]
 
+# 补录字段服务端长度上限：表单输入只在本机，但 80MB 的 POST 体不该原样
+# 落盘——超长的「英文摘要」注入进成品只会以不可解释的方式在渲染层失败。
+# 一篇论文的英文摘要远用不到 20k 字符，正常输入永不触界。
+DETAIL_FIELD_MAX = 20000
+# 驳回列表同理：审计条目到不了这个量级，条数与单条长度都设闸（F1-5）。
+REJECT_IDS_MAX = 2000
+
 
 # ---------------------------------------------------------------- 数据加载
 
@@ -179,7 +186,12 @@ def rules_of(jid):
     p = RULES_DIR / f"{jid}.json"
     if not p.exists():
         return None
-    return json.loads(p.read_text(encoding="utf-8"))
+    # 坏 JSON（硬杀留下的截断 / 手改坏）只让这本刊不可用，与列表侧
+    # _load_journals_uncached「坏文件只跳过」同一口径，别把整页拖成 500。
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):        # 与 read_json_safe 同款异常集
+        return None
 
 
 try:                                  # 有 pypinyin 就按真实拼音排（多音字也对，如「会计」= kuai）
@@ -244,11 +256,11 @@ def _load_journals_uncached():
                 "levels": len(d["headings"]["levels"]),
                 "cite": "编号制" if d["citation"]["system"] == "numbered" else "作者年制",
                 "note_order": "→".join(
-                    {"general": "注", "source": "来源", "data_source": "数据",
-                     "cell": "①②"}.get(x["kind"], x["kind"])
+                    x.get("marker") or {"general": "注", "source": "来源",
+                                        "data_source": "数据"}.get(x["kind"], x["kind"])
                     for x in d["tables"]["note_layers"]),
                 "words": (d.get("limits", {}).get("total") or {}).get("value"),
-                "abstract": (d.get("limits", {}).get("abstract") or {}).get("value"),
+                "abstract": _abstract_card(d.get("limits", {}).get("abstract")),
                 "status": v.get("status", "unverified"),
                 "status_label": STATUS_LABEL.get(v.get("status"), "未知"),
                 "authority": auth,
@@ -893,6 +905,24 @@ def _stage_render(d, jid, original):
     # 当改动报给用户——报告自己虚报，整套审计就没有说服力了。
     n_changed = sum(1 for it in audit_items if it.get("changed", True))
     n_notes = len(audit_items) - n_changed
+    # 驳回有没有真的落上（S4）：reject.json 里的 id 若与审计条目对不上
+    # （编码错位、稿子重传后指纹变了、手工拼的 id），渲染器会静默跳过——
+    # 用户以为驳回成功实则原改动照做。这里数出未命中数，日志留痕 + meta
+    # 带到结果页提示重驳回。
+    requested_ids = []
+    if reject_file.is_file():
+        raw_reject = read_json_safe(reject_file)
+        if isinstance(raw_reject, dict):
+            requested_ids = [x for x in raw_reject.get("ids", []) if x]
+    if requested_ids:
+        known = {it.get("id") for it in audit_items if it.get("id")}
+        unmatched = [x for x in requested_ids if x not in known]
+        if unmatched:
+            app.logger.warning(
+                "驳回 id 未命中任何审计条目（任务 %s，%d/%d 条）：%s",
+                d.name, len(unmatched), len(requested_ids), unmatched[:10])
+    else:
+        unmatched = []
     ir_data = read_json(render_ir) or {}
     j = journal_by_id(jid) or {"id": jid, "name": jid}
 
@@ -913,6 +943,7 @@ def _stage_render(d, jid, original):
         "docx_anon": anon_docx.name if anon_docx else "",
         "anon_removed": len((read_json(audit_json, {}) or {}).get("anonymize", {}).get("removed", [])),
         "rejected": len(audit.get("rejected", [])),
+        "rejected_unmatched": len(unmatched),
         "injected": injected,
         "stage": "rendered",
     })
@@ -1018,6 +1049,10 @@ def fail_page(d, err, journals=None):
     err.detail = _scrub_local_paths(err.detail)   # error.json 与页面同一份 detail（F44）
     write_json_atomic(d / "error.json",
                       {"title": err.title, "hint": err.hint, "detail": err.detail})
+    # stage 不在这里改成 failed：重渲染失败的任务旧一轮已完好落位（F36 回滚
+    # 契约要求回滚后 meta 逐字节不变，stage 仍是 rendered、成品可下载），
+    # 一律标「失败」会把可用成品藏起来。失败态由 history 按
+    # 「error.json 在场且无可用成品」推导（见 history 路由）。
     write_meta(d, meta)
     return render_template("failed.html", job=d.name, err=err, meta=meta,
                            journals=journals if journals is not None else load_journals(),
@@ -1089,9 +1124,13 @@ def details_context(d, meta):
         else:
             unknown_missing.append(name)
 
+    # IR 被外部改坏成「合法 JSON 但结构不对」时（blocks 元素非 dict / 缺 type /
+    # blocks 是 null），逐项取 b["type"] 会把补录页整页拖成 500。这里只取结构
+    # 完好的块，坏块当作不存在——与 _fmt_subtitle/_block_req 的 isinstance 同款。
+    blocks = [b for b in (ir.get("blocks") or []) if isinstance(b, dict) and b.get("type")]
     # 同一类型可能有中英两套（分类号），判断"已有"必须带上语言
     present = {(b["type"], "en" if b["type"].startswith("english_") or b.get("lang") == "en" else "zh")
-               for b in ir.get("blocks", [])}
+               for b in blocks}
     field_rows = []
     for key, btype, lang, label, hint in DETAIL_FIELDS:
         need = key in missing_keys
@@ -1100,12 +1139,12 @@ def details_context(d, meta):
             field_rows.append({"key": key, "label": label, "hint": hint,
                                "need": need, "value": ""})
 
-    fm = [b.get("text", "") for b in ir.get("blocks", []) if b["type"] == "front_matter"]
+    fm = [b.get("text", "") for b in blocks if b["type"] == "front_matter"]
     authors = fm[-1] if fm else ""
     stats = ir.get("stats") or {}
     keys = [re.sub(r"^关键词\s*[:：]\s*", "", b.get("text", ""))
-            for b in ir.get("blocks", []) if b["type"] == "keywords"]
-    abstract = [b.get("text", "") for b in ir.get("blocks", []) if b["type"] == "abstract"]
+            for b in blocks if b["type"] == "keywords"]
+    abstract = [b.get("text", "") for b in blocks if b["type"] == "abstract"]
 
     saved = read_json(d / "details.json", {}) or {}
     for f in field_rows:
@@ -1118,7 +1157,7 @@ def details_context(d, meta):
     cite_cfg = rules.get("citation") or {}
     cite_rl = cite_cfg.get("reference_list") or {}
     has_cite = any("[" in (b.get("text") or "") and "]" in (b.get("text") or "")
-                   for b in ir.get("blocks", []) if b["type"] == "body")
+                   for b in blocks if b["type"] == "body")
     cite_label = {"author-year": "作者-年份制（张三，2020）",
                   "numbered": "顺序编码制（[1]）"}.get(cite_cfg.get("system"), "")
     # 勾选闸与渲染层 apply_citation 的硬闸同一判据（P4-1 阶段 D）：只对声明
@@ -1231,11 +1270,16 @@ def _ai_form():
     cur = ai_assist.load_config()
     key = (request.form.get("api_key") or "").strip() or str(cur.get("api_key") or "")
 
-    def num(name, default):
+    def num(name, default, lo=1, hi=None):
         try:
-            return max(1, int(request.form.get(name) or default))
+            v = int(request.form.get(name) or default)
         except (TypeError, ValueError):
             return default
+        # 按表单声明的区间钳制（settings.html 的 min/max 只约束浏览器控件）：
+        # 超大的 timeout 会让慢端点拖满解析子进程的 STEP_TIMEOUT，整轮转换
+        # 失败还误报「文件体积过大」，违背「超时即放弃 AI」的页面承诺（F1-6）。
+        v = max(lo, v)
+        return min(hi, v) if hi else v
 
     return {
         "enabled": request.form.get("enabled") == "on",
@@ -1243,8 +1287,8 @@ def _ai_form():
         "model": (request.form.get("model") or "").strip(),
         "api_key": key,
         "send_mode": request.form.get("send_mode") or "snippet",
-        "timeout": num("timeout", 60),
-        "snippet_chars": num("snippet_chars", 60),
+        "timeout": num("timeout", 60, lo=5, hi=300),
+        "snippet_chars": num("snippet_chars", 60, lo=20, hi=400),
     }
 
 
@@ -1382,11 +1426,31 @@ def journal_extract():
         lock.release()
 
 
+def _draft_report(d):
+    """读草稿的 report.json 并归一成模板可安全下钻的形状。
+
+    report.json 缺失 / 截断 / 手改坏时（比如只留下 draft.json 的现场），
+    journal_draft.html 第 59 行的 report.stats.extracted 会把页面拖成
+    jinja2 UndefinedError 500——发布闸前的报错回显（_journal_publish 的
+    back()）复用同一模板，同样中招。这里补齐模板用到的每个键，坏报告
+    按空报告渲染：错误清单一空，ok_to_publish=False 天然挡住发布。
+    """
+    report = read_json_safe(d / "report.json")
+    if not isinstance(report, dict):
+        report = {}
+    if not isinstance(report.get("stats"), dict):
+        report["stats"] = {}
+    if not isinstance(report.get("errors"), list):
+        report["errors"] = []
+    report.setdefault("ok_to_publish", False)
+    return report
+
+
 @app.route("/journals/draft/<jid>")
 def journal_draft(jid):
     d = draft_dir(jid)
     rules = read_json(d / "draft.json", {}) or {}
-    report = read_json(d / "report.json", {}) or {}
+    report = _draft_report(d)
     ext = (rules.get("verification") or {}).get("extraction") or {}
     return render_template("journal_draft.html", jid=jid, rules=rules, report=report,
                            ext=ext, journal=rules.get("journal") or {},
@@ -1415,7 +1479,7 @@ def _journal_publish(jid):
     # 持锁后重新读取草稿与目标状态：覆盖确认不能停留在构建开始前的旧现场。
     d = draft_dir(jid)
     rules = read_json(d / "draft.json", {}) or {}
-    report = read_json(d / "report.json", {}) or {}
+    report = _draft_report(d)
 
     def back(msg, status=400):
         ext = (rules.get("verification") or {}).get("extraction") or {}
@@ -1528,12 +1592,25 @@ def history():
             m = read_meta(d)
             if not m.get("original"):
                 continue
+            # 解析失败（stage=uploaded 且无 IR）的任务不能给「继续补录」：
+            # 补录页渲染得出表单、提交后渲染必败，落到 F12 的「重新上传」
+            # 死路。IR 存在但损坏时不误伤——details 路由会重解析自救。
+            ir_ok = isinstance(read_json_safe(d / "manuscript.ir.json"), dict)
+            stage = m.get("stage") or ("rendered" if m.get("docx") else "details")
+            # 失败态现场推导（S3）：error.json 在场且没有可用成品——解析失败
+            # 的任务 fail_page 不改 meta.stage（F36 回滚契约不许碰），历史页
+            # 若仍按 stage 渲染就会把失败任务照「待补录」摆出来、诱导用户去
+            # 把同一错误再踩一遍。已交付任务的重渲染失败不算失败：成品还在、
+            # 可下载，标「失败」反而把可用产物藏起来。
+            docx_usable = bool(m.get("docx")) and (d / m["docx"]).is_file()
             rows.append({
                 "job": d.name,
                 "original": m.get("original"),
                 "journal": m.get("journal_name") or m.get("journal", ""),
                 "created": m.get("created", ""),
-                "stage": m.get("stage") or ("rendered" if m.get("docx") else "details"),
+                "stage": stage,
+                "failed": (d / "error.json").is_file() and not docx_usable,
+                "parse_failed": not ir_ok,
                 "audit": m.get("audit_total"),
                 "mtime": d.stat().st_mtime,
             })
@@ -1646,6 +1723,14 @@ def details(job):
             data[key] = (request.form.get(key) or "").strip()
         for f in author_page_fields(rules_of(meta["journal"]) or {}):
             data[f["key"]] = (request.form.get(f["key"]) or "").strip()
+        # 服务端长度闸（F1-5）：前端没有 maxlength，80MB 的 POST 体不该
+        # 原样落盘再注入成品。超限是请求本身的问题，按 400 拒掉。
+        oversized = [k for k, v in data.items() if len(v) > DETAIL_FIELD_MAX]
+        if oversized:
+            return render_template(
+                "error.html", code="400", title="填写内容过长",
+                hint=f"{'、'.join(oversized)} 超过 {DETAIL_FIELD_MAX} 字上限，"
+                     "请删减后再提交（一篇论文用不到这么长）。"), 400
         citation = request.form.get("citation") == "on"
 
         def prepare():
@@ -1694,6 +1779,8 @@ def reject_edits(job):
     if not meta.get("docx"):
         abort(404)
     ids = [x for x in request.form.getlist("rid") if x and len(x) < 200]
+    if len(ids) > REJECT_IDS_MAX:    # 条数闸（F1-5）：审计条目到不了这个量级
+        abort(400)
 
     def prepare():
         write_json_atomic(d / "reject.json", {"ids": ids})
@@ -1775,34 +1862,72 @@ def diff(job):
             return str(cur)
 
     def limit_txt(r, key):
-        """该刊没声明上限时（如数量经济技术经济研究不设总字数）如实写"未声明"。"""
+        """该刊没声明上限时（如数量经济技术经济研究不设总字数）如实写"未声明"。
+
+        区间/仅下限型（如 tjyj 摘要 300–500、zgrz 摘要 ≥600）也照规则集给，
+        不因缺单一 value 就当「未声明」。
+        """
         lim = (r.get("limits") or {}).get(key) or {}
-        if lim.get("value") is None:
-            return "未声明"
-        return (f'{lim["value"]:,}（{lim.get("metric", "?")} 口径）' if key == "total"
-                else f'{lim["value"]} 字')
+        v, lo, hi = lim.get("value"), lim.get("min"), lim.get("max")
+        if v is not None:
+            return (f'{v:,}（{lim.get("metric", "?")} 口径）' if key == "total"
+                    else f"{v} 字")
+        if lo and hi:
+            return f"{lo}–{hi} 字"
+        if hi:
+            return f"≤ {hi} 字"
+        if lo:
+            return f"≥ {lo} 字"
+        return "未声明"
 
     pct = lambda v: f"{v:g}pt"  # noqa: E731
-    NOTE_KIND = {"general": "注", "source": "来源", "data_source": "数据", "cell": "①②"}
+    NOTE_KIND = {"general": "注", "source": "来源", "data_source": "数据"}
 
     def border_txt(r):
-        b = r.get("tables", {}).get("border_pt") or {}
+        b = (r.get("tables") or {}).get("border_pt") or {}
         if not isinstance(b, dict):
             return str(b)
         lab = {"top": "顶", "header_bottom": "表头下", "bottom": "底"}
         return " / ".join(f"{lab.get(k, k)} {v:g}" for k, v in b.items()) + " pt"
 
     def note_txt(r):
-        return "→".join(NOTE_KIND.get(x["kind"], x["kind"]) for x in r["tables"]["note_layers"])
+        # 规则集缺 tables/note_layers（或元素不是 dict）时显「—」，不 500：
+        # 与本页其余行走同一 g()/.get 口径（查询页「任何值的展示问题都不该
+        # 把整页拖成 500」，F1-3）
+        layers = (r.get("tables") or {}).get("note_layers")
+        if not isinstance(layers, list):
+            return "—"
+        parts = []
+        for x in layers:
+            if not isinstance(x, dict):
+                continue
+            parts.append(x.get("marker") or NOTE_KIND.get(x.get("kind"), x.get("kind") or ""))
+        return "→".join(p for p in parts if p)
 
     def line_txt(r):
         """行距：倍数行距如实展示倍数，同时给出折算磅值，两刊才可比。"""
-        ls = ((r.get("typography") or {}).get("body") or {}).get("line_spacing") or {}
+        body = r.get("typography")
+        body = body.get("body") if isinstance(body, dict) else None
+        ls = (body or {}).get("line_spacing") or {}
+        if not isinstance(ls, dict):
+            return "—"
         if ls.get("mode") == "multiple" and ls.get("value"):
             eq = ls.get("equivalent_exact_pt")
             return f'{ls["value"]:g} 倍' + (f'（≈{eq:g}pt）' if eq else "")
         v = ls.get("value_pt")
         return f"{v:g}pt" if isinstance(v, (int, float)) else "—"
+
+    def cite_txt(r):
+        # 缺 citation.system 显「—」；有值才判编号/作者年（F1-3）
+        s = g(r, "citation", "system")
+        return "—" if s == "—" else ("编号制" if s == "numbered" else "作者年制")
+
+    def levels_txt(r):
+        # 缺 headings.levels 显「—」；非列表不给 join 拆字符（F1-3）
+        lv = g(r, "headings", "levels")
+        if lv == "—":
+            return "—"
+        return " / ".join(lv) if isinstance(lv, list) else str(lv)
 
     rows = [
         ("纸张", g(ra, "page", "size"), g(rb, "page", "size")),
@@ -1817,10 +1942,8 @@ def diff(job):
          g(rb, "typography", "title", "size_pt", fmt=pct)),
         ("摘要字号", g(ra, "typography", "abstract", "size_pt", fmt=pct),
          g(rb, "typography", "abstract", "size_pt", fmt=pct)),
-        ("标题层级", " / ".join(ra["headings"]["levels"]), " / ".join(rb["headings"]["levels"])),
-        ("引用体系",
-         "编号制" if ra["citation"]["system"] == "numbered" else "作者年制",
-         "编号制" if rb["citation"]["system"] == "numbered" else "作者年制"),
+        ("标题层级", levels_txt(ra), levels_txt(rb)),
+        ("引用体系", cite_txt(ra), cite_txt(rb)),
         ("总字数上限", limit_txt(ra, "total"), limit_txt(rb, "total")),
         ("摘要上限", limit_txt(ra, "abstract"), limit_txt(rb, "abstract")),
         ("表格线宽", border_txt(ra), border_txt(rb)),
@@ -1834,7 +1957,11 @@ def diff(job):
 
 
 @app.route("/job/<job>/failed")
+@job_read_locked
 def failed(job):
+    """失败页回访。fail_page 会重写 error.json 与 meta（带写副作用的 GET），
+    必须与渲染提交互斥：渲染进行中访问会把旧失败写回、盖掉已提交的新 meta
+    （error.json 复活 / meta 回退），与 download/job_file 同款闸（F1-2）。"""
     d = job_dir(job)
     p = d / "error.json"
     if not p.exists():
@@ -1992,12 +2119,40 @@ def _fmt_heading_level(d):
 
 
 def _fmt_limit(lim):
-    """单值上限（摘要等）：单位跟口径走，口径认不出就按「字」，不编。"""
-    v = lim.get("value") if isinstance(lim, dict) else None
-    if v is None:
+    """字数上限（摘要等）：单一上限 / 区间 / 仅下限都照规则集给（与 render_spec
+    的三分支同口径，§17.1），单位跟口径走，口径认不出就按「字」，不编。"""
+    if not isinstance(lim, dict):
         return None
     unit = _METRIC_UNIT.get(lim.get("metric"), "字")
-    return f"≤ {v:,} {unit}"
+    v = lim.get("value")
+    if v is not None:
+        return f"≤ {v:,} {unit}"
+    lo, hi = lim.get("min"), lim.get("max")
+    if lo and hi:
+        return f"{lo:,}–{hi:,} {unit}"
+    if hi:
+        return f"≤ {hi:,} {unit}"
+    if lo:
+        return f"≥ {lo:,} {unit}"
+    return None
+
+
+def _abstract_card(lim):
+    """列表卡片的「摘要」栏：模板会在取值后面接「字」，所以这里给不带单位的
+    数/区间；区间与仅下限型（如 tjyj 300–500、zgrz ≥600）不再掉成「未规定」。"""
+    if not isinstance(lim, dict):
+        return None
+    v = lim.get("value")
+    if v is not None:
+        return v
+    lo, hi = lim.get("min"), lim.get("max")
+    if lo and hi:
+        return f"{lo}–{hi}"
+    if hi:
+        return f"≤ {hi}"
+    if lo:
+        return f"≥ {lo}"
+    return None
 
 
 def _fmt_total(lim):
@@ -2057,8 +2212,9 @@ def _fmt_levels(levels):
 
 
 def _fmt_note_layers(layers):
-    kind = {"general": "注", "source": "来源", "data_source": "数据", "cell": "①②"}
-    return "→".join(kind.get(x.get("kind"), x.get("kind")) for x in layers) or None
+    kind = {"general": "注", "source": "来源", "data_source": "数据"}
+    return "→".join(x.get("marker") or kind.get(x.get("kind"), x.get("kind"))
+                    for x in layers) or None
 
 
 def _fmt_border(b):
@@ -2302,7 +2458,9 @@ QUERY_SECTIONS = [
          "fmt": _fmt_anon_blocks},
         {"key": "author_page", "label": "作者信息页", "ref": "submission.author_page~",
          "fmt": _fmt_author_page, "note_refs": ["submission.author_page.note~"]},
-        {"key": "file_format", "label": "提交文件格式", "ref": "submission.file_format~"},
+        {"key": "file_format", "label": "提交文件格式", "ref": "submission.file_format~",
+         "fmt": lambda v: " / ".join(v) if isinstance(v, list) else str(v),
+         "note_refs": ["submission.file_format_note~"]},
         {"key": "statements", "label": "声明要件", "ref": "statements", "fmt": _fmt_statements},
     ]},
     {"key": "blocks", "title": "篇章结构要件", "rows": _block_rows([

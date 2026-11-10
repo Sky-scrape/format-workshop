@@ -39,12 +39,18 @@ font-size:var(--fs-aux);cursor:pointer}
       <tr>
         <td class="name" title="{{ r.original }}">{{ r.original }}</td>
         <td>{{ r.journal }}</td>
-        <td class="dim">{% if r.stage == 'rendered' %}{{ r.audit }} 条改动{% else %}待补录{% endif %}</td>
+        <td class="dim">
+          {% if r.stage == 'rendered' %}{{ r.audit }} 条改动
+          {% elif r.failed or r.parse_failed %}失败
+          {% else %}待补录{% endif %}</td>
         <td class="dim">{{ r.created or '—' }}</td>
         <td>
           {% if r.stage == 'rendered' %}
           <a class="act" href="/result/{{ r.job }}">查看结果</a>
           <a class="act" href="/job/{{ r.job }}/download/docx">下载成品</a>
+          {% elif r.failed or r.parse_failed %}
+          {# 失败任务没有补录可言：出路是失败页（含「重新上传」/换刊重试），不是再失败一遍（S3） #}
+          <a class="act" href="/job/{{ r.job }}/failed">查看失败原因</a>
           {% else %}
           <a class="act" href="/job/{{ r.job }}/details">继续补录</a>
           {% endif %}

@@ -6,7 +6,7 @@
     <div class="success-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
     <div><h1>排版完成，稿件已就绪。</h1>
       <p>{{ meta.original }} 已按 <strong>{{ journal.name }}</strong> 的版式完成重排{% if meta.elapsed %}<i class="sep"></i>耗时 {{ meta.elapsed }} 秒{% endif %}</p>
-      <div class="result-tags"><span class="tag {{ journal.auth_class }}">版式依据：{{ journal.auth_label }}</span><span class="tag {{ 't-ok' if journal.status == 'verified' else 't-part' }}">{{ journal.status_label }}</span>{% if meta.injected %}<span class="tag t-ok">已注入 {{ meta.injected|length }} 项作者信息</span>{% endif %}{% if meta.rejected %}<span class="tag t-part">已驳回 {{ meta.rejected }} 条改动</span>{% endif %}{% if meta.audit_notes %}<span class="tag">另有 {{ meta.audit_notes }} 条说明项（未改动）</span>{% endif %}</div>
+      <div class="result-tags"><span class="tag {{ journal.auth_class }}">版式依据：{{ journal.auth_label }}</span><span class="tag {{ 't-ok' if journal.status == 'verified' else 't-part' }}">{{ journal.status_label }}</span>{% if meta.injected %}<span class="tag t-ok">已注入 {{ meta.injected|length }} 项作者信息</span>{% endif %}{% if meta.rejected %}<span class="tag t-part">已驳回 {{ meta.rejected }} 条改动</span>{% endif %}{% if meta.rejected_unmatched %}<span class="tag t-part">有 {{ meta.rejected_unmatched }} 条驳回没有生效，请回审计报告核对后重新勾选</span>{% endif %}{% if meta.audit_notes %}<span class="tag">另有 {{ meta.audit_notes }} 条说明项（未改动）</span>{% endif %}</div>
     </div>
     <div class="result-stats">
       <div class="stat"><strong>{{ meta.blocks or '—' }}</strong><span>内容块</span></div>

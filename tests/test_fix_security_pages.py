@@ -211,6 +211,39 @@ def test_traversal_journal_ids_are_rejected(app_module, client, work):
     assert client.get("/workspace?journal=tjyj").status_code == 200
 
 
+class _NoCompose:
+    """RULES_DIR 哨兵：一旦被拼出 traversal 子路径就地抛错。
+
+    正当分支（workspace 报错页的期刊列表、rules_of 校验合法 id）只会拼
+    f"{jid}.json" 这类不含 .. 的路径，撞不上断言——守住「只在守卫漏放
+    traversal id 时才响」，别的分支拿到哨兵也能正常工作。
+    """
+
+    def __truediv__(self, name):
+        if ".." in str(name):
+            raise AssertionError(f"非法期刊 id 参与了 RULES_DIR 路径拼接：{name!r}")
+        return Path("legit") / name
+
+    def glob(self, pattern):
+        return (Path.cwd() / "rules" / "journal").glob(pattern)
+
+    def __getattr__(self, item):
+        raise AttributeError(f"_NoCompose 没有属性 {item!r}（哨兵不覆盖该分支）")
+
+
+def test_file_routes_reject_traversal_before_touching_rules_dir(
+        app_module, client, monkeypatch):
+    r"""F47 的 OS 无关钉：..\ 载荷在 Linux 上只是单个不存在的文件名，spec/
+    sample 的 404 由 exists() 兜底给出——删掉守卫 CI 照样绿（判别力只靠
+    Windows 路径语义，tests.yml 只有 ubuntu）。这里直接钉次序契约：哨兵
+    RULES_DIR 被 traversal id 拼路径就地抛错，守卫被删时这条必红。"""
+    monkeypatch.setattr(app_module, "RULES_DIR", _NoCompose())
+    for path in ("/journal/..%5Cjournal%5Ctjyj/spec",
+                 "/journal/..%5Cjournal%5Ctjyj/sample.pdf",
+                 "/journal/..%5Cjournal%5Ctjyj/sample"):
+        assert client.get(path).status_code == 404, f"{path} 未在 JID_RE 处拦下"
+
+
 def test_convert_and_retry_reject_traversal_journal(app_module, client, work):
     """F47：convert 的 keep 判断与 retry 的 jid 同样先过 JID_RE，
     retry 不再把原始非法 jid 写进 meta。"""
@@ -232,3 +265,13 @@ def test_convert_and_retry_reject_traversal_journal(app_module, client, work):
     # 与非法 id 在守卫处就被 400 拦下形成区分
     assert client.post(f"/job/{d.name}/retry", data={"journal": "cjyj"}) \
         .status_code == 404
+
+    # 前斜杠形态的穿越是 OS 无关咬合的：..\ 载荷在 Linux 上只是单个不存在
+    # 的文件名，convert/retry 的 400 由 exists() miss 兜出，遮住守卫变异；
+    # ../journal/tjyj 在任何 OS 都解析到在库的 tjyj.json——守卫被删时
+    # convert 会建任务走 200、retry 落到稿源缺失的 404，都不是这里的 400。
+    assert client.post("/convert", data={
+        "journal": "../journal/tjyj", "file": (io.BytesIO(b"PK"), "稿.docx")}) \
+        .status_code == 400, "前斜杠穿越 id 也必须先过 JID_RE"
+    assert client.post(f"/job/{d.name}/retry",
+                       data={"journal": "../journal/tjyj"}).status_code == 400
