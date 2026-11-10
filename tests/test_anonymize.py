@@ -97,14 +97,18 @@ def test_acknowledgement_removed_when_declared(tmp_path):
     assert any("致谢" in r for r in removed)
 
 
-def test_acknowledgement_kept_when_not_declared(tmp_path):
-    """规则集没声明删致谢时，致谢要留着。"""
+def test_acknowledgement_removed_even_when_not_declared(tmp_path):
+    """F4-1：致谢标题在 parse 里永远不是 acknowledgement 类型（被判成
+    heading1），按类型门控就永远删不掉。致谢小节连正文带内容一起删，
+    且删了什么要在报告里标注——规则集没声明也照删（漏删是身份泄露，
+    不可挽回；多删可从署名稿找回）。"""
     doc = build_docx(tmp_path / "c.docx")
     ir = parse_and_patch_ir(tmp_path, doc)
     rules = alt_rules(tmp_path, "no_ack.json", ["authors", "affiliations"])
-    out, _ = run_anonymize(tmp_path, doc, ir, rules)
+    out, removed = run_anonymize(tmp_path, doc, ir, rules)
 
-    assert ACK_BODY in body_text(out), "规则集没要求删致谢，却被删了"
+    assert ACK_BODY not in body_text(out), "致谢内容留在匿名稿里"
+    assert any("致谢" in r for r in removed), f"删了却没进报告：{removed}"
 
 
 def test_undeclared_block_is_removed_but_flagged(tmp_path):

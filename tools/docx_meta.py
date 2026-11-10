@@ -62,6 +62,7 @@ LABELS = {
     "people_initials": "修订或批注的作者缩写",
     "comment_body": "批注里的正文或作者",
     "part_contact": "页眉页脚里的联系方式",
+    "part_unparsable": "无法解析的 XML 部件（可能含 DTD/实体）",
 }
 
 
@@ -108,11 +109,13 @@ def _has_contact(text):
 
 def _scan_comments(blob, part):
     """批注部件：正文或作者未清即算残留。只把作者改成「匿名」时，
-    批注正文（常带姓名、单位、联系方式）仍会原样发出去。"""
+    批注正文（常带姓名、单位、联系方式）仍会原样发出去。
+    部件解析失败不能当作「无残留」放行：OOXML 部件本不该有 DTD，
+    解析被拒说明部件异常，必须 fail-closed 报给闸门（F4-3）。"""
     try:
         root = parse_part_xml(blob)
     except etree.XMLSyntaxError:
-        return []
+        return [{"code": "part_unparsable", "part": part, "field": "XML"}]
     findings = []
     for c in root.iter(f"{{{W_NS}}}comment"):
         author = ""
@@ -127,11 +130,12 @@ def _scan_comments(blob, part):
 
 def _scan_story_contact(blob, part):
     """页眉/页脚部件正文（w:t）里的邮箱/电话等联系方式。
-    属性扫描覆盖不到部件正文，清理漏网时由闸门拦下。"""
+    属性扫描覆盖不到部件正文，清理漏网时由闸门拦下。
+    解析失败同样 fail-closed，不静默当干净（F4-3）。"""
     try:
         root = parse_part_xml(blob)
     except etree.XMLSyntaxError:
-        return []
+        return [{"code": "part_unparsable", "part": part, "field": "XML"}]
     if _has_contact("".join(root.itertext())):
         return [{"code": "part_contact", "part": part, "field": "text"}]
     return []
@@ -184,6 +188,11 @@ def scan_docx(path, strict_people=False):
                 try:
                     root = parse_part_xml(z.read(part))
                 except etree.XMLSyntaxError:
+                    # 解析失败 ≠ 无残留：拒收 DTD 部件是安全设计，
+                    # 把「拒绝解析」反转成「当作干净」会让最后一道闸门
+                    # 对藏了身份信息的部件敞开（F4-3），fail-closed
+                    findings.append({"code": "part_unparsable",
+                                     "part": part, "field": "XML"})
                     continue
                 for el in root.iter():
                     for attr, value in el.attrib.items():
@@ -248,7 +257,9 @@ def _sanitize_custom(blob, removed):
 
 
 def _sanitize_people(blob, part, removed):
-    """把修订与批注的作者改成固定匿名值，而不是删属性破坏 OOXML。"""
+    """把修订与批注的作者改成固定匿名值，而不是删属性破坏 OOXML。
+    部件解析失败时原样放回——清理不了的东西，闸门（check）会以
+    part_unparsable fail-closed 拦下，两边口径一致（F4-3）。"""
     try:
         root = parse_part_xml(blob)
     except etree.XMLSyntaxError:
