@@ -1466,7 +1466,7 @@ def journals():
                            drafts=draft_list())
 
 
-APP_VERSION = "1.0.1"       # 版本真源：构建脚本经 tools/app_version.py 解析这里（D-10）
+APP_VERSION = "1.0.2"       # 版本真源：构建脚本经 tools/app_version.py 解析这里（D-10）
 
 
 @app.route("/healthz")
