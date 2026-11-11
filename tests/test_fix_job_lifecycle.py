@@ -66,6 +66,10 @@ def delivered_job(app_module, work, sample_docx):
     run_tool("render_from_ir.py", d / "manuscript.ir.json", RULES / "tjyj.json",
              "-o", d / "manuscript.tjyj.docx")
     _meta(app_module, d)
+    # 换刊/重排要过结构性阻断：tjyj 的合成稿没有英文标题，先在补录记录里备好。
+    (d / "details.json").write_text(json.dumps(
+        {"english_title": "The Spillover Effects of US Monetary Policy"},
+        ensure_ascii=False), encoding="utf-8")
     return d
 
 
@@ -97,9 +101,12 @@ def test_atomic_json_writers_use_distinct_temp_files(app_module, light_job, monk
     assert not list(d.glob(".details.json.*.tmp")), "临时文件必须清干净"
 
 
-def test_busy_details_preserves_previous_inputs(app_module, light_job, client):
+def test_busy_details_preserves_previous_inputs(app_module, light_job, client,
+                                                monkeypatch):
     d = light_job
     _meta(app_module, d, citation=True)
+    # 这个任务只登记了 meta、没有 IR；本用例钉锁语义，先绕开缺件体检。
+    monkeypatch.setattr(app_module, "_rows_raw", lambda *a, **k: [])
     old = {"english_abstract": "上一轮摘要", "funding": "上一轮基金"}
     app_module.write_json_atomic(d / "details.json", old)
     before = (d / "meta.json").read_bytes()

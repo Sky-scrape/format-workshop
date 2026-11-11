@@ -41,6 +41,8 @@ border:1px solid var(--line);border-radius:9px;background:#faf9f6;cursor:pointer
 .actions .note{font-size:var(--fs-aux);color:var(--ink3);line-height:1.8}
 .warn-box{background:var(--danger-bg);border:1px solid #efcfc7;border-radius:10px;padding:12px 14px;
 font-size:var(--fs-aux);color:#7d3a30;line-height:1.9;margin:0 0 14px}
+.skip-box{background:#fbf7ec;border:1px solid #e8dcc0;border-radius:10px;padding:12px 14px;
+font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
 @media(max-width:900px){.fill-grid{grid-template-columns:1fr}.footer-grid{grid-template-columns:1fr}
 .fill-shell{padding:18px 14px 44px}}
 </style>
@@ -56,12 +58,35 @@ font-size:var(--fs-aux);color:#7d3a30;line-height:1.9;margin:0 0 14px}
     {{ journey(done=2, cur=3) }}
   </div>
 
-  {% if n_need %}
-  <div class="warn-box">这份稿子在《{{ journal }}》还缺 {{ n_need }} 项要件。
-    你可以现在就补，也可以跳过——跳过时这些位置不会出现任何占位符，成品保持原样。</div>
+  {% if blocking %}
+  <div class="warn-box"><strong>稿件本体还缺 {{ blocking|length }} 项必备要件：{{ blocking|join('、') }}。</strong>
+    这些不能靠跳过补录绕过去：能在下方补录的直接填（如英文摘要），补录不了的要先在 Word 原稿里补齐。
+    补齐之前不会开始排版，页面上也不会留下占位符。</div>
+  {% endif %}
+  {% if optional_missing %}
+  <div class="skip-box">另有 {{ optional_missing|length }} 项可跳过的补录项：{{ optional_missing|join('、') }}。
+    留空即可——这些位置在成品里不会出现，也不会留下占位符。</div>
+  {% endif %}
+
+  {# 版式体检是附加信息：只读、不拦排版。旧任务没有这份报告时整块不出现。 #}
+  {% if preflight or has_preflight %}
+  <section class="card" style="margin-bottom:14px">
+    <h2>输入稿版式体检 <span>只读：不改原稿，也不拦排版</span></h2>
+    {% if preflight and preflight.error %}
+    <p class="sub">体检未完成：{{ preflight.error }}<br>不影响排版，投稿体检与审计报告照常生成。</p>
+    {% elif preflight %}
+    <p class="sub">自动修正 {{ preflight.auto }} · 需你处理 {{ preflight.manual }} · 已合规 {{ preflight.ok }} · 随样式 {{ preflight.inherited }} · 未检查 {{ preflight.unchecked }}{% if preflight.coverage %}<i class="sep"></i>{{ preflight.coverage }}{% endif %}</p>
+    <p class="sub" style="margin:0">「自动修正」是排版会替你改的版式项；「需你处理」本工具不修，请按报告回 Word 调整。正文文字一个字都不会动。</p>
+    {% else %}
+    <p class="sub">体检报告已生成，可打开查看。</p>
+    {% endif %}
+    {% if has_preflight %}<a class="btn btn-light" style="text-decoration:none;margin-top:10px" href="/job/{{ job }}/preflight.html" target="_blank" rel="noopener">查看完整版式体检 ↗</a>{% endif %}
+  </section>
   {% endif %}
 
   <form method="post" id="fillForm">
+    {# 换刊补录时把目标刊带回 POST；meta 要等渲染成功才改写 #}
+    <input type="hidden" name="journal" value="{{ meta.journal }}">
     <div class="fill-grid">
       <section class="card">
         <h2>已从稿子里识别</h2>
@@ -91,9 +116,6 @@ font-size:var(--fs-aux);color:#7d3a30;line-height:1.9;margin:0 0 14px}
           {% if f.hint and f.key == 'english_abstract' %}<div class="hint">{{ f.hint }}</div>{% endif %}
         </div>
         {% endfor %}
-        {% if unknown_missing %}
-        <div class="hint">另外 {{ unknown_missing|join('、') }} 不在网页补录范围内，需要在 Word 里加上，或投稿时由编辑部给定。</div>
-        {% endif %}
       </section>
     </div>
 
@@ -125,17 +147,32 @@ font-size:var(--fs-aux);color:#7d3a30;line-height:1.9;margin:0 0 14px}
     </section>
     {% endif %}
 
+    {# 个人信息按 placement 逐组说明：署名行、首页脚注、另附文件、独立标题页
+       各自落在稿件的不同位置，旧页面把它们一律说成「投稿系统里填」是错的。
+       author_page 已由上方表单收集时不再重复列清单。 #}
+    {% for g in placement_groups %}
+    {% if not (g.key == 'author_page' and author_fields) %}
     <section class="card" style="margin-bottom:14px">
-      <h2>该刊还要求在投稿系统里填 <span>这些不写进稿件</span></h2>
-      <p class="sub">如实现在系统里填，工具不收集、不保存这些信息。</p>
+      <h2>{{ g.title }} <span>{{ g.desc }}</span></h2>
+      {% if g.key == 'author_page' %}
+      <p class="sub">该刊声明的作者信息页字段；能从稿件带出的项不再重问。</p>
+      {% elif g.key in ('submission_system', 'other') %}
+      <p class="sub">如实现在系统里填或按编辑部要求处理，工具不收集、不保存这些信息。</p>
+      {% endif %}
       <ul class="checklist">
-        {% for p in personal %}
-        <li>{{ p.label_zh }}{% if p.required %}（必填）{% endif %}{% if p.note %}<i class="sep"></i>{{ p.note }}{% endif %}</li>
-        {% else %}
-        <li>该刊规则集没有声明额外的投稿系统字段。</li>
+        {% for p in g['items'] %}
+        <li>{{ p.label }}{% if p.required %}（该刊必填）{% endif %}{% if p.prefill %}（已从稿件带出）{% endif %}{% if p.note %}<i class="sep"></i>{{ p.note }}{% endif %}</li>
         {% endfor %}
       </ul>
     </section>
+    {% endif %}
+    {% endfor %}
+    {% if not placement_groups %}
+    <section class="card" style="margin-bottom:14px">
+      <h2>作者页与投稿系统 <span>没有额外要求</span></h2>
+      <p class="sub">该刊规则集没有声明额外的个人信息字段。</p>
+    </section>
+    {% endif %}
 
     {% if citation_offered %}
     <section class="card" style="margin-bottom:14px">
@@ -158,7 +195,10 @@ font-size:var(--fs-aux);color:#7d3a30;line-height:1.9;margin:0 0 14px}
 
     <div class="actions">
       <button class="btn" type="submit">开始排版<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10h13M11 5l5 5-5 5"/></svg></button>
-      <span class="note">全部留空也能直接排版——补录是可选的，不是必填门槛。</span>
+      <span class="note">补录项可留空；表单能补的缺件在下方填，补不了的需先在 Word 原稿补齐。</span>
+      {% if has_preflight %}
+      <a class="btn btn-light" style="text-decoration:none" href="{{ url_for('download', job=job, kind='preflight') }}">先不排版，仅下载体检报告</a>
+      {% endif %}
     </div>
   </form>
 </div>

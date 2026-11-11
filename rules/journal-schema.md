@@ -71,6 +71,14 @@
 
 **关键点**：中图分类号与 JEL 分类号是同一个 `classification_code` 类型，只是 `scheme` 不同。作者简介与 Author notes 是同一个 `author_note`，只是 `placement` 不同。这样英文期刊不需要新增任何 block 类型。
 
+`blocks[].required` 表示"该刊是否把这个构件列为必备"，但**必备不等于必须由作者在本工具里补齐**：
+
+- `required: true` 且稿件里没有、又不能由补录补齐的**稿件本体要件**（标题、作者、摘要、关键词、参考文献等），会阻断开始排版（DESIGN §10.4）。
+- 该刊 `submission.anonymous` 为真时，`submission.anonymize_blocks` 里的署名类块（作者、单位、作者简介等）按要求本就不进正文，缺少不算缺件、不阻断。
+- `article_number` / `document_code` / `received_date` 由编辑部给定，不派给作者，不阻断。
+- `highlights` 按刊要求是**另附文件**（`personal_fields[].placement = "separate_file"`），稿件正文里本来就没有；未检出时报告标「另附」而不是「缺」，不派待办、不阻断。本工具不生成该文件。
+- `required: false` 的构件可缺失；缺失只作为信息提示，不生成占位符。
+
 ---
 
 ## 4. citation
@@ -119,7 +127,7 @@
 
 ```json
 {
-  "total":    { "value": 12000, "metric": "B" },
+  "total":    { "value": 25000, "min": 15000, "metric": "B", "scope": "正文（含字符）" },
   "abstract": { "value": 300,   "metric": "chars_cn" },
   "figures_max": 8,
   "tables_max": 6
@@ -135,6 +143,15 @@
 | `C` | 字符数（计空格） |
 | `chars_cn` | 仅中文摘要字数 |
 | `words_en` | 仅英文摘要词数 |
+
+总字数的上限与下限：
+
+- 上限写 `limits.total.value`；下限有两种登记位置——`limits.total.min`（推荐，如 cjyj）或顶层 `limits.total_min`（兼容，如 cmjj）。只写下限、不写上限（"不少于 N 字"）是合法形态，报告与规格页显示 `≥` 或区间，不会把下限丢掉。
+- 报告会分别给出"超出上限"与"低于下限"；下限只提醒，本工具不会生成内容去补足。
+
+标题字数上限同样兼容两种写法：`limits.title_chars_max`（多数刊，推荐）与 `limits.title_max_chars`（如 cjwt）。
+
+`limits.total.scope` 是各刊投稿须知的原话。已认识的写法：`正文`、`正文（含字符）`（cjwt，语义就是正文）、`全文`、`全文（含图表）`。认不出的写法一律保守按全文统计，并在报告里注明回退——绝不把全文数字偷偷对到正文上限上。
 
 出处不明时填 `null` 并在 `verification.status` 标为 `unverified`，报告中输出"待确认"，**不得猜一个默认值**。
 
@@ -267,10 +284,19 @@
 | 字段 | 取值 | 说明 |
 |---|---|---|
 | `scope` | `paper` / `author` | 全篇一个值，还是每个作者各一份 |
-| `required` | 布尔 | 必需项阻断交付，非必需项不阻断 |
-| `placement` | `byline` / `footnote` / `section` / `author_page` / `back_matter` / `system` / `title_page` / `separate_file` / `submission_system` | 影响稿件哪个位置，用于向用户说明改动范围。`author_page`＝作者信息页构件；`back_matter`＝文末要件；`system`＝投稿系统填写、不出现在稿件；`title_page`＝只出现在独立标题页、正文稿不含（库内现用于 blocks 的 corresponding_author，6 本英文刊）；`separate_file`＝单独成文件随稿提交、不进正文（库内用于 Highlights、作者简介等 personal_fields）；`submission_system`＝在投稿系统表单里逐项填写、不出现在稿件（与 `system` 同义，库内两种拼写并存：kjyj 用 `system`，jryj/ciejournal 用 `submission_system`）。代码消费方现状：`author_page`（补录表单过滤）、`back_matter`（文末简介落版）、`system`（作者行缺省判定，另认防御值 `none`）有专门分支；`title_page` / `separate_file` / `submission_system` 暂无读值分支，仅作字段元数据随补录表单与规则集展示 |
+| `required` | 布尔 | **只表示该刊是否在作者页/投稿系统要求这个字段，不阻断排版**。补录页会标「该刊必填」，但个人信息整体可选（见下表与 §10.3） |
+| `placement` | `author_page` / `byline` / `footnote` / `before_references` / `back_matter` / `separate_file` / `submission_system` / `system` / `title_page` | 影响稿件哪个位置，用于向用户说明改动范围。`author_page`＝作者信息页构件；`byline`＝署名行；`footnote`＝首页脚注；`before_references`＝参考文献之前；`back_matter`＝文末要件；`separate_file`＝单独成文件随稿提交、不进正文（Highlights、部分刊的作者简介）；`submission_system`＝投稿系统表单逐项填写、不出现在稿件（与 `system` 同义，库内两种拼写并存：kjyj 用 `system`，jryj/ciejournal 用 `submission_system`）；`title_page`＝只出现在独立标题页、正文稿不含。`section` 是 `blocks[].placement` 的取值（作者简介成节），不用于 personal_fields。消费方现状：`placement_groups()` 按上列值把补录页分组，未知值归入「其他位置」并如实提示按编辑部要求处理，不猜成"投稿系统"；`author_page` 另有补录表单过滤，`back_matter` 有文末落版分支 |
 | `prefill_from_paper` | 布尔 | 为真时先从稿件提取，已有值不询问 |
 | `hint` | 字符串 | 填写提示，用于降低返工 |
+
+`required` 的两种语义必须分清（与 `blocks[].required` 不是一回事）：
+
+| 写法 | 语义 | 是否阻断排版 |
+|---|---|---|
+| `blocks[].required: true` | 稿件本体必备要件 | 缺件且不能由补录补齐时阻断（编辑部项与 Highlights 除外，见 §3） |
+| `blocks[].required: false` | 可选构件 | 否 |
+| `personal_fields[].required: true` | 该刊要求的个人信息 | **否**；补录页标「该刊必填」，留空也能转换 |
+| `personal_fields[].required: false` | 可选个人信息 | 否 |
 
 `blocks` 中的块通过 `fields` 引用这些字段：
 
@@ -286,7 +312,7 @@
 
 ### 10.1 时机
 
-个人信息在格式化开始**之前**一次性收齐，不进入占位符机制，也不参与格式转换过程。进入渲染阶段时，文档已是完整稿。
+个人信息在格式化开始**之前**一次性收集（可留空，不强制填全），不进入占位符机制，也不参与格式转换过程。进入渲染阶段时，稿件本体已是完整稿（个人信息可留空，不生成占位符）。
 
 顺序固定，不可调换：
 
@@ -310,10 +336,12 @@
 
 | 类别 | 行为 |
 |---|---|
-| `required: true` | 未填不得开始转换 |
-| `required: false` | 可跳过；跳过即彻底不出现，**不生成任何占位符** |
+| `blocks[].required: true` 且稿件缺失、不能由补录补齐 | 阻断开始排版；补录页列出缺件，保存已填表单状态后返回 400 |
+| `blocks[].required: false` | 可跳过；跳过即彻底不出现，**不生成任何占位符** |
+| `personal_fields[].required: true` | 补录页标「该刊必填」，但**不阻断**；个人信息整体可选 |
+| `personal_fields[].required: false` | 可跳过；不生成占位符 |
 
-被跳过的可选字段，若该刊确有要求，由审计报告在 C 档（仅报告）中提示"该刊要求 XX，本文未提供"。这条提示的措辞必须与"格式不合规"区分开——它属于信息缺失，不是格式错误。
+由编辑部给定的 `article_number` / `document_code` / `received_date`，以及另附文件的 `highlights`，不派给作者、不阻断（见 §3）。被跳过的可选构件在补录页单列提示；`personal_fields[].required` 只在页面上标「该刊必填」。两者都不当成"格式不合规"。
 
 ### 10.4 跨期刊重排的二次收集
 
@@ -341,7 +369,7 @@
 | 把个人信息实际值写进规则集文件 | 隐私泄露，且规则集无法共享 |
 | 表单提交后锁定，换刊需全量重填 | 核心场景（跨期刊重排）体验崩塌 |
 | 可选字段跳过时插入占位符 | 重新引入已被取消的整套占位符机制 |
-| 未填必需项仍开始转换 | 输出缺项稿件，作者可能直接投出 |
+| 稿件本体必需要件未补齐仍开始转换 | 输出缺项稿件，作者可能直接投出 |
 
 ---
 
@@ -776,7 +804,7 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 
 ### 18.4 英文刊特有的块与校验（下一轮）
 
-- `highlights`（3–5 条、每条 ≤85 字符、独立文件）、`author_vitae`（≤100 词）、生成式 AI 声明节（须在参考文献之前）——`highlights` 已进 blocks，后两项仅以 `statements` / `submission.ai_declaration` 声明，尚未参与渲染与校验。
+- `highlights`（3–5 条、每条 ≤85 字符、独立文件）、`author_vitae`（≤100 词）、生成式 AI 声明节（须在参考文献之前）——`highlights` 已进 blocks，并按 `personal_fields[].placement = "separate_file"` 作为**另附文件**处理：稿件正文里没有不算缺件，体检标「另附」，不阻断排版，工具也不生成该文件。`received_date`（收稿日期）由编辑部填写，同样不阻断。`author_vitae` 与 AI 声明节目前仅以 `statements` / `submission.ai_declaration` 声明，尚未参与渲染与校验。
 - 版面差异：Word 稿件单栏、双栏仅限 LaTeX。当前渲染器只出单栏 Word，LaTeX 通道不做（明确不承诺）。
 - 校验口径要换：英文刊看重"摘要 ≤250 词""关键词 1–7""JEL ≤6""Highlights 字符数"，`limits.metric` 需支持 `words_en` 与 `chars`（已支持 `words_en`，`chars` 待补）。
 

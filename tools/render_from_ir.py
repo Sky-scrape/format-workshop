@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.text import WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt
@@ -32,15 +32,14 @@ from docx.text.run import Run
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from docx_meta import sanitize_docx
+# 版式写入原语与缺省值只有一份（tools/docx_fmt.py）。这里 import 后转出同名
+# API：preflight 与既有测试仍从 render_from_ir 取 DEFAULTS/set_run/set_hanging，
+# 换实现不换入口。set_hanging 是 docx_fmt.set_hanging_indent 的别名（旧名）。
+from docx_fmt import (  # noqa: F401  （公开名，供 preflight/测试 import）
+    ALIGN, DEFAULTS, set_chars_indent, set_hanging, set_hanging_indent, set_run,
+)
 import xmlsafe
 import assume_groups
-
-ALIGN = {
-    "left": WD_ALIGN_PARAGRAPH.LEFT,
-    "center": WD_ALIGN_PARAGRAPH.CENTER,
-    "right": WD_ALIGN_PARAGRAPH.RIGHT,
-    "both": WD_ALIGN_PARAGRAPH.JUSTIFY,
-}
 
 # 对齐方式的中文说法，只用于审计条目的说明文字，不是格式值
 ALIGN_DESC = {"center": "居中", "left": "左对齐", "right": "右对齐", "both": "两端对齐"}
@@ -197,29 +196,8 @@ def missing_required_keys(rules):
     return missing
 
 
-# ---- F30：渲染器的缺省值只有这一张表 --------------------------------------
-# 键 → (缺省值, 缺省说明)。规则集没写时从这里取，代码里不再散落第二真源；
-# 用到缺省值的审计条目 rule 走 rules_ref 的 '~' 可缺省约定、note 带「缺省值」
-# 说明——用户必须分得清哪些值是期刊明文规定、哪些是代码约定（DESIGN §6）。
-# 「缺省值」与「推定值」是两回事：推定值专指规则集标了 measured:false、登记
-# 进 assumptions 的取值（见 assumed()）；刊里整条没写时走的是代码缺省，不得
-# 冒称推定——否则审计会谎报该刊登记过这条推定。
-DEFAULTS = {
-    "body_line_pt":          (20,     "正文行距未声明固定磅值，兜底取"),
-    "title_size_pt":         (22,     "标题字号未声明，取"),
-    "title_font_cn":         ("黑体", "标题中文字体未声明，取"),
-    "title_line_mult":       (1.5,    "标题行距按字号×1.5 折算"),
-    "subtitle_font_cn":      ("黑体", "副标题中文字体未声明，取"),
-    "subtitle_size_pt":      (16,     "副标题字号未声明，取"),
-    "subtitle_line_mult":    (1.5,    "副标题行距按字号×1.5 折算"),
-    "authors_line_mult":     (1.5,    "作者行行距按自身字号×1.5 折算"),
-    "table_font_size_pt":    (9,      "表内文字字号未声明，取"),
-    "caption_font_cn":       ("黑体", "题注中文字体未声明，取"),
-    "caption_gap":           ("一字空", "题注编号与标题的间隔未声明，取"),
-    "note_size_pt":          (9,      "表注字号未声明，取"),
-    "author_note_line_mult": (1.6,    "作者简介行距按字号×1.6 折算"),
-    "author_note_label_font_cn": ("黑体", "作者简介标签中文字体未声明，取"),
-}
+# F30 的缺省值表在 tools/docx_fmt.py：样板与交付稿必须共用同一源，
+# 否则同一规则集会渲出两个字号/行距。这里只保留审计用的措辞函数。
 
 
 def _fmt_default(v):
@@ -329,6 +307,7 @@ NUM_PREFIX_NUM = {
     1: re.compile(r"^\d{1,2}(?:\s*[.．]\s*|\s+)(?!\d)"),
     2: re.compile(r"^\d{1,2}\.\d{1,2}\s*"),
     3: re.compile(r"^\d{1,2}\.\d{1,2}\.\d{1,2}\s*"),
+    4: re.compile(r"^\d{1,2}\.\d{1,2}\.\d{1,2}\.\d{1,2}\s*"),
 }
 
 
@@ -482,37 +461,6 @@ def assumed(tp):
     return "，推定值（样本未实测）" if isinstance(tp, dict) and tp.get("measured") is False else ""
 
 
-def set_run(run, cn=None, latin=None, size=None, bold=None, letter_spacing=None):
-    rpr = run._element.get_or_add_rPr()
-    rf = rpr.find(qn("w:rFonts"))
-    if rf is None:
-        rf = OxmlElement("w:rFonts")
-        rpr.append(rf)
-    if cn:
-        rf.set(qn("w:eastAsia"), cn)
-    if latin:
-        rf.set(qn("w:ascii"), latin)
-        rf.set(qn("w:hAnsi"), latin)
-    if size:
-        # Word 的字号以半磅为刻度（w:sz 是 half-point 整数）。直接传 11.8 会被截断成 11.5，
-        # 规范页写 11.8、交付稿却是 11.5，三方对不上。这里显式取最近的半磅。
-        run.font.size = Pt(round(size * 2) / 2)
-    if bold is not None:
-        run.font.bold = bold
-    if letter_spacing is not None:
-        # 字间距按 twips 写入（1pt = 20twips）；《经济研究》标题每字加宽约 1.3pt。
-        # 只有 None 才是「规则集未声明」——此时不动 run 上已有的字间距；数值
-        # （含 0）都生效：声明 0 时移除已有的 w:spacing，否则从带字间距模板
-        # 切到 0pt 的刊，成品残留旧字间距（SETRUN0）
-        old = rpr.find(qn("w:spacing"))
-        if old is not None:
-            rpr.remove(old)
-        if letter_spacing:
-            sp = OxmlElement("w:spacing")
-            sp.set(qn("w:val"), str(int(round(letter_spacing * 20))))
-            rpr.append(sp)
-
-
 def clear_para_formatting(p, keep_numbering=True):
     """清掉段落上的直接版式（行距、缩进、对齐）。
 
@@ -529,28 +477,6 @@ def clear_para_formatting(p, keep_numbering=True):
         el = ppr.find(qn("w:numPr"))
         if el is not None:
             ppr.remove(el)
-
-
-def set_chars_indent(p, chars):
-    ppr = p._p.get_or_add_pPr()
-    ind = ppr.find(qn("w:ind"))
-    if ind is None:
-        ind = OxmlElement("w:ind")
-        ppr.append(ind)
-    ind.set(qn("w:firstLineChars"), str(int(chars * 100)))
-    ind.set(qn("w:firstLine"), str(int(chars * 210)))
-
-
-def set_hanging(p, chars):
-    ppr = p._p.get_or_add_pPr()
-    ind = ppr.find(qn("w:ind"))
-    if ind is None:
-        ind = OxmlElement("w:ind")
-        ppr.append(ind)
-    ind.set(qn("w:leftChars"), str(int(chars * 100)))
-    ind.set(qn("w:left"), str(int(chars * 210)))
-    ind.set(qn("w:hangingChars"), str(int(chars * 100)))
-    ind.set(qn("w:hanging"), str(int(chars * 210)))
 
 
 def head_line_pt(lv, size, body_line):
@@ -1747,7 +1673,7 @@ def main():
                 elems[i] = inner
 
     # 一级标题起始号：introduction 编 1（多数刊）或 0（管理科学学报）
-    sec_no = {1: hd.get("intro_number", 1) - 1, 2: 0, 3: 0}
+    sec_no = {1: hd.get("intro_number", 1) - 1, 2: 0, 3: 0, 4: 0}
     table_no = 0
     figure_no = 0
     fm_index = 0
@@ -1963,85 +1889,123 @@ def main():
                             line_pt=line_pt, bold=bold, before_pt=before, after_pt=after)
             continue
 
-        if t in ("heading1", "heading2", "heading3"):
-            level = blk.get("level", 1)
-            old = block_text(p)
-            numeric = str(hd.get("numbering", "")).startswith("numeric")
-            # 剥前缀要认"稿子原来是什么编号"，不能按目标刊的体系去剥：
-            # 中文稿投英文刊时，源码是「一、」，目标是「1.」，按目标剥会剥不掉。
-            # 但目标刊自己的写法也必须认（strip_number_prefix 第三条候选）：
-            # 本工具上一轮输出的就是那个形式，不认就叠成「1.1.标题」。
-            core, _stripped = strip_number_prefix(old.strip(), level, hd)
-            core_norm = re.sub(r"\s", "", core)
+        if t in ("heading1", "heading2", "heading3", "heading4"):
+            level = blk.get("level") or int(t[-1])
+            levels = hd.get("levels") or []
+            max_level = hd.get("max_level") or len(levels)
+            if level > max_level or len(levels) < level:
+                # 该刊只排到 X 级：四级标题不硬套成标题，按正文套版并留说明。
+                # 不能静默（用户会以为工具漏了），也不能按 title 模板硬编号——
+                # 没有目标模板，编号只能原样保留。落到末尾的正文套版。
+                audit.add(blk["idx"], t, "标题层级超出本刊",
+                          note=f"该刊只排到 {max_level} 级；本段按正文套版，编号不重写",
+                          changed=False,
+                          rule="headings.max_level" if "max_level" in hd else "headings")
+            else:
+                old = block_text(p)
+                numeric = str(hd.get("numbering", "")).startswith("numeric")
+                # 剥前缀要认"稿子原来是什么编号"，不能按目标刊的体系去剥：
+                # 中文稿投英文刊时，源码是「一、」，目标是「1.」，按目标剥会剥不掉。
+                # 但目标刊自己的写法也必须认（strip_number_prefix 第三条候选）：
+                # 本工具上一轮输出的就是那个形式，不认就叠成「1.1.标题」。
+                core, _stripped = strip_number_prefix(old.strip(), level, hd)
+                core_norm = re.sub(r"\s", "", core)
 
-            if numeric:
-                # 编号模板取自 levels：写「1」得「1 引言」（中国管理科学），
-                # 写「1.」得「1. Introduction」（英文刊）。数字按层级依次替换。
-                if level == 1:
-                    sec_no[1] += 1
-                    sec_no[2] = sec_no[3] = 0
-                    nums = [sec_no[1]]
+                if numeric:
+                    # 编号模板取自 levels：写「1」得「1 引言」（中国管理科学），
+                    # 写「1.」得「1. Introduction」（英文刊）。数字按层级依次替换。
+                    if level == 1:
+                        sec_no[1] += 1
+                        sec_no[2] = sec_no[3] = sec_no[4] = 0
+                        nums = [sec_no[1]]
+                    elif level == 2:
+                        sec_no[2] += 1
+                        sec_no[3] = sec_no[4] = 0
+                        nums = [sec_no[1], sec_no[2]]
+                    elif level == 3:
+                        sec_no[3] += 1
+                        sec_no[4] = 0
+                        nums = [sec_no[1], sec_no[2], sec_no[3]]
+                    else:
+                        sec_no[4] += 1
+                        nums = [sec_no[1], sec_no[2], sec_no[3], sec_no[4]]
+                    it = iter(nums)
+                    head = re.sub(r"\d+", lambda m: str(next(it)), levels[level - 1], count=len(nums))
+                    new = f"{head} {core}"
+                elif level == 1:
+                    if core_norm in [re.sub(r"\s", "", s) for s in hd.get("unnumbered_sections", [])]:
+                        new = hd.get("intro_title_text", core)
+                    else:
+                        sec_no[1] += 1
+                        sec_no[2] = sec_no[3] = sec_no[4] = 0   # 下级编号按一级标题重新起算
+                        new = fill_level_template(levels[0], sec_no[1]) + core
                 elif level == 2:
                     sec_no[2] += 1
-                    sec_no[3] = 0
-                    nums = [sec_no[1], sec_no[2]]
-                else:
+                    sec_no[3] = sec_no[4] = 0
+                    new = fill_level_template(levels[1], sec_no[2]) + core
+                elif level == 3:
                     sec_no[3] += 1
-                    nums = [sec_no[1], sec_no[2], sec_no[3]]
-                it = iter(nums)
-                head = re.sub(r"\d+", lambda m: str(next(it)), hd["levels"][level - 1], count=len(nums))
-                new = f"{head} {core}"
-            elif level == 1:
-                if core_norm in [re.sub(r"\s", "", s) for s in hd.get("unnumbered_sections", [])]:
-                    new = hd.get("intro_title_text", core)
+                    sec_no[4] = 0
+                    new = fill_level_template(levels[2], sec_no[3]) + core
                 else:
-                    sec_no[1] += 1
-                    sec_no[2] = sec_no[3] = 0          # 二级编号按一级标题重新起算
-                    new = fill_level_template(hd["levels"][0], sec_no[1]) + core
-            elif level == 2:
-                sec_no[2] += 1
-                sec_no[3] = 0
-                new = fill_level_template(hd["levels"][1], sec_no[2]) + core
-            else:
-                sec_no[3] += 1
-                new = fill_level_template(hd["levels"][2], sec_no[3]) + core
+                    sec_no[4] += 1
+                    new = fill_level_template(levels[3], sec_no[4]) + core
 
-            if new != old:
-                sig = reject_sig(old)
-                if audit.blocked(blk["idx"], "标题重新编号", sig):
-                    audit.add(blk["idx"], t, "标题重新编号", old, new,
-                              "已驳回：保留原编号", rejected=True,
-                              rule="headings.numbering", sig=sig)
-                elif text_locked(blk):
-                    # 标题里挂 SEQ 域（Word 自动章节号）时编号归域管，
-                    # 改字面文字会在 F9 更新时被域盖回去
-                    locked_note(audit, blk, "标题重新编号", "headings.numbering")
+                if new != old:
+                    sig = reject_sig(old)
+                    if audit.blocked(blk["idx"], "标题重新编号", sig):
+                        audit.add(blk["idx"], t, "标题重新编号", old, new,
+                                  "已驳回：保留原编号", rejected=True,
+                                  rule="headings.numbering", sig=sig)
+                    elif text_locked(blk):
+                        # 标题里挂 SEQ 域（Word 自动章节号）时编号归域管，
+                        # 改字面文字会在 F9 更新时被域盖回去
+                        locked_note(audit, blk, "标题重新编号", "headings.numbering")
+                    else:
+                        replace_text(p, new)
+                        audit.add(blk["idx"], t, "标题重新编号", old, new,
+                                  "仅改编号前缀，标题文字未动",
+                                  rule="headings.numbering", sig=sig)
+                if level == 1:
+                    audit.sec = core  # 后续改动都归到这个一级标题下，审计里才能定位
+                # 二三级标题多数刊要求黑体，此前一律继承正文字体；字体与字号
+                # 由 rules.headings.levelN 声明，未声明才随正文
+                lv = lv1 if level == 1 else (hd.get(f"level{level}") or {})
+                inline = level >= 4 and bool(lv.get("inline_with_body"))
+                lv_cn = lv.get("font_cn") or cn
+                lv_size = lv.get("size_pt") or size
+                lv_al = lv.get("align") or ("center" if level == 1 else "left")
+                if inline:
+                    # 行内四级标题：按正文套版，只重写编号前缀。行距、缩进、
+                    # 加粗都跟正文走，不能把整段正文改成标题的黑体/居中。
+                    restyle_audited(p, audit, blk["idx"], t, "标题套版",
+                                    f"{cn} {size:g}pt，{ALIGN_DESC[lv_al]}"
+                                    "（行内四级，按正文套版）",
+                                    f"headings.level{level}~",
+                                    tp=lv,
+                                    cn=cn,
+                                    latin=latin, size=size,
+                                    align=lv_al,
+                                    line_pt=line_pt,
+                                    line_multiple=line_mult,
+                                    indent=indent,
+                                    bold=False,
+                                    drop_numbering=True)
                 else:
-                    replace_text(p, new)
-                    audit.add(blk["idx"], t, "标题重新编号", old, new, "仅改编号前缀，标题文字未动",
-                              rule="headings.numbering", sig=sig)
-            if level == 1:
-                audit.sec = core  # 后续改动都归到这个一级标题下，审计里才能定位
-            # 二三级标题多数刊要求黑体，此前一律继承正文字体；字体与字号
-            # 由 rules.headings.levelN 声明，未声明才随正文
-            lv = lv1 if level == 1 else (hd.get(f"level{level}") or {})
-            lv_cn = lv.get("font_cn") or cn
-            lv_size = lv.get("size_pt") or size
-            lv_al = lv.get("align") or ("center" if level == 1 else "left")
-            restyle_audited(p, audit, blk["idx"], t, "标题套版",
-                            f"{lv_cn} {lv_size:g}pt，{ALIGN_DESC[lv_al]}",
-                            # level1 是必填键；二三级未声明的刊随正文约定，标可缺省
-                            "headings.level1" if level == 1 else f"headings.level{level}~",
-                            tp=lv,
-                            cn=lv_cn,
-                            latin=latin, size=lv_size,
-                            align=lv_al,
-                            line_pt=head_line_pt(lv, lv_size, line_pt),
-                            line_multiple=line_mult,
-                            indent=lv.get("indent_chars") if level > 1 else None,
-                            bold=lv.get("bold", False),
-                            drop_numbering=True)   # 编号已重写为字面文字，自动编号必须摘掉
-            continue
+                    restyle_audited(p, audit, blk["idx"], t, "标题套版",
+                                    f"{lv_cn} {lv_size:g}pt，{ALIGN_DESC[lv_al]}",
+                                    # level1 是必填键；二至四级未声明的刊随正文约定，标可缺省
+                                    "headings.level1" if level == 1 else f"headings.level{level}~",
+                                    tp=lv,
+                                    cn=lv_cn,
+                                    latin=latin, size=lv_size,
+                                    align=lv_al,
+                                    line_pt=head_line_pt(lv, lv_size, line_pt),
+                                    line_multiple=line_mult,
+                                    indent=lv.get("indent_chars") if level > 1 else None,
+                                    bold=lv.get("bold", False),
+                                    drop_numbering=True)   # 编号已重写为字面文字，自动编号必须摘掉
+                continue
 
         if t == "title":
             # parse_docx 不会产出 title 块（标题一律走 front_matter 分支），

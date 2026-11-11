@@ -10,12 +10,14 @@ import pytest
 from docx import Document
 
 from acceptance_support import (
+    TJYJ_FILL,
     build_clean_docx,
     build_empty_docx,
     build_large_docx,
     build_title_only_docx,
     deliver,
     upload,
+    upload_job,
 )
 from conftest import invariant_failures, render_into
 
@@ -74,17 +76,28 @@ def test_empty_docx_is_refused_before_any_delivery(
         json.loads((job / "meta.json").read_text(encoding="utf-8")).get("stage") != "rendered"
 
 
-def test_title_only_manuscript_is_usable(acceptance_client, acceptance_env, tmp_path):
-    """D-04/D-05：只有标题的稿子不崩；缺失项在报告里如实列出。"""
+def test_title_only_manuscript_is_blocked_with_missing_items(
+        acceptance_client, acceptance_env, tmp_path):
+    """D-04/D-05：只有标题的稿子不崩；缺件如实列出并阻断出稿。
+
+    结构性要件阻断（DESIGN §10.4）之后，「只有标题」不再能走到结果页：
+    缺件页必须点名缺什么，且不产出任何成品——缺项稿件不该被直接投出去。
+    """
     client, work = acceptance_client, acceptance_env["work"]
     source = build_title_only_docx(tmp_path / "title.docx")
-    job = deliver(client, source)
+    job = upload_job(client, source)
 
     d = work / job
     assert (d / "triage.html").is_file()
     triage = (d / "triage.html").read_text(encoding="utf-8")
     assert "缺" in triage, "标题-only 稿件的缺失项没有进报告"
-    assert client.get(f"/result/{job}").status_code == 200
+
+    response = client.post(f"/job/{job}/details", data={})
+    assert response.status_code == 400
+    html = response.get_data(as_text=True)
+    assert "稿件本体还缺" in html
+    assert "正文" in html and "参考文献" in html, "缺件页没有列出缺什么"
+    assert not list(d.glob("manuscript.*.docx")), "阻断时仍产出了成品"
 
 
 def test_empty_history_and_empty_draft_list(acceptance_client):
@@ -125,7 +138,7 @@ def test_missing_download_is_404(acceptance_client, acceptance_env, sample_docx)
     from acceptance_support import deliver
 
     client, work = acceptance_client, acceptance_env["work"]
-    job = deliver(client, sample_docx)
+    job = deliver(client, sample_docx, details=TJYJ_FILL)
     assert client.get(f"/job/{job}/download/nope").status_code == 404
     (work / job / "audit.html").unlink()
     assert client.get(f"/job/{job}/download/audit").status_code == 404
@@ -170,7 +183,7 @@ def test_long_chinese_filename_download_is_safe(acceptance_client, acceptance_en
     client, work = acceptance_client, acceptance_env["work"]
     source = build_clean_docx(tmp_path / "clean.docx")
     name = "这是一个很长的稿件名字 包含空格" * 3 + ".docx"
-    job = deliver(client, source, name=name)
+    job = deliver(client, source, name=name, details=TJYJ_FILL)
 
     response = client.get(f"/job/{job}/download/docx")
     assert response.status_code == 200

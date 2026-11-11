@@ -143,6 +143,8 @@ def test_busy_route_returns_page_without_touching_disk(app_module, light_job,
     def busy(*a, **k):
         raise app_module.RenderBusy(d.name)
 
+    # light_job 只登记 meta、没有 IR；本用例钉锁语义，先绕开缺件体检。
+    monkeypatch.setattr(app_module, "_rows_raw", lambda *a, **k: [])
     monkeypatch.setattr(app_module, "stage_render", busy)
     r = client.post(f"/job/{d.name}/details", data={})
     assert r.status_code == 200, "忙碌态要有友好页，不能 500"
@@ -332,6 +334,8 @@ def test_retry_unexpected_exception_goes_to_fail_page(app_module, light_job,
     def boom(*a, **k):
         raise PermissionError(13, "成品文件被另一个程序占用")
 
+    # light_job 没有 IR；本用例钉的是非 ConvertError 的兜底，先绕开缺件体检。
+    monkeypatch.setattr(app_module, "_rows_raw", lambda *a, **k: [])
     monkeypatch.setattr(app_module, "stage_render", boom)
     r = client.post(f"/job/{d.name}/retry", data={})
     assert r.status_code == 200, "非 ConvertError 被 500 了，兜底没生效"

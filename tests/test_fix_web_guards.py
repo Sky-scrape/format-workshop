@@ -181,6 +181,11 @@ def _break_ir(d):
     (d / "manuscript.ir.json").write_text("{ 这不是 JSON", encoding="utf-8")
 
 
+# 合成稿没有英文标题，是 tjyj 的结构性必备件；缺它会被补录页 400 拦下，
+# 到不了重渲染（DESIGN §10.4）。这两个用例关心的是落位与回滚，不是缺件。
+_DETAIL_FILL = {"english_title": "The Spillover Effects of US Monetary Policy"}
+
+
 def test_failed_rerender_keeps_deliverables(app_module, client, delivered_job, monkeypatch):
     """复现 F36：重渲染失败后，旧成品与审计必须原封不动，结果页仍可下载。"""
     d = delivered_job
@@ -192,7 +197,7 @@ def test_failed_rerender_keeps_deliverables(app_module, client, delivered_job, m
         raise app_module.ConvertError("渲染失败", "测试注入的故障")
 
     monkeypatch.setattr(app_module, "run", fail_render)
-    r = client.post(f"/job/{d.name}/details", data={})
+    r = client.post(f"/job/{d.name}/details", data=_DETAIL_FILL)
     assert r.status_code == 200, "失败要走错误页，而不是 500"
 
     assert (d / "manuscript.tjyj.docx").read_bytes() == docx_before, "旧成品被删了"
@@ -226,7 +231,7 @@ def test_failed_retry_leaves_meta_on_old_journal(client, delivered_job):
 def test_successful_rerender_replaces_deliverable(client, delivered_job):
     """正常重渲染仍要落位到正式文件名，且不留 .staging 半成品。"""
     d = delivered_job
-    r = client.post(f"/job/{d.name}/details", data={})
+    r = client.post(f"/job/{d.name}/details", data=_DETAIL_FILL)
     assert r.status_code == 302, "渲染成功应跳回结果页"
     assert (d / "manuscript.tjyj.docx").is_file()
     assert not list(d.glob(".staging.*")), "落位后不许残留临时文件"

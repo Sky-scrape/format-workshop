@@ -28,67 +28,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from docx_meta import sanitize_docx
-
-ALIGN = {
-    "left": WD_ALIGN_PARAGRAPH.LEFT,
-    "center": WD_ALIGN_PARAGRAPH.CENTER,
-    "right": WD_ALIGN_PARAGRAPH.RIGHT,
-    "both": WD_ALIGN_PARAGRAPH.JUSTIFY,
-}
-
-
-def set_run(run, cn=None, latin=None, size=None, bold=None, letter_spacing=None):
-    rpr = run._element.get_or_add_rPr()
-    rf = rpr.find(qn("w:rFonts"))
-    if rf is None:
-        rf = OxmlElement("w:rFonts")
-        rpr.append(rf)
-    if cn:
-        rf.set(qn("w:eastAsia"), cn)
-    if latin:
-        rf.set(qn("w:ascii"), latin)
-        rf.set(qn("w:hAnsi"), latin)
-    if size:
-        run.font.size = Pt(size)
-    if bold is not None:
-        run.font.bold = bold
-    if letter_spacing:
-        # 字间距（Word 的「加宽」）：单位 twips，1pt=20twips；写进 w:spacing/@w:val
-        sp = OxmlElement("w:spacing")
-        sp.set(qn("w:val"), str(int(round(letter_spacing * 20))))
-        rpr.append(sp)
-
-
-def set_chars_indent(p, chars):
-    ppr = p._p.get_or_add_pPr()
-    ind = ppr.find(qn("w:ind"))
-    if ind is None:
-        ind = OxmlElement("w:ind")
-        ppr.append(ind)
-    ind.set(qn("w:firstLineChars"), str(int(chars * 100)))
-    ind.set(qn("w:firstLine"), str(int(chars * 210)))
-
-
-def set_hanging_indent(p, chars):
-    ppr = p._p.get_or_add_pPr()
-    ind = ppr.find(qn("w:ind"))
-    if ind is None:
-        ind = OxmlElement("w:ind")
-        ppr.append(ind)
-    ind.set(qn("w:leftChars"), str(int(chars * 100)))
-    ind.set(qn("w:left"), str(int(chars * 210)))
-    ind.set(qn("w:hangingChars"), str(int(chars * 100)))
-    ind.set(qn("w:hanging"), str(int(chars * 210)))
-
-
-def set_line_unit_space(p, before_lines=0, after_lines=0):
-    ppr = p._p.get_or_add_pPr()
-    sp = ppr.find(qn("w:spacing"))
-    if sp is None:
-        sp = OxmlElement("w:spacing")
-        ppr.append(sp)
-    sp.set(qn("w:beforeLines"), str(int(before_lines * 100)))
-    sp.set(qn("w:afterLines"), str(int(after_lines * 100)))
+# 版式写入原语与缺省值只有一份（tools/docx_fmt.py）：样板与交付稿对同一
+# 规则集必须写出同一个字号/字间距，复制两份实现迟早漂移。
+from docx_fmt import (
+    ALIGN, DEFAULTS, set_chars_indent, set_hanging_indent, set_line_unit_space,
+    set_run,
+)
 
 
 def add_para(doc, text, *, cn=None, latin=None, size=None, bold=None,
@@ -180,7 +125,7 @@ def build(rules, out_path):
     line_mult = ls.get("value") if ls.get("mode") == "multiple" else None
     line_pt = ls.get("value_pt") or ls.get("equivalent_exact_pt")
     if line_pt is None:
-        line_pt = round(body["size_pt"] * 1.2 * (line_mult or 1), 1)
+        line_pt = round(body["size_pt"] * DEFAULTS["body_line_mult"][0] * (line_mult or 1), 1)
     # LINE 给正文用（倍数或固定值），line_pt 只用于算标题／行首这类需要数值的地方
     LINE = {"pt": line_pt, "mult": line_mult} if line_mult else line_pt
     line_desc = f"{line_mult} 倍" if line_mult else f"{line_pt} 磅固定值"
@@ -210,7 +155,7 @@ def build(rules, out_path):
     if rules["submission"]["author_page"].get("separate_page"):
         add_para(doc, smp.get("author_page_title") or (j["name_zh"] + " 投稿样板（作者信息页）"),
                  cn=title_tp["font_cn"],
-                 size=title_tp["size_pt"], align="center", line=20)
+                 size=title_tp["size_pt"], align="center", line=DEFAULTS["body_line_pt"][0])
         add_para(doc, "", line=LINE)
         for fid in rules["submission"]["author_page"]["fields"]:
             label = next((f["label_zh"] for f in rules["personal_fields"] if f["id"] == fid), fid)
@@ -219,7 +164,7 @@ def build(rules, out_path):
         add_para(doc, "", line=LINE)
         add_para(doc, smp.get("author_page_note") or
                  "※ 本页独立成页，置于正文之前，请勿单独提交；正文部分须为匿名形式。",
-                 cn=body["font_cn"], size=9, line=LINE)
+                 cn=body["font_cn"], size=DEFAULTS["note_size_pt"][0], line=LINE)
 
         doc.add_page_break()
 
@@ -236,7 +181,7 @@ def build(rules, out_path):
 
     # ---------- 正文标题 ----------
     # 标题行距必须大于字号，否则多行标题会重叠
-    title_line = max(line_pt, round(title_tp["size_pt"] * 1.35))
+    title_line = max(line_pt, round(title_tp["size_pt"] * DEFAULTS["title_line_mult"][0]))
     add_para(doc, smp.get("title") or "美国宽松货币政策对金砖国家的溢出效应研究",
              letter_spacing=title_tp.get("letter_spacing_pt"),
              cn=title_tp["font_cn"],
@@ -246,13 +191,13 @@ def build(rules, out_path):
     # 只有规则集明确规定了才渲染，避免给没有该构件的期刊凭空加行
     sub_tp = tp.get("subtitle")
     if sub_tp:
-        sub_line = max(line_pt, round(sub_tp["size_pt"] * 1.35))
+        sub_line = max(line_pt, round(sub_tp["size_pt"] * DEFAULTS["subtitle_line_mult"][0]))
         add_para(doc, smp.get("subtitle") or "——基于金砖五国宏观月度数据的证据", cn=sub_tp["font_cn"],
                  latin=body.get("font_latin"), size=sub_tp["size_pt"],
                  align=sub_tp.get("align", "center"), line=sub_line)
     au_tp = tp.get("authors")
     if au_tp:
-        au_line = max(line_pt, round(au_tp["size_pt"] * 1.35))
+        au_line = max(line_pt, round(au_tp["size_pt"] * DEFAULTS["authors_line_mult"][0]))
         add_para(doc, smp.get("authors") or "张　三　　李　四", cn=au_tp["font_cn"],
                  latin=body.get("font_latin"),
                  size=au_tp["size_pt"], align=au_tp.get("align", "center"), line=au_line)
@@ -264,7 +209,7 @@ def build(rules, out_path):
                        if b["type"] == "affiliations" and b.get("lang") != "en"), None)
     aff_tp_zh = tp.get("affiliations")
     if aff_blk_zh and aff_tp_zh:
-        aff_line_zh = max(line_pt, round(aff_tp_zh["size_pt"] * 1.35))
+        aff_line_zh = max(line_pt, round(aff_tp_zh["size_pt"] * DEFAULTS["affiliations_line_mult"][0]))
         add_para(doc, smp.get("affiliations") or
                  "（1. 样本大学经济学院，北京　100000；2. 样本研究院，上海　200000）",
                  cn=aff_tp_zh["font_cn"], latin=aff_tp_zh.get("font_latin", body.get("font_latin")),
@@ -297,8 +242,10 @@ def build(rules, out_path):
     code_cn = code_tp.get("font_cn") or body["font_cn"]
     code_latin = code_tp.get("font_latin") or body.get("font_latin")
     code_size = code_tp.get("size_pt") or body["size_pt"]
-    # 小字号行按 1.45 倍折算行距，避免 9pt 字撑在 17pt 行里显得过散
-    code_line = code_tp.get("line_spacing", {}).get("value_pt") or round(code_size * 1.45, 1)
+    # 小字号行按缺省倍数（DEFAULTS["classification_line_mult"]）折算行距，
+    # 避免 9pt 字撑在 17pt 行里显得过散
+    code_line = (code_tp.get("line_spacing", {}).get("value_pt")
+                 or round(code_size * DEFAULTS["classification_line_mult"][0], 1))
 
     def code_para(text):
         add_para(doc, text, cn=code_cn, latin=code_latin, size=code_size,
@@ -362,7 +309,7 @@ def build(rules, out_path):
             add_para(doc, smp.get("authors_en") or "ZHANG San　LI Si",
                      cn=en_au.get("font_cn", body["font_cn"]), latin=body["font_latin"],
                      size=au_size, align=en_au.get("align", "center"),
-                     line=max(line_pt, round(au_size * 1.5)))
+                     line=max(line_pt, round(au_size * DEFAULTS["authors_line_mult"][0])))
         # 英文单位：只有规则集声明了才渲染（经济研究的 a/b/c 分行）
         if any(b["type"] == "affiliations" and b.get("lang") == "en" for b in rules["blocks"]):
             aff_tp = tp.get("affiliations_en") or body
@@ -510,8 +457,8 @@ def build(rules, out_path):
         doc,
         t_head, t_rows,
         bp,
-        header_size=tb.get("font_size_pt", 10.5),
-        body_size=tb.get("font_size_pt", 10.5),
+        header_size=tb.get("font_size_pt", DEFAULTS["table_font_size_pt"][0]),
+        body_size=tb.get("font_size_pt", DEFAULTS["table_font_size_pt"][0]),
     )
     for layer in tb["note_layers"]:
         prefix = layer.get("prefix") or ""
@@ -649,7 +596,8 @@ def build(rules, out_path):
     # ---------- 生成说明 ----------
     add_para(doc, "", line=LINE)
     if smp.get("sample_note"):
-        add_para(doc, smp["sample_note"], cn=body["font_cn"], size=9, line=LINE)
+        add_para(doc, smp["sample_note"], cn=body["font_cn"],
+                 size=DEFAULTS["note_size_pt"][0], line=LINE)
         doc.save(out_path)
         sanitize_docx(out_path)
         return out_path
@@ -659,7 +607,8 @@ def build(rules, out_path):
     if rules.get("assumptions"):
         src_parts.append("标注「推定」的项为官方未规定、由本工具假定的值，不属于期刊要求")
     src_parts.append("文字内容为版式核验用途，非真实论文")
-    add_para(doc, "；".join(src_parts) + "。", cn=body["font_cn"], size=9, line=LINE)
+    add_para(doc, "；".join(src_parts) + "。", cn=body["font_cn"],
+             size=DEFAULTS["note_size_pt"][0], line=LINE)
 
     doc.save(out_path)
     sanitize_docx(out_path)

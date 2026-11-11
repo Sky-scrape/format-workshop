@@ -3,7 +3,7 @@
 已有的 767 条契约测试仍然守着渲染细节；这里只补三类：
 - 用户操作顺序与表单行为（选刊→补录、跨刊重填）；
 - 报告与设置页的可核性（三口径字数、密钥不回显、建库门禁）；
-- 已知规范冲突（DESIGN §10.4 必填项阻断）——用 strict xfail 如实记录。
+- 结构性要件阻断（DESIGN §10.4）——稿件本体缺件不得开始转换。
 """
 
 import json
@@ -13,12 +13,14 @@ import pytest
 from docx import Document
 
 from acceptance_support import (
+    TJYJ_FILL,
     build_clean_docx,
     build_many_headings_docx,
     build_spacing_docx,
     build_title_only_docx,
     deliver,
     make_draft,
+    meta_of,
     upload,
     upload_job,
 )
@@ -38,6 +40,44 @@ pytestmark = pytest.mark.acceptance
 
 def _rules(journal="tjyj"):
     return json.loads((RULES / f"{journal}.json").read_text(encoding="utf-8"))
+
+
+def _with_author_line(path, authors="张三　李四"):
+    """build_clean_docx 没有署名行；统计研究要求「作者」，交付前补一行。"""
+    build_clean_docx(path)
+    doc = Document(str(path))
+    doc.paragraphs[1].insert_paragraph_before(authors)
+    doc.save(str(path))
+    return path
+
+
+def _complete_docx(path, english_abstract=True):
+    """一本刊的完整稿：中文要件齐全，外加英文标题/摘要/关键词。
+
+    目标刊用 gjjryj（blocks 不要求署名行以外的作者页字段），用来钉住
+    「个人信息表单全空也能转换」——阻断项只认稿件本体要件，不认作者页字段。
+    """
+    doc = Document()
+    lines = [
+        "数字金融与企业融资约束",
+        "张三　李四",
+        "内容提要：本文考察数字金融对企业融资约束的影响。",
+        "关键词：数字金融；融资约束；企业创新",
+        "中图分类号：F821",
+        "Digital Finance and Financing Constraints",
+        "Key words：digital finance; financing constraints",
+        "一、引言",
+        "本文使用上市公司数据，考察数字金融对企业融资约束的影响。",
+        "参考文献",
+        "[1] 张三，2020：《数字金融与企业融资》，《经济研究》第3期。",
+    ]
+    if english_abstract:
+        # 英文摘要必须排在英文标题之后、首个一级标题之前，解析器才认得出
+        lines.insert(6, "Abstract：This paper studies digital finance and financing constraints.")
+    for line in lines:
+        doc.add_paragraph(line)
+    doc.save(str(path))
+    return path
 
 
 def _triage_text(tmp_path, docx_path, journal="tjyj"):
@@ -110,7 +150,7 @@ def test_audit_items_have_the_contract_fields(
     from acceptance_support import audit_of
 
     client, work = acceptance_client, acceptance_env["work"]
-    job = deliver(client, sample_docx)
+    job = deliver(client, sample_docx, details=TJYJ_FILL)
     items = audit_of(work, job)["items"]
     assert items
 
@@ -127,7 +167,7 @@ def test_rejecting_one_edit_reverts_only_that_block(
     from acceptance_support import audit_of
 
     client, work = acceptance_client, acceptance_env["work"]
-    job = deliver(client, sample_docx)
+    job = deliver(client, sample_docx, details=TJYJ_FILL)
     before = audit_of(work, job)
     target = next(it for it in before["items"]
                   if (it.get("before") or it.get("after"))
@@ -202,9 +242,9 @@ def test_cross_journal_details_keep_previous_values(
         acceptance_client, acceptance_env, tmp_path):
     """B-21：换刊后补录页只问差集，已填的基金信息不能丢。"""
     client, work = acceptance_client, acceptance_env["work"]
-    source = build_clean_docx(tmp_path / "clean.docx")
+    source = _with_author_line(tmp_path / "clean.docx")
     funding = "国家社会科学基金（22BJY000）"
-    job = deliver(client, source, details={"funding": funding})
+    job = deliver(client, source, details={**TJYJ_FILL, "funding": funding})
 
     response = client.post(f"/job/{job}/retry", data={"journal": "cjyj"})
     assert response.status_code == 302
@@ -228,6 +268,10 @@ def test_shipped_journals_have_all_three_artifacts():
         html = spec.read_text(encoding="utf-8")
         assert rules["journal"]["name_zh"] in html
         assert "成品样式预览" in html or "规格" in html
+        if jid == "cjyj":
+            # 静态规格页必须跟着 render_spec 重生成：总字数下限曾只认
+            # limits.total.min，规格页会停在旧的单向上限写法。
+            assert "15,000–25,000 字" in html, "cjyj 规格页的总字数区间没有随代码更新"
     # 规格页内嵌的预览图来自同刊样张 PDF；三本都在场时才校验，少一本就
     # 跳过整段（公开检出只有规格页，样张 PDF 不入库）。
     missing = [jid for jid in SHIPPED_JOURNALS
@@ -397,15 +441,12 @@ def test_many_headings_beyond_ten_do_not_crash(tmp_path):
     assert not invariant_failures(pipeline)
 
 
-# ---------------------------------------------------------------- 已知规范冲突
+# ---------------------------------------------------------------- 结构性要件阻断
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DESIGN §10.4 要求 required:true 未填不得开始转换，但现行详情页明确写"
-    "「全部留空也能直接排版」；这是需求与实现的冲突，先如实记录，待定夺"))
-def test_required_personal_fields_block_conversion(
+def test_missing_required_blocks_block_conversion(
         acceptance_client, acceptance_env, tmp_path):
-    """B-18：按设计文档测——缺失必备项时不该开始转换。"""
-    client = acceptance_client
+    """B-18：稿件本体缺必备要件时不得开始转换（DESIGN §10.4）。"""
+    client, work = acceptance_client, acceptance_env["work"]
     source = build_title_only_docx(tmp_path / "title-only.docx")
     job = upload_job(client, source)
 
@@ -414,3 +455,66 @@ def test_required_personal_fields_block_conversion(
 
     response = client.post(f"/job/{job}/details", data={})
     assert response.status_code == 400, "缺少必备项却开始转换了"
+    html = response.get_data(as_text=True)
+    assert "稿件本体还缺" in html
+    assert "正文" in html and "参考文献" in html, "退回页没有列出缺件"
+    # 阻断发生在 stage_render 之前：不产出成品，任务仍停在补录阶段
+    assert not list((work / job).glob("manuscript.*.docx")), "阻断时仍产出了成品"
+    assert meta_of(work, job)["stage"] != "rendered"
+
+
+def test_complete_manuscript_converts_with_empty_personal_info(
+        acceptance_client, tmp_path):
+    """完整稿 + 个人信息表单全空仍可转换：作者页字段不参与结构阻断。"""
+    client = acceptance_client
+    source = _complete_docx(tmp_path / "complete.docx")
+    job = upload_job(client, source, journal="gjjryj")
+
+    page = client.get(f"/job/{job}/details").get_data(as_text=True)
+    assert "稿件本体还缺" not in page, "完整稿被误判成缺件"
+    response = client.post(f"/job/{job}/details", data={})
+    assert response.status_code == 302, response.get_data(as_text=True)[:800]
+    assert response.headers["Location"].startswith(f"/result/{job}")
+
+
+def test_filled_english_abstract_stops_blocking(acceptance_client, tmp_path):
+    """英文摘要缺着就阻断；在补录页填上即可出稿，不必回 Word 改。"""
+    client = acceptance_client
+    source = _complete_docx(tmp_path / "no-en-abstract.docx", english_abstract=False)
+    job = upload_job(client, source, journal="gjjryj")
+
+    blocked = client.post(f"/job/{job}/details", data={})
+    assert blocked.status_code == 400
+    assert "摘要（en）" in blocked.get_data(as_text=True), "英文摘要缺失没有报出来"
+
+    filled = client.post(f"/job/{job}/details",
+                         data={"english_abstract": "This paper studies digital finance."})
+    assert filled.status_code == 302
+    assert filled.headers["Location"].startswith(f"/result/{job}")
+
+
+def test_highlights_and_received_date_never_block():
+    """另附文件（Highlights）与编辑部填的收稿日期不派给作者，不阻断排版。"""
+    import app
+
+    rows_raw = [
+        ("highlights", "en", "Highlights（en）", False, True),
+        ("received_date", None, "收稿日期", False, True),
+        ("article_number", None, "文章编号", False, True),
+    ]
+    assert app.blocking_missing(rows_raw, {}) == []
+
+    # 只有真正要在稿件里补的块才阻断；能由补录补齐的，填了就不再阻断
+    rows = rows_raw + [("body", None, "正文", False, True),
+                       ("abstract", "en", "摘要（en）", False, True)]
+    assert app.blocking_missing(rows, {}) == ["正文", "摘要（en）"]
+    assert app.blocking_missing(rows, {"english_abstract": "text"}) == ["正文"]
+
+
+def test_corresponding_author_is_filled_by_the_footer_field():
+    """jae/jde 的通讯作者：补录页「通讯作者」填了就算补齐，不能永远阻断。"""
+    import app
+
+    rows = [("corresponding_author", None, "通讯作者", False, True)]
+    assert app.blocking_missing(rows, {}) == ["通讯作者"]
+    assert app.blocking_missing(rows, {"corresponding": "张三（zs@example.com）"}) == []

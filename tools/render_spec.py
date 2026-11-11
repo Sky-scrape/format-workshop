@@ -275,9 +275,17 @@ def build(rules, sample_pdf=None):
 
     # 限制
     total = lim.get("total") or {}
+    # 总字数的下限有两种登记位置（limits.total.min / limits.total_min），
+    # 与 compliance_report 同口径；只写上限时，须知里的「不少于 N 字」在
+    # 规格页上等于不存在。
+    total_lo = total.get("min") or total.get("total_min") or lim.get("total_min")
     if total.get("value"):
-        lim_rows = [row("正文", f"{total['value']} 字（{total['metric']} 口径，" +
+        span = (f"{total_lo:,}–{total['value']:,} 字" if total_lo
+                else f"{total['value']:,} 字")
+        lim_rows = [row("正文", f"{span}（{total['metric']} 口径，" +
                               ("硬性" if total.get("strict") else "建议值") + "）")]
+    elif total_lo:
+        lim_rows = [row("正文", f"不少于 {total_lo:,} 字（{total.get('metric', '待确认')} 口径）")]
     else:
         # 少数期刊只规定必备构件，不设总字数上限
         lim_rows = [row("正文", "该刊未规定总字数上限")]
@@ -309,8 +317,11 @@ def build(rules, sample_pdf=None):
         scheme = cls.get("scheme", "") if cls else ""
         lim_rows.append(row("分类号", f"{lim['classification_code_count']} 个"
                                   + (f"（{scheme}）" if scheme else "")))
-    if lim.get("title_chars_max"):
-        lim_rows.append(row("标题长度", f"不超过 {lim['title_chars_max']} 字"))
+    # 标题字数上限的两个键名都认（title_chars_max / title_max_chars），
+    # 与 compliance_report 一致，免得一家刊两处各读一个键。
+    title_max = lim.get("title_chars_max") or lim.get("title_max_chars")
+    if title_max:
+        lim_rows.append(row("标题长度", f"不超过 {title_max} 字"))
     lim_rows.append(row("处理方式", "仅提醒，不修改稿件内容"))
     parts.append(table(lim_rows, "字数与限制"))
 

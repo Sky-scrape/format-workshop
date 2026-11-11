@@ -215,9 +215,13 @@ def test_placement_enum_has_three_data_values_with_meanings():
         assert f"`{val}`" in row, f"placement 枚举缺 {val}：{row}"
         assert meaning in row, f"{val} 缺一句含义（应含「{meaning}」）：{row}"
     assert "消费方现状" in row, f"未注明消费方现状：{row}"
-    assert enum >= {"byline", "footnote", "section", "author_page",
+    # section 是 blocks[].placement 的取值（作者简介成节），不属于
+    # personal_fields 这一行；但行内仍要说明它不在此枚举，避免误读。
+    assert enum >= {"byline", "footnote", "author_page",
                     "back_matter", "system", "title_page", "separate_file",
                     "submission_system"}, f"枚举缺值：{sorted(enum)}"
+    assert "section" not in enum and "`section`" in row, \
+        f"section 不应计入 personal_fields 枚举：{row}"
 
 
 # 反向覆盖（新枚举值各有在库使用）以 23 本全库为口径；公开检出 3 本示例

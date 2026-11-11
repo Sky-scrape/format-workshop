@@ -37,21 +37,37 @@ NEED_MAP = {
 
 LABEL = {
     "title": "标题", "subtitle": "副标题", "authors": "作者", "affiliations": "单位",
+    "corresponding_author": "通讯作者",
     "abstract": "摘要", "keywords": "关键词", "classification_code": "分类号",
     "document_code": "文献标识码", "article_number": "文章编号", "body": "正文",
     "references": "参考文献", "appendix": "附录", "acknowledgement": "致谢",
     "data_availability": "数据可得性", "conflict_of_interest": "利益冲突声明",
-    "highlights": "Highlights",
+    "highlights": "Highlights", "received_date": "收稿日期",
 }
 
 # 规则集 limits.total.scope 是各刊投稿须知的原话（「正文」「全文」「全文（含图表）」）。
 # 已认识的写法映射到统计过滤：声明「正文」就只数正文块，全文类数全部块；
 # 没认出的写法一律保守按全文计，由 check() 在报告里注明回退——
 # 绝不把全文数字偷偷对到正文上限上（那会出假超限判决）。
-SCOPE_FILTER = {"正文": "body", "全文": "all", "全文（含图表）": "all"}
+# 「正文（含字符）」是 cjwt 的写法，语义就是正文，不是「正文+字符数」；
+# 认出来才不会再退回全文口径，把参考文献和表格算进正文上限。
+SCOPE_FILTER = {"正文": "body", "正文（含字符）": "body",
+                "全文": "all", "全文（含图表）": "all"}
 
-# 这些不是作者能补的（由编辑部编号或按刊物体例给定），不当成待办派给作者
-NON_ACTIONABLE = {"article_number", "document_code"}
+# 这些不是作者能补的（由编辑部编号或按刊物体例给定），不当成待办派给作者。
+# received_date 是编辑部收稿时盖的日期，不是作者能在稿件里补的内容；
+# 把它算成「缺必备项」会让 ciejournal 永远停在「还差 1 项」。
+NON_ACTIONABLE = {"article_number", "document_code", "received_date"}
+
+# 这些要件按刊要求是「另附文件」，不写进正文：报告里标「另附」，
+# 既不判缺、也不派给作者当正文待办（Highlights 是典型：Elsevier 要单独上传）。
+EXTERNAL_BLOCKS = {"highlights"}
+
+# 这些要件由网页补录页收集、不落成 IR 块：通讯作者在 jae/jde 只进首页脚注
+# 或作者页，解析器从不产出 corresponding_author 类型。报告若按 IR 判缺，
+# 用户填完补录、成品也带了通讯作者，triage 仍会一直写「缺」，与交付口径
+# 打架。报告标「补录」并单列说明，Web 端仍按 rows_raw 要求确实填了才放行。
+DETAIL_BLOCKS = {"corresponding_author"}
 
 # ---- 必备声明（规则集 statements）----
 # 23 本刊都声明了这一项，但报告里从来没有出现过。作者不会知道
@@ -67,18 +83,35 @@ STATEMENT_LABELS = {
 
 # 只用来判断"稿件里提到过没有"。命中不代表格式合规，未命中也不代表一定缺失——
 # 有些声明是投稿系统里单独勾选的，不在正文里。
+# 英文稿与双语稿同样要认：只按中文词找，英文稿的每一条声明都会判「未检出」，
+# 报告就把这些全派成了待办。英文一律忽略大小写匹配（见 check）。
+# originality 不收单字 original："original data" 这类写法在英文正文里太常见，
+# 收进来等于把每条英文稿都判成「已声明」。
 STATEMENT_PATTERNS = {
-    "copyright_transfer": r"版权|著作权|转让协议",
-    "conflict_of_interest": r"利益冲突|作者声明|无利益",
-    "data_availability": r"数据可得|数据可用|数据获取|数据和代码|数据与代码",
-    "ai_declaration": r"AI\s*使用|人工智能使用|生成式|ChatGPT|大模型|AI\s*辅助",
-    "originality": r"原创|未曾发表|未公开发表|一稿多投",
-    "confidentiality": r"保密审查|涉密",
+    "copyright_transfer": r"版权|著作权|转让协议|copyright",
+    "conflict_of_interest": (r"利益冲突|作者声明|无利益"
+                             r"|conflict\s+of\s+interest|competing\s+interests?"
+                             r"|declaration\s+of\s+(?:competing\s+)?interests?"),
+    "data_availability": (r"数据可得|数据可用|数据获取|数据和代码|数据与代码"
+                          r"|data\s+availability|data\s+(?:are|is)\s+available"),
+    "ai_declaration": (r"AI\s*使用|人工智能使用|生成式|ChatGPT|大模型|AI\s*辅助"
+                       r"|generative\s+AI|large\s+language\s+models?"
+                       r"|\bAI\s+(?:use|usage|assistance|assisted|tools?)\b"),
+    "originality": (r"原创|未曾发表|未公开发表|一稿多投"
+                    r"|originality|original\s+(?:work|research|article|manuscript)"
+                    r"|not\s+(?:been\s+)?published|duplicate\s+(?:publication|submission)"),
+    "confidentiality": r"保密审查|涉密|confidentiality|confidential",
 }
 
 # 前置区在 IR 里统一是 front_matter，没有细分角色；
 # 这里用机构名特征把"作者行"和"单位行"区分开，避免把署名判成缺失。
-ORG = re.compile(r"(大学|学院|研究院|研究所|学校|中心|实验室|集团|公司|银行|医院|系|研究所)")
+# 英文单位行同样要认：只认中文机构词时，英文单位会被当成作者行，
+# 「作者」「单位」两行一起判错。英文词按词边界匹配，忽略大小写。
+ORG = re.compile(
+    r"(大学|学院|研究院|研究所|学校|中心|实验室|集团|公司|银行|医院|系)"
+    r"|\b(?:University|Institute|College|School|Academy|Bank|Center|Centre"
+    r"|Laboratory|Department|Hospital|Corporation|Company|Group)\b",
+    re.IGNORECASE)
 
 # 英文要件单独一套，不能与中文混判：只补了英文摘要不等于中文摘要存在
 NEED_MAP_EN = {
@@ -192,6 +225,8 @@ def check(ir, rules):
     cls_en = any(b["type"] == "classification" and b.get("lang") == "en"
                  for b in ir_blocks)
 
+    external = set()
+    detail = set()
     for blk in rules_blocks:
         t = blk.get("type", "")
         lang = blk.get("lang")
@@ -212,13 +247,29 @@ def check(ir, rules):
         else:
             ok = bool(present & NEED_MAP.get(t, {t}))
         name = LABEL.get(t, t) + (f"（{lang}）" if lang else "")
-        rows.append((name, "有" if ok else "缺", blk.get("required", False)))
-        # 原始行供 Web 端生成补录表单：网页需要知道类型与语言，而不只是中文标签
-        rows_raw.append((t, lang, name, ok, blk.get("required", False)))
+        req = blk.get("required", False)
+        if t in DETAIL_BLOCKS and not ok:
+            # 补录页收集的项不落 IR 块：稿件里永远查不到，但也不能算缺件。
+            rows.append((name, "补录", req))
+            detail.add((t, lang))
+        elif t in EXTERNAL_BLOCKS and not ok:
+            # 另附文件（Highlights）本就不写进正文：稿件里没有不是缺件，
+            # 标「另附」而不是「缺」，既不进待办也不计入「还差几项」。
+            rows.append((name, "另附", req))
+            external.add((t, lang))
+        else:
+            rows.append((name, "有" if ok else "缺", req))
+        # 原始行供 Web 端生成补录表单：网页需要知道类型与语言，而不只是中文标签。
+        # 保持五元组：ok 仍是布尔，「另附」「补录」只是展示口径，不是待补的缺件。
+        rows_raw.append((t, lang, name, ok, req))
 
     limits = rules.get("limits", {})
     total = limits.get("total", {})
     metric = total.get("metric")
+    # 总字数下限有两种登记位置：cjyj 写在 limits.total.min，cmjj 写在
+    # limits.total_min；两个都认，读不到才算该刊没设下限。
+    total_lo = total.get("min") or total.get("total_min") or limits.get("total_min")
+    total_hi = total.get("value")
     # 总字数按规则集声明的 scope 过滤后再对上限：声明「正文」只数正文块，
     # 声明「全文」数全部块；写法未识别或未声明时保守按全文计，并在报告注明。
     # 标注的统计范围必须与实际参与统计的块一致，否则计数与口径自相矛盾。
@@ -233,16 +284,33 @@ def check(ir, rules):
     for key, label in (("A", "字符数（不计空格）"), ("B", "中文字符 + 英文单词"), ("C", "字符数（计空格）")):
         val = words[key]
         mark = ""
-        if metric == key and total.get("value"):
-            over = val - total["value"]
-            mark = f"｜上限 {total['value']:,}，{'超出 ' + format(over, ',') if over > 0 else '余量 ' + format(-over, ',')}"
+        if metric == key and (total_hi or total_lo):
+            # 区间型总字数（下限 + 上限）必须两头都标：只报上限，
+            # 「不接受短文」的刊在报告里等于没有下限。
+            bits = []
+            if total_hi:
+                over = val - total_hi
+                if over > 0:
+                    bits.append(f"上限 {total_hi:,}，超出 {over:,}")
+                elif total_lo and val < total_lo:
+                    # 低于下限时不再说「余量」，否则读起来像已经合规
+                    bits.append(f"上限 {total_hi:,}")
+                else:
+                    bits.append(f"上限 {total_hi:,}，余量 {-over:,}")
+            if total_lo:
+                under = total_lo - val
+                bits.append(f"下限 {total_lo:,}"
+                            + (f"，低于 {under:,}" if under > 0 else ""))
+            mark = "｜" + "；".join(bits)
         w_res.append((label, f"{val:,}{mark}"))
 
     total_info = None
-    if metric and total.get("value"):
+    if metric and (total_hi or total_lo):
         actual = words.get(metric, 0)
-        total_info = {"metric": metric, "value": total["value"], "actual": actual,
-                      "over": actual - total["value"], "scope": raw_scope,
+        total_info = {"metric": metric, "value": total_hi, "lo": total_lo, "actual": actual,
+                      "over": actual - total_hi if total_hi else 0,
+                      "under": max(0, total_lo - actual) if total_lo else 0,
+                      "scope": raw_scope,
                       "scope_label": "正文" if eff_scope == "body" else "全文",
                       "scope_note": scope_note,
                       "note": total.get("note", ""), "strict": total.get("strict", False)}
@@ -271,8 +339,9 @@ def check(ir, rules):
         keywords_info = {"min": lim_kw.get("min"), "max": lim_kw.get("max"),
                          "count": count, "found": bool(kw_text.strip())}
 
-    # 标题字数：少数刊有明文限制（如国际金融研究 20 字）
-    lim_title = limits.get("title_chars_max")
+    # 标题字数：少数刊有明文限制（如国际金融研究 20 字）。
+    # 键名有两种写法：title_chars_max（多数刊）与 title_max_chars（cjwt）。
+    lim_title = limits.get("title_chars_max") or limits.get("title_max_chars")
     title_info = None
     if lim_title:
         title_text = next((b.get("text", "") for b in ir_blocks
@@ -305,7 +374,7 @@ def check(ir, rules):
             "label": STATEMENT_LABELS.get(key, key),
             "required": bool(conf.get("required")),
             "note": conf.get("note", ""),
-            "found": bool(pat and re.search(pat, all_text)),
+            "found": bool(pat and re.search(pat, all_text, re.IGNORECASE)),
         })
     statements.sort(key=lambda s: (not s["required"], s["label"]))
 
@@ -332,6 +401,11 @@ def check(ir, rules):
     return {
         "rows": rows,
         "rows_raw": rows_raw,
+        # 判为「另附」的 (type, lang)：Highlights 这类要单独上传、不写进正文的要件。
+        # 报告据此出说明行，调用方也不会把它当成缺件。
+        "external": external,
+        # 判为「补录」的 (type, lang)：通讯作者这类由网页表单收集、不落 IR 的项。
+        "detail": detail,
         # 数据本身可疑之处的点名（块缺 type 键这类，COMPSUB）——工具不崩，
         # 但读报告的人要知道判定是在打了折扣的输入上做出的
         "warnings": warnings,
@@ -364,7 +438,8 @@ def render(ir, rules, res):
     src = ir.get("source") or "未命名稿件"
     rows_html = "".join(
         f'<tr><td>{html.escape(n)}</td>'
-        f'<td class="{"ok" if v == "有" else "miss"}">{v}</td>'
+        # 三态：有 / 缺 / 另附——「另附」不是缺件，用 muted 与真缺失区分开
+        f'<td class="{"ok" if v == "有" else "miss" if v == "缺" else "muted"}">{v}</td>'
         f'<td>{"必备" if req else "可选"}</td></tr>'
         for n, v, req in res["rows"]
     )
@@ -379,11 +454,27 @@ def render(ir, rules, res):
         cite_text = ("一致，无需转换" if c["ok"] else
                      f"稿件为{'顺序编码制' if c['actual'] == 'numbered' else '作者年制'}，"
                      f"目标刊要求{'顺序编码制' if c['want'] == 'numbered' else '作者年制'}——需要重新格式化")
-    # 文章编号、文献标识码由编辑部给定，作者补不了，不计入"还差几项"也不进待办
+    # 文章编号、文献标识码由编辑部给定，作者补不了，不计入"还差几项"也不进待办；
+    # 另附要件（Highlights）与补录要件（通讯作者）同样不是正文缺件，单列说明。
     missing = [n for t, lang, n, ok, req in res.get("rows_raw", [])
-               if not ok and req and t not in NON_ACTIONABLE]
+               if not ok and req and t not in NON_ACTIONABLE
+               and t not in EXTERNAL_BLOCKS and t not in DETAIL_BLOCKS]
     publisher_missing = [n for t, lang, n, ok, req in res.get("rows_raw", [])
                          if not ok and req and t in NON_ACTIONABLE]
+    external_missing = [n for t, lang, n, ok, req in res.get("rows_raw", [])
+                        if not ok and (t, lang) in (res.get("external") or set())]
+    detail_missing = [n for t, lang, n, ok, req in res.get("rows_raw", [])
+                      if not ok and (t, lang) in (res.get("detail") or set())]
+    external_note = ""
+    if external_missing:
+        external_note = ('<p class="meta">'
+                         + html.escape("、".join(external_missing))
+                         + ' 按该刊要求另附文件提交，不写入稿件，也不算作正文缺件。</p>')
+    detail_note = ""
+    if detail_missing:
+        detail_note = ('<p class="meta">'
+                       + html.escape("、".join(detail_missing))
+                       + ' 在网页补录页填写，不写入正文，也不算作正文缺件。</p>')
     tl, al = res.get("total_limit"), res.get("abstract_limit")
 
     def limit_cell(info, unit=""):
@@ -471,10 +562,14 @@ def render(ir, rules, res):
     if missing:
         manual.append("缺失必备项：" + "、".join(missing) + "，需作者补充，工具不会代写")
     if publisher_missing:
-        manual.append("、".join(publisher_missing) + " 由编辑部编号或按刊物体例给定，无须你处理")
+        manual.append("、".join(publisher_missing)
+                      + " 由编辑部提供（编号、日期等）或按刊物体例给定，无须你处理")
     if tl and tl["over"] > 0:
         manual.append(f"总字数比该刊{'上限' if tl.get('strict') else '建议值'}多 {tl['over']:,}，"
                       f"如何缩减由作者决定——本工具不会为迁就字数删改任何内容")
+    if tl and tl.get("under"):
+        manual.append(f"总字数比该刊下限少 {tl['under']:,}，如何补足由作者决定——"
+                      f"本工具不会替你生成任何内容")
     if al and al.get("found") and al["over"] > 0:
         manual.append(f"摘要 {al['actual']} 字，{'上限' if al.get('strict') else '建议值'} {al['value']} 字，"
                       f"超出 {al['over']} 字，需作者自行精简")
@@ -521,6 +616,7 @@ def render(ir, rules, res):
     # ---- 判决句：作者只想知道"能不能投" ----
     n_missing = len(missing)
     over_total = tl["over"] if tl else 0
+    under_total = tl.get("under", 0) if tl else 0
     over_abs = al["over"] if (al and al.get("found")) else 0
     cite_bad = c["ok"] is False
 
@@ -529,6 +625,9 @@ def render(ir, rules, res):
         scope_label = tl.get("scope_label", "正文")
         if over_total > 0:
             bits.append(f"{scope_label}超{'上限' if tl.get('strict') else '建议值'} {over_total:,} 字")
+        elif under_total > 0:
+            # 低于下限同样是字数不合规，不能说「在范围内」
+            bits.append(f"{scope_label}低于下限 {under_total:,} 字")
         else:
             bits.append(f"{scope_label}字数在范围内")
     if al and al.get("found"):
@@ -545,6 +644,8 @@ def render(ir, rules, res):
         nxt = f"先补齐这 {n_missing} 项必备要件，其余版式现在就可以排。"
     elif over_total > 0 or over_abs > 0:
         nxt = "格式上已可排版；字数怎么缩减由你决定，工具不会代删。"
+    elif under_total > 0:
+        nxt = "格式上已可排版；字数低于该刊下限，补足什么由你决定，工具不会代写。"
     elif anon.get("required") and anon.get("count"):
         nxt = "版式已可排版；投稿前记得按该刊要求做匿名处理（本工具不改动身份信息）。"
     else:
@@ -555,6 +656,9 @@ def render(ir, rules, res):
         todos.append(f"删除前置区 {anon['count']} 处作者信息（该刊要求匿名）")
     if over_total > 0:
         todos.append(f"{(tl or {}).get('scope_label', '正文')}缩减 {over_total:,} 字（口径：{metric_name}）")
+    if under_total > 0:
+        todos.append(f"{(tl or {}).get('scope_label', '正文')}补足 {under_total:,} 字"
+                     f"（口径：{metric_name}）")
     if over_abs > 0:
         todos.append(f"摘要压缩 {over_abs} 字")
     if res["equations_text"]:
@@ -646,7 +750,7 @@ border:1px solid var(--line);color:var(--ink2)}}
 <table>
 <tr><th>期刊要求的组成部分</th><th>稿件现状</th><th>要求级别</th></tr>
 {rows_html}
-</table></section>
+</table>{external_note}{detail_note}</section>
 
 <section><h2>字数（三种口径同时给出，仅统计不修改）</h2><table>
 {words_html}

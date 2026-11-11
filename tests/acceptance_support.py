@@ -23,6 +23,17 @@ PNG_1PX = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
+# 统计研究的必备要件里，网页补录能补齐的部分。结构性要件阻断上线后，
+# 空表单会被 400 拦下；合成稿只放中文骨架的用例统一带这几个值。
+TJYJ_FILL = {
+    "classification": "JEL: E62; O17",
+    "english_title": "Digital Finance and Financing Constraints",
+    "english_authors": "Zhang San, Li Si",
+    "english_abstract": "This paper studies digital finance and financing constraints.",
+    "english_keywords": "digital finance; financing constraints",
+    "author_bio": "李明，男，经济学博士，研究方向：数字金融。",
+}
+
 
 # ---------------------------------------------------------------- 上传与交付
 

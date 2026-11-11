@@ -65,6 +65,8 @@ def _post_details(client, job, abstract, monkeypatch):
             prepare()
 
     monkeypatch.setattr(app_module, "stage_render", fake_render)
+    # light_job 没有 IR；这两个用例只钉 details.json 的落盘原子性，先绕开体检。
+    monkeypatch.setattr(app_module, "_rows_raw", lambda *a, **k: [])
     return client.post(f"/job/{job}/details",
                        data={"english_abstract": abstract, "classification": "F06"})
 

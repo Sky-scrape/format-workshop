@@ -44,8 +44,8 @@
   </section>
 
   <section class="report-card">
-    <div class="report-head"><div class="report-title"><h2>核对投稿体检与改动记录</h2><a id="openReport" href="/job/{{ job }}/triage.html" target="_blank" rel="noopener">在新窗口打开 ↗</a></div><div class="tabs" role="tablist"><button class="tab on" type="button" role="tab" aria-selected="true" data-pane="triagePane" data-url="/job/{{ job }}/triage.html">投稿体检</button><button class="tab" type="button" role="tab" aria-selected="false" data-pane="auditPane" data-url="/job/{{ job }}/audit.html">审计报告<i class="sep"></i>{{ meta.audit_total }} 条</button></div></div>
-    <div class="pane on" id="triagePane" role="tabpanel"><iframe src="/job/{{ job }}/triage.html" title="投稿体检报告"></iframe></div><div class="pane" id="auditPane" role="tabpanel" hidden><iframe src="/job/{{ job }}/audit.html" title="格式改动审计报告" loading="lazy"></iframe></div>
+    <div class="report-head"><div class="report-title"><h2>核对投稿体检与改动记录</h2><a id="openReport" href="/job/{{ job }}/triage.html" target="_blank" rel="noopener">在新窗口打开 ↗</a></div><div class="tabs" role="tablist"><button class="tab on" type="button" role="tab" aria-selected="true" data-pane="triagePane" data-url="/job/{{ job }}/triage.html">投稿体检</button><button class="tab" type="button" role="tab" aria-selected="false" data-pane="auditPane" data-url="/job/{{ job }}/audit.html">审计报告<i class="sep"></i>{{ meta.audit_total }} 条</button>{% if has_preflight %}<button class="tab" type="button" role="tab" aria-selected="false" data-pane="preflightPane" data-url="/job/{{ job }}/preflight.html">输入稿体检</button>{% endif %}</div></div>
+    <div class="pane on" id="triagePane" role="tabpanel"><iframe src="/job/{{ job }}/triage.html" title="投稿体检报告"></iframe></div><div class="pane" id="auditPane" role="tabpanel" hidden><iframe src="/job/{{ job }}/audit.html" title="格式改动审计报告" loading="lazy"></iframe></div>{% if has_preflight %}<div class="pane" id="preflightPane" role="tabpanel" hidden><iframe src="/job/{{ job }}/preflight.html" title="输入稿版式体检报告" loading="lazy"></iframe></div>{% endif %}
   </section>
 
   <section class="panel download-panel" style="margin-top:18px">

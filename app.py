@@ -144,7 +144,8 @@ def _reject_remote_and_cross_site():
 AUTH_LABEL = {"template": "官方模板", "guide": "官方规定", "published": "实物实测"}
 AUTH_CLASS = {"template": "a-tpl", "guide": "a-guide", "published": "a-pub"}
 STATUS_LABEL = {"verified": "已核验", "partial": "部分核验", "unverified": "未核验"}
-REPORT_FILES = {"triage": "triage.html", "audit": "audit.html"}
+REPORT_FILES = {"triage": "triage.html", "audit": "audit.html",
+                "preflight": "preflight.html"}
 
 # 可由用户补录、并真的写进正文的要件：字段键 → (块类型, 语言, 标签, 输入提示)
 DETAIL_FIELDS = [
@@ -348,6 +349,24 @@ def compliance():
         spec.loader.exec_module(m)
         _cr = m
     return _cr
+
+
+_tg = None
+
+
+def text_guard():
+    """按需加载文字白名单守卫：运行期与测试共用同一份判定（tests/conftest.py
+    转出的也是这个模块），避免「测试守得住、上线没人守」的两份实现。"""
+    global _tg
+    if _tg is None:
+        spec = importlib.util.spec_from_file_location(
+            "text_guard", ROOT / "tools" / "text_guard.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules["text_guard"] = m
+        sys.path.insert(0, str(ROOT / "tools"))
+        spec.loader.exec_module(m)
+        _tg = m
+    return _tg
 
 
 # ---------------------------------------------------------------- 任务目录
@@ -785,7 +804,30 @@ def _stage_parse(d, jid, original):
         # IR 会被 retry/details 当作恢复依据；半截 JSON 不能被误判成有效现场。
         write_json_atomic(ir, ir_data)
     run(["tools/compliance_report.py", ir, RULES_DIR / f"{jid}.json", "-o", d / "triage.html"])
+    _run_preflight(d, jid)
     return ir_data
+
+
+def _run_preflight(d, jid):
+    """输入稿版式体检（只读）。产物 preflight.json + preflight.html。
+
+    体检失败不挡排版：它回答的是「原稿哪里不合本刊要求」，缺了这份附加
+    信息的代价远小于整次上传失败。但必须留痕——把失败写进 preflight.json
+    的 error，详情页据此显示「未完成」，后台日志里也能回溯原因。
+    """
+    out_json, out_html = d / "preflight.json", d / "preflight.html"
+    try:
+        run(["tools/preflight.py", d / "manuscript.docx",
+             RULES_DIR / f"{jid}.json", "-o", out_json, "--html", out_html])
+    except Exception as e:  # noqa: BLE001 —— 体检是附加信息，不能拖垮上传
+        app.logger.warning("版式体检未完成（任务 %s）：%s", d.name, e)
+        detail = getattr(e, "detail", "") or str(e) or type(e).__name__
+        try:
+            write_json_atomic(out_json, {"error": _scrub_local_paths(detail)[-1500:]})
+            # 上一轮留下的旧报告必须清掉，否则页面会把旧结论当成这次的结果。
+            out_html.unlink(missing_ok=True)
+        except OSError:
+            app.logger.warning("版式体检失败现场暂未写入：%s", out_json)
 
 
 def _check_meta(path, strict_people=False):
@@ -798,6 +840,54 @@ def _check_meta(path, strict_people=False):
             "文档属性里仍残留作者、公司或 WPS 账号信息。已停止交付，请重试；"
             "若反复出现，把下方技术细节发给开发者。",
             str(e)) from e
+
+
+def _cleanup_staging(d):
+    """删掉本轮未提交的 .staging 临时产物。调用方必须持任务锁。"""
+    for p in d.glob(".staging.*"):
+        try:
+            p.unlink(missing_ok=True)
+        except OSError as e:
+            app.logger.warning("临时产物暂未删除：%s（%s）", p, e)
+
+
+def _guard_product_text(d, src, filled_docx, out_docx, render_ir, audit_json, rules_data):
+    """运行时文字白名单闸：成品相对「补录后的稿子」只允许已登记的字符归一。
+
+    基线必须是 filled.docx（DESIGN §10.5）：补录注入本来就插入文字，拿原稿比
+    会把注入段落整批判成改字。匿名稿不参与——匿名化是故意删身份文字，不在
+    正文零改动的白名单口径里。
+    """
+    tg = text_guard()
+    ir_data = read_json(render_ir, {}) or {}
+    block_types = {b.get("idx"): b.get("type", "")
+                   for b in ir_data.get("blocks") or [] if isinstance(b, dict)}
+    items = (read_json(audit_json, {}) or {}).get("items") or []
+    blocks = rules_data.get("blocks") or []
+    labels = {b.get("type"): b.get("label") for b in blocks
+              if b.get("lang") == "zh"
+              and b.get("type") in ("abstract", "keywords") and b.get("label")}
+    # 关键词切词条口径与渲染器 split_keywords 同一：分隔符归一是规则集定义的
+    # 白名单动作，不按目标分隔符切就会把它误判成改字。
+    kw_sep = next((b.get("separator") for b in blocks
+                   if b.get("type") == "keywords" and b.get("lang") == "zh"), None)
+    baseline = filled_docx if filled_docx.is_file() else src
+    violations = tg.whitelist_violations(
+        tg.document_texts(baseline), tg.document_texts(out_docx),
+        block_types, items, labels=labels, kw_sep=kw_sep)
+    if not violations:
+        return
+    # 不进入提交阶段：临时产物先清掉，旧一轮成品原样可下载（F36）。
+    _cleanup_staging(d)
+    shown = "；".join(
+        f"块 {idx}（{btype or '未知类型'}）：{before} → {after}"
+        for idx, btype, before, after in violations[:5])
+    more = f"（共 {len(violations)} 处，只列前 5 处）" if len(violations) > 5 else ""
+    raise ConvertError(
+        "成品未通过文字白名单校验",
+        "排版只允许已登记的字符归一（段首缩进、题注/标签/编号前缀）。"
+        "检测到白名单之外的文字改动，已停止交付；请把下方技术细节发给开发者。",
+        f"白名单外改动 {len(violations)} 处：{shown}{more}")
 
 
 def stage_render(d, jid, original, prepare=None):
@@ -864,11 +954,14 @@ def _stage_render(d, jid, original):
         cmd.append("--citation")
     run(cmd)
     _check_meta(tmp_docx)
+    audit_json = tmp_docx.with_suffix(".audit.json")
+    # 运行时文字白名单闸（README 的「非白名单差异不交付」）：必须在匿名稿
+    # 生成之前——匿名稿是故意删文字，不适用正文比对口径。
+    _guard_product_text(d, src, filled_docx, tmp_docx, render_ir, audit_json, rules_data)
     # 体检报告按"注入之后"的稿子重跑，否则填完英文摘要仍会显示"缺 6 项"
     tmp_triage = d / ".staging.triage.html"
     run(["tools/compliance_report.py", render_ir, rules, "-o", tmp_triage])
 
-    audit_json = tmp_docx.with_suffix(".audit.json")
     # 匿名稿：该刊要求正文匿名时另出一份，只删身份信息（§11.4 双版本交付）
     anon_docx = None
     anon_tmp = None
@@ -1073,7 +1166,83 @@ MISSING_TO_FIELD = {
     ("affiliations", "en"): "english_affiliation",
     ("abstract", "en"): "english_abstract",
     ("keywords", "en"): "english_keywords",
+    # 通讯作者不是独立输入框：补录页底部的「通讯作者」脚注字段会经
+    # apply_details 落成 corresponding_author 块，登记它才算补齐。
+    ("corresponding_author", None): "corresponding",
+    # 作者简介在补录页是首页脚注字段 author_bio，apply_details 会按规则集
+    # 落成文末的 author_note 块（见 tools/apply_details.py）。不登记这条，
+    # 统计研究这类要求作者简介的刊会永远停在「缺 author_note」。
+    ("author_note", None): "author_bio",
 }
+
+# rows_raw 的标签取自 compliance_report.LABEL；作者简介还没中文名，补录页
+# 按刊面用词展示，不把内部类型名甩给用户。
+BLOCK_LABEL = {"author_note": "作者简介"}
+
+
+def _rows_raw(d, rules, strict=False):
+    """跑一遍体检取 rows_raw。坏 IR / 坏规则只让这一页没有缺件提示，
+    不能把补录页整页拖成 500——与 fail_page 的降级口径一致。
+
+    strict=True 专给补录页提交时的阻断判断：这时「查不到」不能当成「没有
+    缺件」放行渲染（失败开放），异常交给调用方按失败页处理。展示型调用
+    （details_context）仍用宽松口径，页面少一块缺件提示好过整页 500。
+    """
+    ir = read_json(d / "manuscript.ir.json", {}) or {}
+    try:
+        return compliance().check(ir, rules).get("rows_raw") or []
+    except Exception:  # noqa: BLE001 —— 体检失败不该挡住补录页
+        if strict:
+            raise
+        return []
+
+
+def _anonymized_types(rules):
+    """该刊要求匿名时必须从正文删掉的块类型。
+
+    这些块「缺」是投稿要求的常态，不是作者漏填：统计研究须知明确要求署名、
+    作者简介只在投稿系统填写，英文作者同属署名。拿它们阻断排版，会让所有
+    匿名刊稿件永远卡在补录页，与规则集自己的 anonymize_blocks 冲突。
+    """
+    submission = (rules or {}).get("submission") or {}
+    if not submission.get("anonymous"):
+        return set()
+    return {t for t in (submission.get("anonymize_blocks") or [])
+            if isinstance(t, str)}
+
+
+def blocking_missing(rows_raw, data, rules=None):
+    """列出会阻断开始排版的「稿件本体必备要件」。
+
+    只看 required 且判缺的块：article_number / document_code 这类由编辑部
+    给定、highlights 这类另附文件不派给作者；匿名刊要求删掉的署名类块也不
+    算缺件（见 _anonymized_types）；能由补录字段补齐的（英文摘要、英文标题、
+    作者简介…），表单里有非空值就算补齐——否则用户填完还得回 Word 改，
+    补录页就白做了。
+    """
+    cr = compliance()
+    anonymized = _anonymized_types(rules)
+    out = []
+    for t, lang, name, ok, req in rows_raw or []:
+        if ok or not req:
+            continue
+        if t in cr.NON_ACTIONABLE or t in cr.EXTERNAL_BLOCKS or t in anonymized:
+            continue
+        key = MISSING_TO_FIELD.get((t, lang))
+        if key and (data.get(key) or "").strip():
+            continue
+        label = BLOCK_LABEL.get(t, name)
+        if label not in out:
+            out.append(label)
+    return out
+
+
+def optional_missing(rows_raw):
+    """该刊要求但非必填、稿子里也没有的块：补录页留空即可跳过。"""
+    cr = compliance()
+    return [name for t, lang, name, ok, req in rows_raw or []
+            if not ok and not req
+            and t not in cr.NON_ACTIONABLE and t not in cr.EXTERNAL_BLOCKS]
 
 
 def author_page_fields(rules, saved=None):
@@ -1101,28 +1270,92 @@ def author_page_fields(rules, saved=None):
     return out
 
 
+# personal_fields[].placement → 补录页分组（标题，一句人话说明）。
+# 分组顺序按「会不会进正文」由近到远排：先看会落进稿子的，再看不进稿子的。
+PLACEMENT_GROUPS = (
+    ("author_page", "作者信息页", "单独成页放在正文之前，匿名稿整页删除"),
+    ("byline", "署名行", "写在标题下方的作者与单位行"),
+    ("footnote", "首页脚注", "写在首页底部，不占正文篇幅"),
+    ("before_references", "参考文献之前", "放在正文末尾、参考文献之前"),
+    ("back_matter", "文末", "排在参考文献之后"),
+    ("separate_file", "另附文件", "单独成文件随稿提交，不写进正文"),
+    ("submission_system", "投稿系统", "在投稿系统表单里逐项填写，不写进稿件"),
+    ("title_page", "独立标题页", "只出现在独立标题页，正文稿不含"),
+)
+# 库内 system 与 submission_system 两种拼写并存（rules/journal-schema.md
+# §10.2），语义相同，合并成一组展示。
+PLACEMENT_ALIASES = {"system": "submission_system"}
+_PLACEMENT_KEYS = {key for key, *_ in PLACEMENT_GROUPS}
+
+
+def placement_groups(rules):
+    """把 personal_fields 按 placement 分组交给模板。
+
+    旧页面把 author_page 之外的一律归到「投稿系统里填」：byline（署名行）、
+    footnote（首页脚注）、separate_file（Highlights 这类另附文件）全被说成
+    系统字段，用户看不到稿子里真正会多出什么。分组顺序按「会不会进正文」
+    由近到远排，先看会落进稿子的，再看不进稿子的。
+
+    没写 placement 或写了未登记的值时不猜「投稿系统」——Highlights 正是这样
+    被旧实现说成系统字段的。归入「其他位置」并如实提示按编辑部要求处理，
+    既不丢字段，也不替它编位置。
+    """
+    buckets = {}
+    for f in rules.get("personal_fields") or []:
+        if not isinstance(f, dict) or not f.get("id"):
+            continue
+        key = (f.get("placement") or "").strip()
+        key = PLACEMENT_ALIASES.get(key, key)
+        if key not in _PLACEMENT_KEYS:
+            key = "other"
+        buckets.setdefault(key, []).append({
+            "id": f["id"],
+            "label": f.get("label_zh") or f["id"],
+            "required": bool(f.get("required")),
+            "note": f.get("note") or "",
+            "prefill": bool(f.get("prefill_from_paper")),
+        })
+    groups = [{"key": key, "title": title, "desc": desc,
+               "items": buckets[key]}
+              for key, title, desc in PLACEMENT_GROUPS if buckets.get(key)]
+    if buckets.get("other"):
+        groups.append({"key": "other", "title": "其他位置",
+                       "desc": "规则集未登记放置位置，请按编辑部要求处理",
+                       "items": buckets["other"]})
+    return groups
+
+
+def _preflight_summary(raw):
+    """详情页用的体检摘要。坏文件/未生成返回 None——旧任务没有这份报告时
+    页面应安静地少一块，而不是整页 500。"""
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("error"):
+        return {"error": str(raw["error"])[:400]}
+    st = raw.get("stats") or {}
+    cov = raw.get("coverage") or {}
+    return {
+        "auto": st.get("auto", 0), "manual": st.get("manual", 0),
+        "ok": st.get("ok", 0), "inherited": st.get("inherited", 0),
+        "unchecked": st.get("unchecked", 0),
+        "coverage": cov.get("text", ""),
+    }
+
+
 def details_context(d, meta):
     jid = meta.get("journal", "")
     rules = rules_of(jid) or {}
+    rows_raw = _rows_raw(d, rules)
+    saved = read_json(d / "details.json", {}) or {}
     ir = read_json(d / "manuscript.ir.json", {}) or {}
-    try:
-        res = compliance().check(ir, rules)
-        rows_raw = res.get("rows_raw") or []
-    except Exception:  # noqa: BLE001 —— 体检失败不该挡住补录页
-        rows_raw = []
 
     missing_keys = []
-    unknown_missing = []
     for t, lang, name, ok, req in rows_raw:
         if ok or not req:
             continue
         key = MISSING_TO_FIELD.get((t, lang))
         if key:
             missing_keys.append(key)
-        elif t in compliance().NON_ACTIONABLE:
-            continue
-        else:
-            unknown_missing.append(name)
 
     # IR 被外部改坏成「合法 JSON 但结构不对」时（blocks 元素非 dict / 缺 type /
     # blocks 是 null），逐项取 b["type"] 会把补录页整页拖成 500。这里只取结构
@@ -1146,12 +1379,8 @@ def details_context(d, meta):
             for b in blocks if b["type"] == "keywords"]
     abstract = [b.get("text", "") for b in blocks if b["type"] == "abstract"]
 
-    saved = read_json(d / "details.json", {}) or {}
     for f in field_rows:
         f["value"] = saved.get(f["key"], "")
-
-    personal = [p for p in (rules.get("personal_fields") or [])
-                if p.get("placement") != "author_page"]
 
     # 引用体系重排只在「规则集给了条目模板 + 稿子确实用编号引用」时才提供
     cite_cfg = rules.get("citation") or {}
@@ -1176,11 +1405,17 @@ def details_context(d, meta):
         "abstract_len": len(re.sub(r"\s", "", abstract[0])) if abstract else 0,
         "keywords": keys[0] if keys else "",
         "fields": field_rows,
-        "n_need": sum(1 for f in field_rows if f["need"]),
-        "unknown_missing": unknown_missing,
         "footer_fields": [(k, label, hint, saved.get(k, "")) for k, label, hint in FOOTER_FIELDS],
         "author_fields": author_page_fields(rules, saved),
-        "personal": personal,
+        "placement_groups": placement_groups(rules),
+        # 阻断项按已保存的补录值算：填过的英文摘要不该在刷新后又变成「缺件」。
+        "blocking": blocking_missing(rows_raw, saved, rules),
+        "optional_missing": optional_missing(rows_raw),
+        # 版式体检报告由 _stage_parse 在解析后生成；旧任务没有这份文件时
+        # 页面不给死链接，也不显示空摘要。体检脚本直接写文件（非原子），
+        # 硬杀可能留下半截 JSON——坏文件按缺失处理，别拖垮补录页。
+        "preflight": _preflight_summary(read_json_safe(d / "preflight.json")),
+        "has_preflight": (d / "preflight.html").is_file(),
         "stats": stats,
         "saved": saved,
     }
@@ -1695,6 +1930,23 @@ def convert():
     return redirect(url_for("details", job=job))
 
 
+def remember_details(d, data):
+    """保存补录表单状态；与渲染轮次共用任务锁，抢不到返回 False。
+
+    阻断（缺件）与正常提交都要先把用户填的值落盘：缺件被退回时页面要带着
+    已填内容重开，不能让人重输一遍。抢锁失败时不落笔——此刻另一轮渲染正在
+    写同一份 details.json（F11）。
+    """
+    lock = job_lock(d.name)
+    if not lock.acquire(blocking=False):
+        return False
+    try:
+        write_json_atomic(d / "details.json", data)
+        return True
+    finally:
+        lock.release()
+
+
 @app.route("/job/<job>/details", methods=["GET", "POST"])
 def details(job):
     d = job_dir(job)
@@ -1702,11 +1954,47 @@ def details(job):
     if not meta.get("journal"):
         return redirect(url_for("workspace"))
 
+    # 换刊补录（结果页换到要求更多构件的刊）只在本页显示/本轮渲染用目标刊：
+    # meta 仍由 stage_render 成功后改写，失败时旧成品与旧刊信息原样保留。
+    requested_jid = request.values.get("journal")
+    target_jid = requested_jid or meta["journal"]
+    rules = rules_of(target_jid)
+    if requested_jid and not rules:
+        abort(404)          # 显式换刊目标必须真实存在；旧任务规则被删仍按空规则降级
+    rules = rules or {}
+
+    # 换刊补录页不能继续展示旧目标刊的体检结论：预览的是「原稿 vs 目标刊」，
+    # 目标一变就必须重跑。抢不到任务锁说明另一轮正在写现场，宁可先不展示，
+    # 也不给旧刊口径的结论。
+    switched = target_jid != meta.get("journal")
+    preflight_current = not switched
+    if switched and (d / "manuscript.docx").exists():
+        lock = job_lock(d.name)
+        if lock.acquire(blocking=False):
+            try:
+                _run_preflight(d, target_jid)
+                preflight_current = True
+            finally:
+                lock.release()
+
+    def page_context(base_meta):
+        ctx = details_context(d, base_meta)
+        if not preflight_current:
+            ctx["preflight"] = None
+            ctx["has_preflight"] = False
+        return ctx
+
+    def view_meta(base):
+        if target_jid == base.get("journal"):
+            return base
+        return {**base, "journal": target_jid,
+                "journal_name": (journal_by_id(target_jid) or {}).get("name", target_jid)}
+
     # 文件存在但 JSON 已截断时不能被「存在即有效」骗过；原稿仍在就直接重解析。
     ir_path = d / "manuscript.ir.json"
     if ir_path.exists() and not isinstance(read_json_safe(ir_path), dict):
         try:
-            stage_parse(d, meta["journal"], meta.get("original", "稿件.docx"))
+            stage_parse(d, target_jid, meta.get("original", "稿件.docx"))
         except RenderBusy as e:
             return busy_page(e)
         except ConvertError as e:
@@ -1721,7 +2009,7 @@ def details(job):
             data[key] = (request.form.get(key) or "").strip()
         for key, *_ in FOOTER_FIELDS:
             data[key] = (request.form.get(key) or "").strip()
-        for f in author_page_fields(rules_of(meta["journal"]) or {}):
+        for f in author_page_fields(rules):
             data[f["key"]] = (request.form.get(f["key"]) or "").strip()
         # 服务端长度闸（F1-5）：前端没有 maxlength，80MB 的 POST 体不该
         # 原样落盘再注入成品。超限是请求本身的问题，按 400 拒掉。
@@ -1733,6 +2021,24 @@ def details(job):
                      "请删减后再提交（一篇论文用不到这么长）。"), 400
         citation = request.form.get("citation") == "on"
 
+        # 结构性要件阻断（DESIGN §10.4）：稿件本体缺件时不允许开始排版。
+        # 放在长度闸之后——超长输入先按请求错误拒掉，不必跑体检。
+        try:
+            rows_raw = _rows_raw(d, rules, strict=True)
+        except Exception:  # noqa: BLE001 —— 查不到缺件不等于没有缺件，不能失败开放
+            return fail_page(d, ConvertError(
+                "无法核对稿件必备要件",
+                "体检过程出错，未开始排版。请重试；若反复出现，把下方技术细节发给开发者。",
+                traceback.format_exc()[-1500:]))
+        blocking = blocking_missing(rows_raw, data, rules)
+        if blocking:
+            # 表单状态必须留下：用户填的英文摘要不能因为正文还缺件就被丢掉。
+            if not remember_details(d, data):
+                return busy_page(RenderBusy(job))
+            page_meta = view_meta(read_meta(d))
+            return render_template("details.html", job=job, meta=page_meta,
+                                   **page_context(page_meta)), 400
+
         def prepare():
             # 输入与开关都在持锁后落笔：忙碌请求必须真正零副作用（F11）。
             write_json_atomic(d / "details.json", data)
@@ -1742,7 +2048,7 @@ def details(job):
             write_meta(d, current)
 
         try:
-            stage_render(d, meta["journal"], meta.get("original", "稿件.docx"),
+            stage_render(d, target_jid, meta.get("original", "稿件.docx"),
                          prepare=prepare)
         except RenderBusy as e:      # 忙碌态先于 ConvertError：不能落笔写现场（F11）
             return busy_page(e)
@@ -1751,9 +2057,14 @@ def details(job):
         except Exception:  # noqa: BLE001
             return fail_page(d, ConvertError(*explain(""),
                                              detail=traceback.format_exc()[-1500:]))
+        # 换刊后输入稿体检的目标刊变了，旧报告不能再挂着；同刊重排沿用原报告。
+        if target_jid != meta.get("journal"):
+            _run_preflight(d, target_jid)
         return redirect(url_for("result", job=job))
 
-    return render_template("details.html", job=job, meta=meta, **details_context(d, meta))
+    page_meta = view_meta(meta)
+    return render_template("details.html", job=job, meta=page_meta,
+                           **page_context(page_meta))
 
 
 @app.route("/result/<job>")
@@ -1768,7 +2079,9 @@ def result(job):
         "status_label": "未知", "status": "unverified",
     }
     return render_template("result.html", job=job, journal=j, meta=meta,
-                           journals=load_journals())
+                           journals=load_journals(),
+                           # 旧任务没有版式体检：第三个 tab 不渲染，也不报错
+                           has_preflight=(d / "preflight.html").is_file())
 
 
 @app.route("/job/<job>/reject", methods=["POST"])
@@ -1824,8 +2137,26 @@ def retry(job):
                 return fail_page(d, ConvertError(*explain(""),
                                                  detail=traceback.format_exc()[-1500:]))
             meta["stage"] = "details"
+        else:
+            # IR 还能用：目标刊已变，输入稿体检必须按新刊重跑，否则结果页会
+            # 挂着旧刊口径的结论（报告标题写的是新目标刊，内容却是旧刊判的）。
+            _run_preflight(d, jid)
         write_meta(d, meta)
         return redirect(url_for("details", job=job))
+
+    # 换刊重排同样受结构性要件阻断：目标刊要的构件稿件里没有、补录也没填，
+    # 直接渲染就会交付缺件稿。先落到目标刊的补录页，让用户在表单里补齐。
+    rules = rules_of(jid) or {}
+    try:
+        rows_raw = _rows_raw(d, rules, strict=True)
+    except Exception:  # noqa: BLE001 —— 查不到缺件不等于没有缺件，不能失败开放
+        return fail_page(d, ConvertError(
+            "无法核对稿件必备要件",
+            "换刊前的体检过程出错，未开始排版。请重试；若反复出现，把下方技术细节发给开发者。",
+            traceback.format_exc()[-1500:]))
+    saved = read_json(d / "details.json", {}) or {}
+    if blocking_missing(rows_raw, saved, rules):
+        return redirect(url_for("details", job=job, journal=jid))
     try:
         # 换刊字段由 stage_render 成功后随 meta 一起改写；提前写入的话，
         # 一次失败的换刊会让 meta 指向新刊、成品还是旧刊（F36）
@@ -1837,6 +2168,8 @@ def retry(job):
     except Exception:  # noqa: BLE001  与 details / reject 同款兜底：非 ConvertError
         return fail_page(d, ConvertError(*explain(""),   # 也不许裸 500、不写现场（F35）
                                          detail=traceback.format_exc()[-1500:]))
+    if jid != meta.get("journal"):
+        _run_preflight(d, jid)
     return redirect(url_for("result", job=job))
 
 
@@ -2011,7 +2344,8 @@ def download(job, kind):
         p = d / name
         if not p.is_file():
             abort(404)
-        label = "投稿体检" if kind == "triage" else "审计报告"
+        label = {"triage": "投稿体检", "audit": "审计报告",
+                 "preflight": "版式体检"}[kind]
         return attachment(p, f"{stem}-{label}-{jn}.html", f"paper-{kind}.html", "text/html")
     abort(404)
 
@@ -2019,7 +2353,7 @@ def download(job, kind):
 @app.route("/job/<job>/<name>")
 @job_read_locked
 def job_file(job, name):
-    """仅用于 iframe 预览两份报告。"""
+    """仅用于 iframe 预览报告（投稿体检 / 审计 / 输入稿体检）。"""
     if name not in REPORT_FILES.values():
         abort(404)
     d = job_dir(job)
@@ -2155,18 +2489,35 @@ def _abstract_card(lim):
     return None
 
 
-def _fmt_total(lim):
-    if not isinstance(lim, dict) or lim.get("value") is None:
+def _fmt_total(limits):
+    """总字数：上限在 limits.total，下限还有顶层 limits.total_min 的兼容写法。
+
+    只读 total.min 会让 cmjj 这类「不少于 1.8 万字」在下限登记到顶层时整行
+    消失；只读 total.value 同样会把只写下限的刊误报成「未规定」。
+    """
+    if not isinstance(limits, dict):
         return None
-    v = lim["value"]
+    lim = limits.get("total") if isinstance(limits.get("total"), dict) else {}
+    v = lim.get("value")
     unit = _METRIC_UNIT.get(lim.get("metric"), "字")
-    lo = lim.get("min")
-    bits = [f"{lo:,}–{v:,} {unit}" if lo else f"≤ {v:,} {unit}"]
+    lo = lim.get("min") or lim.get("total_min") or limits.get("total_min")
+    if v is None and lo is None:
+        return None
+    bits = [f"{lo:,}–{v:,} {unit}" if (lo and v is not None)
+            else (f"≤ {v:,} {unit}" if v is not None else f"≥ {lo:,} {unit}")]
     if lim.get("metric"):
         bits.append(f"口径 {lim['metric']}")
     if lim.get("scope"):
         bits.append(str(lim["scope"]))
     return " · ".join(bits)
+
+
+def _fmt_title_max(limits):
+    """题名字数上限：多数刊写 title_chars_max，cjwt 写 title_max_chars。"""
+    if not isinstance(limits, dict):
+        return None
+    v = limits.get("title_chars_max") or limits.get("title_max_chars")
+    return f"≤ {v} 字" if v else None
 
 
 def _fmt_count(lim):
@@ -2439,13 +2790,12 @@ QUERY_SECTIONS = [
          "note_refs": ["numbering.rule~"]},
     ]},
     {"key": "limits", "title": "字数与数量", "rows": [
-        {"key": "total", "label": "全文篇幅", "ref": "limits.total~", "fmt": _fmt_total,
+        {"key": "total", "label": "全文篇幅", "ref": "limits", "fmt": _fmt_total,
          "missing": "不设上限", "note_refs": ["limits.total.note~"]},
         {"key": "abstract", "label": "摘要上限", "ref": "limits.abstract~", "fmt": _fmt_limit},
         {"key": "abstract_en", "label": "英文摘要上限", "ref": "limits.abstract_en~", "fmt": _fmt_limit},
         {"key": "keywords", "label": "关键词个数", "ref": "limits.keywords~", "fmt": _fmt_count},
-        {"key": "title", "label": "题名字数", "ref": "limits.title_chars_max~",
-         "fmt": lambda v: f"≤ {v} 字"},
+        {"key": "title", "label": "题名字数", "ref": "limits", "fmt": _fmt_title_max},
         {"key": "highlights", "label": "亮点条目", "ref": "limits.highlights~", "fmt": _fmt_highlights},
         {"key": "jel", "label": "JEL 分类号", "ref": "limits.jel~", "fmt": _fmt_count},
         {"key": "vitae", "label": "作者简介", "ref": "limits.author_vitae_words_max~",

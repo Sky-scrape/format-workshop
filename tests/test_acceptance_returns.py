@@ -7,6 +7,7 @@
 import pytest
 
 from acceptance_support import (
+    TJYJ_FILL,
     build_clean_docx,
     deliver,
     make_draft,
@@ -60,7 +61,7 @@ def test_failed_retry_keeps_the_manuscript_for_reupload_or_retry(
 def test_diff_page_links_back_to_result(acceptance_client, acceptance_env, sample_docx):
     """C-05：差异页的「返回结果」指向原任务，不是工作台或空链接。"""
     client, work = acceptance_client, acceptance_env["work"]
-    job = deliver(client, sample_docx)
+    job = deliver(client, sample_docx, details=TJYJ_FILL)
     page = client.get(f"/job/{job}/diff?to=cjyj")
     assert page.status_code == 200
     html = page.get_data(as_text=True)
@@ -98,7 +99,7 @@ def test_result_page_details_link_keeps_entered_values(
     client, work = acceptance_client, acceptance_env["work"]
     source = build_clean_docx(tmp_path / "clean.docx")
     funding = "国家自然科学基金（72003012）"
-    job = deliver(client, source, details={"funding": funding})
+    job = deliver(client, source, details={**TJYJ_FILL, "funding": funding})
 
     result = client.get(f"/result/{job}").get_data(as_text=True)
     assert f'href="/job/{job}/details"' in result

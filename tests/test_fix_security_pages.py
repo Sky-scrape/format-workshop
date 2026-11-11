@@ -110,6 +110,8 @@ def test_fail_page_detail_has_no_local_paths(app_module, work, client,
         raise app_module.ConvertError("转换没有完成", "请重试一次", detail)
 
     monkeypatch.setattr(app_module, "stage_render", boom)
+    # 这个任务没有 IR；本用例钉路径脱敏，先绕开缺件体检。
+    monkeypatch.setattr(app_module, "_rows_raw", lambda *a, **k: [])
     r = client.post(f"/job/{d.name}/details", data={"english_abstract": "x"})
     assert r.status_code == 200, "渲染失败也要落到可读的失败页，不能裸 500"
 

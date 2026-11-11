@@ -137,6 +137,25 @@ def test_style_rows_render_for_cjyj(app_module):
     assert cells[("table", "border")] == "顶 1.5 / 表头下 0.5 / 底 1.5pt"
 
 
+def test_limit_aliases_are_shown(app_module, monkeypatch):
+    """总字数下限与题名上限的兼容键名也要在查询页出现，不能只认一种写法。"""
+    fake = {
+        "journal": {"id": "zzlimits", "name_zh": "限额合成刊"},
+        "limits": {
+            "total": {"value": 28000, "metric": "B", "scope": "正文"},
+            "total_min": 18000,
+            "title_max_chars": 22,
+        },
+    }
+    monkeypatch.setattr(app_module, "rules_of",
+                        lambda jid: fake if jid == "zzlimits" else None)
+    view = app_module.journal_query_view("zzlimits")
+    cells = {(s["key"], r["key"]): r["cells"][0]
+             for s in view["sections"] for r in s["rows"]}
+    assert cells[("limits", "total")] == "18,000–28,000 字 · 口径 B · 正文"
+    assert cells[("limits", "title")] == "≤ 22 字"
+
+
 def test_view_shapes_are_identical_across_journals(app_module):
     """各刊分区/行键序列完全一致，对比列才不会错位。"""
     views = [app_module.journal_query_view(jid) for jid in SHIPPED_JOURNALS]

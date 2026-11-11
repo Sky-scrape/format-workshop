@@ -777,10 +777,12 @@ def parse(path, ai_cfg=None):
                         conf = "ambiguous"
                 else:
                     level = cand
-                    if level == 4 and paren_level != 4:
+                    if level == 4 and paren_level != 4 and h[1] != "style":
                         # 「（1）」的层级随编号体系顺延（detect_arabic_level）：
-                        # 一、／1.／（1）体系里它是三级。渲染端只实现一至三级，
-                        # 仍判四级的话整段会退回正文套版，重跑即漂移（IDMPOT）
+                        # 一、／1.／（1）体系里它是三级，判成四级会让这一级标题
+                        # 按 level4 重排；全文没有 （一） 的依据，重跑即漂移（IDMPOT）。
+                        # 但作者显式套了 Heading 4 样式时以样式为准——那是作者
+                        # 自己声明的层级，不能按文本编号再降一级。
                         level = paren_level
                 if level is None:
                     btype, conf = "body", "low"

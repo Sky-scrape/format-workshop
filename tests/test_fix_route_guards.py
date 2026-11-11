@@ -167,6 +167,9 @@ def test_details_post_persists_details_then_reaches_result(app_module, client,
 
     monkeypatch.setattr(app_module, "stage_render", fake_render)
     r = client.post(f"/job/{job}/details", data={
+        # 合成稿没有英文标题，是 tjyj 的结构性必备件；缺它会被补录页 400
+        # 拦下，到不了 stage_render（DESIGN §10.4）。
+        "english_title": "The Spillover Effects of US Monetary Policy",
         "english_abstract": "This paper studies digital finance.",
         "funding": "国家社科基金（22BJY000）"})
     assert r.status_code == 302 and f"/result/{job}" in r.headers["Location"]
@@ -179,6 +182,25 @@ def test_details_post_persists_details_then_reaches_result(app_module, client,
     page = client.get(f"/result/{job}")
     assert page.status_code == 200
     assert "统计研究" in page.get_data(as_text=True)
+
+
+def test_details_blocking_check_failure_does_not_render(
+        app_module, client, work, sample_docx, monkeypatch):
+    """体检抛异常时不能当成「没有缺件」放行渲染（失败开放）。"""
+    r = upload(client, "source.docx", sample_docx.read_bytes())
+    assert r.status_code == 302
+    job = the_only_job(work).name
+
+    class BrokenCompliance:
+        def check(self, *_args, **_kwargs):
+            raise RuntimeError("规则集坏了")
+
+    monkeypatch.setattr(app_module, "compliance", lambda: BrokenCompliance())
+    r = client.post(f"/job/{job}/details", data={"english_title": "X"})
+    assert r.status_code == 200, "体检失败应走失败页，而不是 500"
+    assert "无法核对稿件必备要件" in r.get_data(as_text=True)
+    assert not list((work / job).glob("manuscript.tjyj.docx")), \
+        "核对失败却产出了成品"
 
 
 # ---------------------------------------------------------------- 驳回与换刊
@@ -213,6 +235,10 @@ def test_reject_rerenders_and_marks_item_rejected(client, delivered_job):
 def test_retry_switches_journal_and_redelivers(client, delivered_job):
     """复现 F37：已交付任务换刊重排 → 新刊成品落正式文件名，结果页可达。"""
     d = delivered_job
+    # cjyj 要求英文标题；没有它就该先回补录页（见上一个用例），补齐后再换刊。
+    (d / "details.json").write_text(json.dumps(
+        {"english_title": "The Spillover Effects of US Monetary Policy"},
+        ensure_ascii=False), encoding="utf-8")
     r = client.post(f"/job/{d.name}/retry", data={"journal": "cjyj"})
     assert r.status_code == 302 and f"/result/{d.name}" in r.headers["Location"]
 
