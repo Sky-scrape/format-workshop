@@ -19,6 +19,8 @@ outputs/
 
 # 含密钥的本地配置（页面里设置后自动生成，见 config/ai.example.json）
 config/ai.json
+# 本机作者档案（姓名/单位/邮箱等身份信息，绝不入库）
+config/author_profile.json
 
 # 编辑器/系统遗留的空文件
 shell

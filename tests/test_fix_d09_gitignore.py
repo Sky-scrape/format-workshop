@@ -35,6 +35,8 @@ MUST_BE_IGNORED = [
     "config/window.json",
     "config/close.json",
     "config/tray-hint.flag",
+    # 本机作者档案：姓名、单位、邮箱等身份信息，2026-11-13 起跨会话保存
+    "config/author_profile.json",
 ]
 
 

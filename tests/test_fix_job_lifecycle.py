@@ -355,6 +355,29 @@ def test_successful_publish_updates_artifacts_and_removes_stale_pdf(
         encoding="utf-8"))["journal"]["id"] == "testjournal"
 
 
+def test_successful_publish_keeps_generated_pdf(
+        app_module, client, tmp_path, monkeypatch):
+    """本轮真的生成了 PDF 时，发布后它必须留在正式库里。
+
+    回归：复制样板用 os.replace（移动），草稿里的 PDF 复制后就不在了；
+    「本轮没有 PDF 就删旧预览」若在此刻再查草稿，会把刚发布的 PDF 删掉。
+    """
+    rules_dir, draft = _publish_fixture(app_module, tmp_path, monkeypatch)
+
+    def fake_build(args):
+        (draft / "testjournal.sample.docx").write_bytes(b"new sample")
+        (draft / "testjournal.sample.pdf").write_bytes(b"new pdf")
+        (draft / "testjournal.spec.html").write_text("new spec", encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(app_module, "run", fake_build)
+    r = client.post("/journals/draft/testjournal/publish", data={"confirm": "on"})
+
+    assert r.status_code == 302
+    assert (rules_dir / "testjournal.sample.pdf").read_bytes() == b"new pdf"
+    assert not draft.exists()
+
+
 def test_stage_parse_respects_job_lock(app_module, light_job):
     """解析与删除/渲染使用同一把锁；忙碌时不得启动另一个解析子进程。"""
     d = light_job

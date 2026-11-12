@@ -319,26 +319,13 @@ def page_part(entry):
     return f"，pp.{pages}"
 
 
-def format_entry(entry, rules):
-    """按规则集的 templates 渲染一条文献。没有可用模板时返回 None。
-
-    模板必须带 {字段} 占位符才是可渲染的体例模板。不带占位符的键值（如
-    GB/T 7714 的著录写法说明「[序号]主要责任者.文献题名[M]…」）是给人看的
-    格式描述——拿去 format 只会原样返回，把真条目替换成一句格式说明，
-    属于语义级破坏，一律视为不可渲染。
-    """
-    rl = ((rules or {}).get("citation") or {}).get("reference_list") or {}
-    tpls = rl.get("templates") or {}
-    key = f"{entry['lang']}_{entry['slot']}"
-    tpl = (tpls.get(key) or tpls.get(f"{entry['lang']}_book")
-           or tpls.get(f"{entry['lang']}_other"))
-    if not tpl or "{" not in tpl:
-        return None
+def _entry_fields(entry):
+    """模板可用的占位符值。format_entry 与带斜体区间的渲染共用这一份。"""
     if entry["lang"] == "cn":
         who = cn_authors(entry["authors"])
     else:
         who = en_authors(entry["authors"])
-    fields = {
+    return {
         "authors": who,
         "title": entry["title"],
         "year": entry["year"],
@@ -350,10 +337,109 @@ def format_entry(entry, rules):
         "page_part": page_part(entry),
         "issue": entry["issue"],
     }
+
+
+def _tpl_for(entry, rules):
+    rl = ((rules or {}).get("citation") or {}).get("reference_list") or {}
+    tpls = rl.get("templates") or {}
+    key = f"{entry['lang']}_{entry['slot']}"
+    tpl = (tpls.get(key) or tpls.get(f"{entry['lang']}_book")
+           or tpls.get(f"{entry['lang']}_other"))
+    if not tpl or "{" not in tpl:
+        return None, key if key in tpls else None, rl
+    return tpl, key, rl
+
+
+def italic_fields(rules, key):
+    """该模板声明要排斜体的占位符名。
+
+    规则集写法（journal-schema §4.3）二选一：
+      "italic_fields": ["journal"]                          # 所有模板共用
+      "italic_fields": {"en_journal": ["journal"],
+                        "en_book": ["title"]}               # 按模板键区分
+    中文刊的《刊名》本来就带书名号，多数不需要斜体；不声明就一律不加，
+    绝不替期刊猜——斜体也是版式事实，得有出处。
+    """
+    conf = (((rules or {}).get("citation") or {}).get("reference_list")
+            or {}).get("italic_fields")
+    if isinstance(conf, list):
+        return {str(x) for x in conf}
+    if isinstance(conf, dict):
+        vals = conf.get(key) or []
+        if isinstance(vals, str):
+            vals = [vals]
+        return {str(x) for x in vals if isinstance(x, str)}
+    return set()
+
+
+def format_entry_with_spans(entry, rules):
+    """按模板渲染一条文献，并给出声明为斜体的文字区间。
+
+    返回 (text, [(start, end)])；没有可用模板时返回 (None, [])。区间是在
+    最终文本上的偏移，供渲染器只给刊名/书名加斜体，条目其余字符与 run
+    格式不动。未声明 italic_fields 时区间为空，行为与旧版逐字节一致。
+    """
+    tpl, key, _rl = _tpl_for(entry, rules)
+    if tpl is None:
+        return None, []
+    fields = _entry_fields(entry)
+    want = italic_fields(rules, key or "")
+    # 用控制字符标出斜体字段的位置，渲染完再换算成偏移并剥掉标记。
+    # 标记字符不会出现在规则集模板或稿件文字里；即便出现，format 只读
+    # fields 的值，模板本身不参与转义。
+    marked = dict(fields)
+    for name in want:
+        if name in marked and marked[name]:
+            marked[name] = "\x01" + marked[name] + "\x02"
     try:
-        return tpl.format(**fields).replace("，，", "，").replace("。。", "。")
+        rendered = tpl.format(**marked)
     except KeyError:
-        return None
+        return None, []
+    out, spans, pos, depth = [], [], 0, []
+    for ch in rendered:
+        if ch == "\x01":
+            depth.append(len(out))
+        elif ch == "\x02":
+            if depth:
+                spans.append((depth.pop(), len(out)))
+        else:
+            out.append(ch)
+    text = "".join(out)
+    # 模板里空字段会留下「，，」「。。」——旧版用字符串 replace 收掉。这里
+    # 同时维护旧位置→新位置的映射，斜体区间不会因为前面少了一个逗号而错位。
+    collapsed, mapping = [], []
+    i = 0
+    while i < len(text):
+        mapping.append(len(collapsed))
+        if text[i] in "，。" and i + 1 < len(text) and text[i + 1] == text[i]:
+            i += 1                    # 跳过重复的一个标点
+            continue
+        collapsed.append(text[i])
+        i += 1
+    mapping.append(len(collapsed))
+    text = "".join(collapsed)
+    spans = [(mapping[s], mapping[e]) for s, e in spans]
+    # 合并相邻/重叠区间，防止两个声明字段背靠背时区间交叉
+    spans.sort()
+    merged = []
+    for s, e in spans:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return text, merged
+
+
+def format_entry(entry, rules):
+    """按规则集的 templates 渲染一条文献。没有可用模板时返回 None。
+
+    模板必须带 {字段} 占位符才是可渲染的体例模板。不带占位符的键值（如
+    GB/T 7714 的著录写法说明「[序号]主要责任者.文献题名[M]…」）是给人看的
+    格式描述——拿去 format 只会原样返回，把真条目替换成一句格式说明，
+    属于语义级破坏，一律视为不可渲染。
+    """
+    text, _spans = format_entry_with_spans(entry, rules)
+    return text
 
 
 def expand_numbers(spec):

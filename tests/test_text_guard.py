@@ -129,10 +129,16 @@ def test_heading_number_prefix_rewrite_is_allowed(tmp_path):
 
 
 def test_normalize_does_not_widen_to_unimplemented_rules():
-    """N-02～N-06 与段尾空白仍是「暂不处理」：这些差异必须留在白名单外。"""
+    """N-02～N-04/N-06 仍是「暂不处理」：这些差异必须留在白名单外。
+
+    N-01 段尾与 N-05（全角字母数字）已落地（2026-11-13），它们可以在
+    body/abstract/keywords 上抹平；正文内部空格与全角标点仍逐字比。
+    """
     assert normalize("研究  发现", "body") != normalize("研究 发现", "body")
-    assert normalize("２０２０", "body") != normalize("2020", "body")
     assert normalize("数字金融 A 股", "body") != normalize("数字金融A股", "body")
+    assert normalize("研究发现，增长", "body") != normalize("研究发现,增长", "body")
+    assert normalize("正文结尾 ", "body") == normalize("正文结尾", "body")
+    assert normalize("２０２０", "body") == normalize("2020", "body")
 
 
 # ---- 表注换位 ----

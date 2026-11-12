@@ -54,6 +54,10 @@ LABEL = {
 SCOPE_FILTER = {"正文": "body", "正文（含字符）": "body",
                 "全文": "all", "全文（含图表）": "all"}
 
+# 可附录化候选的门槛（B 口径：中文字符 + 英文单词）。只用于「定位」——
+# 报告给出「若把这张表移入附录，正文可减少约 N 字」的估算，绝不代搬、代删。
+APPENDIX_TABLE_MIN = 500
+
 # 这些不是作者能补的（由编辑部编号或按刊物体例给定），不当成待办派给作者。
 # received_date 是编辑部收稿时盖的日期，不是作者能在稿件里补的内容；
 # 把它算成「缺必备项」会让 ciejournal 永远停在「还差 1 项」。
@@ -378,7 +382,8 @@ def check(ir, rules):
         })
     statements.sort(key=lambda s: (not s["required"], s["label"]))
 
-    # 分节字数：帮作者定位"哪一节最占篇幅"，属定位信息，不是改写建议
+    # 分节字数：帮作者定位"哪一节最占篇幅"，属定位信息，不是改写建议。
+    # 同时记下该节的 A/B/C 三口径，报告用同一套数字画占比条与摘要句。
     sections = []
     cur = None
     for b in ir_blocks:
@@ -386,17 +391,47 @@ def check(ir, rules):
             title = re.sub(r"^[一二三四五六七八九十]{1,3}\s*[、.．]\s*", "", b.get("text", "")).strip()
             if re.search(r"[\u4e00-\u9fff]", title):
                 title = re.sub(r"\s+", "", title)
-            cur = {"title": title or b.get("text", ""), "words": 0, "tables": 0, "figures": 0}
+            cur = {"title": title or b.get("text", ""), "words": 0, "tables": 0, "figures": 0,
+                   "A": 0, "C": 0}
             sections.append(cur)
         elif cur is not None:
             if b["type"] == "body":
                 s = b.get("text", "")
                 cur["words"] += (len(re.findall(r"[\u4e00-\u9fff]", s))
                                  + len(re.findall(r"[A-Za-z][A-Za-z'-]*", s)))
+                cur["A"] += len(re.sub(r"\s", "", s))
+                cur["C"] += len(s)
             elif b["type"] == "table":
                 cur["tables"] += 1
             elif b["type"] == "figure":
                 cur["figures"] += 1
+
+    # 可附录化候选：只统计、只估算，不搬动任何表、不改一个字（§5.3）。
+    # 门槛按 B 口径（中文字符 + 英文单词）500 字：小表搬走省不了多少篇幅，
+    # 全列出来只会把真正的候选淹没。候选按字数从大到小排。
+    appendix = []
+    table_no = 0
+    for i, b in enumerate(ir_blocks):
+        if b.get("type") != "table":
+            continue
+        table_no += 1
+        text = "".join(b.get("cells") or [])
+        counts = count_words([{"text": text}], "all")
+        if counts["B"] < APPENDIX_TABLE_MIN:
+            continue
+        caption = ""
+        j = i - 1
+        while j >= 0 and ir_blocks[j].get("type") in ("table_caption", "table_note"):
+            if ir_blocks[j].get("type") == "table_caption" and not caption:
+                caption = (ir_blocks[j].get("text") or "").strip()
+            j -= 1
+        appendix.append({
+            "label": caption or f"第 {table_no} 个表",
+            "rows": b.get("n_rows") or 0,
+            "cols": b.get("n_cols") or 0,
+            "A": counts["A"], "B": counts["B"], "C": counts["C"],
+        })
+    appendix.sort(key=lambda x: -x["B"])
 
     return {
         "rows": rows,
@@ -416,6 +451,8 @@ def check(ir, rules):
         "words_scope_declared": raw_scope,
         "words_scope_note": scope_note,
         "sections": sections,
+        "appendix_candidates": appendix,
+        "appendix_threshold": APPENDIX_TABLE_MIN,
         "total_limit": total_info,
         "abstract_limit": abstract_info,
         "keywords_limit": keywords_info,
@@ -672,9 +709,35 @@ def render(ir, rules, res):
     sec_total = sum(s["words"] for s in res["sections"]) or 1
     sec_rows = "".join(
         f'<tr><td>{html.escape(s["title"][:22])}</td><td class="num">{s["words"]:,}</td>'
-        f'<td class="num">{s["words"] / sec_total:.0%}</td>'
+        f'<td class="num">{s["words"] / sec_total:.0%}'
+        f'<span class="bar"><i style="width:{max(2, round(s["words"] / sec_total * 100))}%"></i></span></td>'
         f'<td class="num">{s["tables"] or "—"}</td></tr>'
         for s in res["sections"])
+
+    # 可附录化候选：给的是「若移入附录，正文可减少多少字」的估算。措辞必须
+    # 与改写建议区分开——这是定位信息，搬不搬、搬哪张由作者决定。
+    appendix = res.get("appendix_candidates") or []
+    threshold = res.get("appendix_threshold", APPENDIX_TABLE_MIN)
+    if appendix:
+        ap_rows = "".join(
+            f'<tr><td>{html.escape(a["label"][:40])}</td>'
+            f'<td class="num">{a["rows"]} × {a["cols"]}</td>'
+            f'<td class="num">{a["A"]:,} / {a["B"]:,} / {a["C"]:,}</td></tr>'
+            for a in appendix)
+        appendix_html = (
+            f'<h2 style="margin-top:22px">可附录化候选（定位用，不是修改建议）</h2>'
+            f'<table><thead><tr><th>表格</th><th>行 × 列</th><th>字数（A / B / C）</th></tr></thead>'
+            f'{ap_rows}</table>'
+            f'<p class="meta">门槛：{threshold:,} 字（B 口径，中文字符 + 英文单词）。'
+            f'把表移入附录会改变正文结构，是否移、移到哪由作者决定——'
+            f'本工具不会搬动任何表，也不会为迁就字数删改内容。</p>')
+    elif res.get("tables"):
+        appendix_html = (
+            f'<h2 style="margin-top:22px">可附录化候选（定位用，不是修改建议）</h2>'
+            f'<p class="meta">没有达到 {threshold:,} 字（B 口径）门槛的表格；'
+            f'正文篇幅主要由文字段落构成，分节字数见上表。</p>')
+    else:
+        appendix_html = ""
 
     kpi = f"""
 <div class="kpi">
@@ -724,6 +787,9 @@ ul{{margin:0;padding-left:19px;font-size:13.5px;color:var(--ink);line-height:1.8
 .chip{{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--soft);
 border:1px solid var(--line);color:var(--ink2)}}
 .chip.miss{{background:var(--danger-bg);border-color:#efcfc7;color:var(--danger)}}
+.bar{{display:inline-block;width:72px;height:6px;margin-left:8px;border-radius:999px;
+background:var(--line2);vertical-align:1px;overflow:hidden}}
+.bar i{{display:block;height:100%;border-radius:999px;background:var(--accent);opacity:.55}}
 @media(max-width:680px){{
   .kpi{{flex-wrap:wrap}}.kpi>div{{flex:1 1 48%;border-left:none;border-top:1px solid var(--line2)}}
   .kpi>div:nth-child(-n+2){{border-top:none}}
@@ -763,6 +829,7 @@ border:1px solid var(--line);color:var(--ink2)}}
 {f'''<h2 style="margin-top:22px">分节字数（定位用，不是修改建议）</h2><table>
 <thead><tr><th>章节</th><th>字数</th><th>占比</th><th>表</th></tr></thead>
 {sec_rows}</table>''' if res["sections"] else ''}
+{appendix_html}
 </section>
 
 <section><h2>引用体系</h2><table>

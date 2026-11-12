@@ -104,13 +104,18 @@ def test_text_fingerprint_zero_change_for_each_shipped_journal(
 
 
 def test_unimplemented_normalizations_are_left_alone(tmp_path):
-    """B-04：N-02～N-06 与段尾空白未实现，正文内部必须原样保留。"""
+    """B-04：N-02～N-04、N-06 未实现，正文内部必须原样保留。
+
+    N-05（全角字母数字转半角）与 N-01 段尾空白自 2026-11-13 起已落地，
+    所以「１２００」会变成「1200」；连续空格、半角标点、中外文之间的空格
+    仍一字不动。
+    """
     source = build_spacing_docx(tmp_path / "spacing.docx")
     pipeline = render_into(tmp_path / "spacing-out", source, target="tjyj")
 
-    original = "研究发现,  数字金融 显著缓解了融资约束 。样本 共 １２００ 个。"
-    assert original in pipeline.output_texts.values(), \
-        "正文内部的连续空格/半角标点/全角数字被改动了"
+    expected = "研究发现,  数字金融 显著缓解了融资约束 。样本 共 1200 个。"
+    assert expected in pipeline.output_texts.values(), \
+        "N-02～N-04/N-06 的白名单外改动被抹平了（应为原样保留，仅全角数字转半角）"
 
 
 def test_layout_values_follow_the_ruleset(sample_docx, tmp_path):
@@ -483,6 +488,10 @@ def test_filled_english_abstract_stops_blocking(acceptance_client, tmp_path):
     source = _complete_docx(tmp_path / "no-en-abstract.docx", english_abstract=False)
     job = upload_job(client, source, journal="gjjryj")
 
+    page = client.get(f"/job/{job}/details").get_data(as_text=True)
+    assert 'href="#field-english_abstract"' in page, "缺件横幅没有定位到英文摘要输入框"
+    assert 'id="field-english_abstract"' in page, "英文摘要输入框没有锚点"
+
     blocked = client.post(f"/job/{job}/details", data={})
     assert blocked.status_code == 400
     assert "摘要（en）" in blocked.get_data(as_text=True), "英文摘要缺失没有报出来"
@@ -518,3 +527,14 @@ def test_corresponding_author_is_filled_by_the_footer_field():
     rows = [("corresponding_author", None, "通讯作者", False, True)]
     assert app.blocking_missing(rows, {}) == ["通讯作者"]
     assert app.blocking_missing(rows, {"corresponding": "张三（zs@example.com）"}) == []
+
+
+def test_switch_journal_shows_author_info_handoff(acceptance_client, tmp_path):
+    """从要求作者页的刊换到不要求的刊：补录页必须提示人员信息承接（§13.3）。"""
+    client = acceptance_client
+    source = _complete_docx(tmp_path / "handoff.docx")
+    job = upload_job(client, source, journal="gjjryj")
+
+    page = client.get(f"/job/{job}/details?journal=tjyj").get_data(as_text=True)
+    assert "换刊提醒" in page, "换刊补录页没有提示"
+    assert "作者页" in page and "首页脚注" in page

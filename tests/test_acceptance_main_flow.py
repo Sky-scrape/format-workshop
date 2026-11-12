@@ -189,6 +189,7 @@ def test_filled_details_are_injected_and_reported(
 
     page = client.get(f"/result/{job}").get_data(as_text=True)
     assert "已注入" in page
+    assert "匿名稿的隐私边界" in page, "匿名稿下载旁没有二次保存泄密提示"
 
     # 补录不是格式改动：审计不该把它记成 before/after 文字改动
     audit = audit_of(work, job)

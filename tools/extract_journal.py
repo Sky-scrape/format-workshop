@@ -1,8 +1,8 @@
-"""从稿约 PDF 抽期刊规则集草稿。
+"""从稿约（PDF/Word/TXT）抽期刊规则集草稿。
 
 分工（对应 DESIGN §14.7 与 §15）
 --------------------------------------------------------------------
-**结构由代码保证，AI 只负责填值。**
+**结构由代码保证，AI 只负责填值；AI 关着时也可以纯手工填。**
 
 规则集有十几个区块、上百个字段，让模型直接吐完整 JSON，它必然漏字段、
 改结构、编造键名，产物连渲染器都跑不起来。所以这里反过来做：
@@ -11,12 +11,15 @@
 2. AI 只回答一张扁平的事实清单（约 45 个键，值 + 一句原文引文）
 3. 引文必须在原文里逐字搜得到，搜不到整条丢弃——这是防编造的主闸
 4. 没抽到的键保留基线值，但逐条记进 `assumptions` 并在复核页标红
+5. 没有 AI 时生成 `mode: manual` 的空草稿，用户在复核页逐项填写；
+   手工修正记进 `extraction.manual`，不伪造原文引文
 
 产物永远能渲染，但**永远标 `unverified`**，必须人工核对后才允许发布。
 
 用法
 ----
     python tools/extract_journal.py 稿约.pdf --id jryj --name 金融研究 -o /tmp/draft.json
+    python tools/extract_journal.py 投稿须知.docx --id jryj --manual -o /tmp/draft.json
 """
 
 import argparse
@@ -140,7 +143,13 @@ DEGRADE_HINT = """
 不要任何解释文字。没有把握的键直接不要输出。"""
 
 
-# ---------------------------------------------------------------- PDF
+# ---------------------------------------------------------------- 取文
+
+# 稿约可以是 PDF、Word（.docx）或纯文本。旧版只收 PDF，用户手里最常见的
+# 其实是「投稿须知.docx」；.doc 不直接读——老二进制格式没有可靠的纯 Python
+# 解析器，页面会明确提示先另存为 .docx。
+SOURCE_SUFFIXES = {".pdf", ".docx", ".txt", ".md"}
+
 
 def pdf_text(path, max_chars=MAX_PDF_CHARS, log=None):
     """取 PDF 文字：有文字层用文字层，没有才 OCR（见 tools/ocr.py）。
@@ -148,6 +157,93 @@ def pdf_text(path, max_chars=MAX_PDF_CHARS, log=None):
     扫描件不再拒收——这是稿约场景的常态，纸质须知扫描成 PDF 很常见。
     """
     return ocr.extract_pdf_text(path, max_chars=max_chars, log=log)
+
+
+def _truncate_text(text, max_chars):
+    """按字符数截断并给出 truncated 标记，口径与 PDF 取文一致。"""
+    text = text or ""
+    return text[:max_chars], len(text) > max_chars
+
+
+def docx_text(path, max_chars=MAX_PDF_CHARS):
+    """取 .docx 正文与表格文字。
+
+    按文档 body 的子元素顺序读，段落和表格的相对位置不会丢——稿约常把
+    「字体字号」放进表格，只读 paragraphs 会漏掉整张表。页眉页脚不计入：
+    那里通常是刊名/页码，不是格式要求。
+    """
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    doc = Document(str(path))
+    lines = []
+
+    def table_text(table):
+        rows = []
+        for row in table.rows:
+            cells = []
+            for cell in row.cells:
+                parts = [p.text.strip() for p in cell.paragraphs if p.text.strip()]
+                for nested in cell.tables:
+                    nested_text = table_text(nested)
+                    if nested_text:
+                        parts.append(nested_text)
+                cells.append(" ".join(parts))
+            if any(cells):
+                rows.append("\t".join(cells))
+        return "\n".join(rows)
+
+    def walk(parent):
+        for child in parent.element.body.iterchildren():
+            if child.tag == qn("w:p"):
+                text = Paragraph(child, parent).text.strip()
+                if text:
+                    lines.append(text)
+            elif child.tag == qn("w:tbl"):
+                text = table_text(Table(child, parent))
+                if text:
+                    lines.append(text)
+
+    walk(doc)
+    text, truncated = _truncate_text("\n".join(lines), max_chars)
+    return text, {"method": "docx", "pages": None, "chars": len(text),
+                  "truncated": truncated}
+
+
+def txt_text(path, max_chars=MAX_PDF_CHARS):
+    """取纯文本稿约。按 UTF-8（含 BOM）→ GB18030 → UTF-16 依次尝试。
+
+    国内稿约 TXT 常见 GBK 编码；直接 utf-8 读会半路抛异常，不能让用户
+    自己猜编码。解码成功但正文为空时由调用方拦下。
+    """
+    raw = Path(path).read_bytes()
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "utf-16"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise ValueError("TXT 编码无法识别，请另存为 UTF-8 或 Word（.docx）")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text, truncated = _truncate_text(text, max_chars)
+    return text, {"method": "txt", "pages": None, "chars": len(text),
+                  "truncated": truncated}
+
+
+def read_source(path, max_chars=MAX_PDF_CHARS, log=None):
+    """按扩展名取稿约文字，返回 (text, meta)。"""
+    suffix = Path(path).suffix.lower()
+    if suffix == ".pdf":
+        return pdf_text(path, max_chars=max_chars, log=log)
+    if suffix == ".docx":
+        return docx_text(path, max_chars=max_chars)
+    if suffix in (".txt", ".md"):
+        return txt_text(path, max_chars=max_chars)
+    raise ValueError("只支持 PDF、Word（.docx）或 TXT 稿约")
 
 
 def norm(s):
@@ -271,8 +367,16 @@ def _json_blob(s):
     return s[lo:hi + 1]
 
 
-def baseline_rules():
-    """结构基线：取一本已核验的规则集，任何字段缺失都由它兜住。"""
+def baseline_rules(prefer=None):
+    """结构基线：默认取一本已核验的中文规则集，任何字段缺失都由它兜住。
+
+    prefer 可指定仓库里任意规则集 id（如英文刊），用于目标刊结构与默认
+    基线差异较大时少改一些字段。名字先过 JID 格式，避免被当成路径。
+    """
+    if prefer and re.match(r"^[a-z0-9_]{2,24}$", str(prefer)):
+        p = RULES_DIR / f"{prefer}.json"
+        if p.exists():
+            return deepcopy(json.loads(p.read_text(encoding="utf-8"))), prefer
     for name in ("gjjryj", "jryj", "cjyj"):
         p = RULES_DIR / f"{name}.json"
         if p.exists():
@@ -323,9 +427,160 @@ def written_paths(used, name_zh=""):
     return ps
 
 
-def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
-    """把事实清单映射成完整规则集。返回 (rules, report)。"""
-    base, base_id = baseline_rules()
+def manual_paths(manual):
+    """手工修正实际落盘的路径集合（与 written_paths 同口径）。"""
+    ps = set()
+    for key, entry in (manual or {}).items():
+        if key in FACTS:
+            ps.add(tuple(FACTS[key][0]))
+        elif key in _GROUPED_PATHS:
+            ps.update(_GROUPED_PATHS[key])
+        elif isinstance(entry, dict) and isinstance(entry.get("path"), (list, tuple)):
+            # 结构开关（匿名/作者页/blocks[].required/statements.*.required）
+            # 不是 FACTS 键，落盘路径由 entry.path 自带
+            ps.add(tuple(entry["path"]))
+    return ps
+
+
+def collect_inherited(base, rules, written):
+    """收集「未被本次覆写、且值仍与基线相同」的全部叶子字段。
+
+    披露范围是全部叶子，不只 FACTS 的 49 个事实键——blocks、statements、
+    personal_fields、表格边框这些结构字段也必须逐条可见，否则「沿用 N 项」
+    会变成完整假象（F16）。
+    """
+    by_path = {m[0]: (k, m[2]) for k, m in FACTS.items()}
+    inherited = []
+    for path, val in iter_leaves(base):
+        if not path or path[0] in ("verification", "assumptions"):
+            continue                  # 草稿的核验区由本次重建，不算继承
+        if path in written:
+            continue
+        if _get_path(rules, path) != val:
+            continue                  # 已被本次抽取/手工修正覆写成别的值
+        key, label = by_path.get(path, (None, None))
+        inherited.append({
+            "key": ".".join(str(p) for p in path),
+            "label": label or ".".join(str(p) for p in path),
+            "value": val,
+            "section": path[0],
+            "fact": key is not None,
+        })
+    return inherited
+
+
+def derive_assumptions(inherited, base_id):
+    """由继承披露生成 assumptions：事实键逐条，结构字段收一条汇总。
+
+    渲染器把 assumptions 逐条当字符串转义，这里只能是字符串数组。
+    """
+    fact_inherited = [it for it in inherited if it["fact"]]
+    n_struct = len(inherited) - len(fact_inherited)
+    assumptions = [
+        f"{it['label']} = {it['value']}（未从稿约抽到，沿用基线值，须人工核对）"
+        for it in fact_inherited if it["value"] not in (None, "", [], {})
+    ]
+    if n_struct:
+        assumptions.append(
+            f"另有 {n_struct} 个结构字段（blocks 区块清单、statements、personal_fields、"
+            f"tables 边框等）未经稿约逐项抽取，逐字段沿用基线《{base_id}》原值；"
+            f"逐字段清单见 verification.extraction.inherited，发布前须人工核对")
+    return assumptions
+
+
+# 复核页手工修正表单的分组。分组只影响展示顺序，字段本身仍以 FACTS 为准；
+# 这里多出的 body_line / heading_levels 是成组项，由 apply_manual 特殊处理。
+FIELD_GROUPS = (
+    ("刊物标识", ("journal_name_zh", "journal_name_en", "journal_language",
+                  "journal_issn", "journal_cn_number", "journal_sponsor")),
+    ("页面", ("page_size", "margin_top_mm", "margin_bottom_mm",
+              "margin_left_mm", "margin_right_mm", "columns")),
+    ("正文", ("body_font_cn", "body_font_latin", "body_size_pt",
+              "body_indent_chars", "body_align", "body_line")),
+    ("题名与摘要", ("title_font_cn", "title_size_pt", "title_bold",
+                    "subtitle_size_pt", "abstract_font_cn", "abstract_size_pt",
+                    "title_en_size_pt", "title_en_bold", "footnote_size_pt")),
+    ("标题体系", ("heading_numbering", "heading_max_level", "heading_level1_font",
+                  "heading_level1_size", "heading_level1_bold",
+                  "heading_level1_align", "heading_levels")),
+    ("编号体例", ("numbering_tables", "numbering_figures", "numbering_equations")),
+    ("引用", ("citation_system", "citation_style_id")),
+    ("字数限制", ("limit_total", "limit_total_metric", "limit_abstract",
+                  "limit_title_chars", "limit_keywords_min", "limit_keywords_max")),
+    ("投稿形态", ("submission_anonymous", "author_page_required")),
+    ("表图", ("table_caption_font", "table_caption_size",
+              "figure_caption_font", "figure_caption_size")),
+)
+
+# 枚举值的中文展示。没有登记的枚举直接显示原值，不猜含义。
+ENUM_LABELS = {
+    "journal_language": {"zh": "中文", "en": "英文"},
+    "page_size": {"A4": "A4", "B5": "B5", "16开": "16 开"},
+    "body_align": {"both": "两端对齐", "left": "左对齐", "justify": "两端对齐（justify）"},
+    "heading_level1_align": {"center": "居中", "left": "左对齐"},
+    "heading_numbering": {"cn-hierarchical": "一、（一）1.",
+                          "arabic": "1 / 1.1 / 1.1.1", "none": "不编号"},
+    "citation_system": {"numbered": "顺序编码制（[1]）",
+                        "author-year": "作者-年份制（（张三，2020））"},
+    "limit_total_metric": {"A": "A：字符数（不计空格）",
+                           "B": "B：中文字符数 + 英文单词数",
+                           "C": "C：字符数（计空格）"},
+}
+
+
+def _field_options(key, kind):
+    """枚举字段的可选项；布尔、文本、数值由模板按 kind 单独渲染。"""
+    if kind.startswith("enum:"):
+        labels = ENUM_LABELS.get(key) or {}
+        return [{"value": v, "label": labels.get(v, v)}
+                for v in kind[5:].split("|")]
+    return []
+
+
+def editable_fields(rules):
+    """把当前规则集拆成复核页可编辑的分组字段。
+
+    只暴露稿约最常规定、且渲染器真正消费的字段；blocks/statements 等
+    结构字段仍按基线继承并在「沿用基线」清单里逐条披露，不在本表单里
+    伪装成可安全手改。
+    """
+    groups = []
+    for title, keys in FIELD_GROUPS:
+        fields = []
+        for key in keys:
+            if key == "body_line":
+                ls = _get_path(rules, ("typography", "body", "line_spacing")) or {}
+                mode = ls.get("mode") or "multiple"
+                value = ls.get("value_pt") if mode == "exact" else ls.get("value")
+                fields.append({"key": "body_line", "label": "行距",
+                               "kind": "line", "mode": mode, "value": value})
+                continue
+            if key == "heading_levels":
+                levels = _get_path(rules, ("headings", "levels")) or []
+                fields.append({"key": "heading_levels", "label": "标题编号（每行一级）",
+                               "kind": "levels",
+                               "value": "\n".join(str(x) for x in levels)})
+                continue
+            path, kind, label = FACTS[key]
+            field = {"key": key, "label": label, "kind": kind,
+                     "value": _get_path(rules, path)}
+            options = _field_options(key, kind)
+            if options:
+                field["options"] = options
+            fields.append(field)
+        groups.append({"title": title, "fields": fields})
+    return groups
+
+
+def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None,
+          manual=False, baseline_id=""):
+    """把事实清单映射成完整规则集。返回 (rules, report)。
+
+    manual=True 时 facts/evidence 通常为空：不调用 AI，只从结构基线出发，
+    所有字段先按「沿用基线」如实披露，用户在复核页逐项修正。
+    baseline_id 可指定仓库里另一本规则集作结构基线。
+    """
+    base, base_id = baseline_rules(baseline_id or None)
     rules = deepcopy(base)
     used = {}
     dropped = []
@@ -426,24 +681,8 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
     # 继承披露：基线里每个未被本次覆写、且值原样保留的叶子，逐条列出。
     # 只披露 FACTS 键会漏掉 blocks 标签、statements、personal_fields、tables
     # 边框等几百个静默继承的字段，「沿用 N 项」就成了完整假象。
-    by_path = {m[0]: (k, m[2]) for k, m in FACTS.items()}
     written = written_paths(used, name_zh)
-    inherited = []
-    for path, val in iter_leaves(base):
-        if not path or path[0] in ("verification", "assumptions"):
-            continue                  # 草稿的核验区由本次重建，不算继承
-        if path in written:
-            continue
-        if _get_path(rules, path) != val:
-            continue                  # 已被本次抽取覆写成别的值
-        key, label = by_path.get(path, (None, None))
-        inherited.append({
-            "key": ".".join(str(p) for p in path),
-            "label": label or ".".join(str(p) for p in path),
-            "value": val,
-            "section": path[0],
-            "fact": key is not None,
-        })
+    inherited = collect_inherited(base, rules, written)
 
     rules["verification"] = {
         "status": "unverified",
@@ -452,15 +691,20 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
         "template_url": "",
         "template_date": "",
         "verified_at": "",
-        "verified_by": "AI 从稿约 PDF 抽取，未经人工核对",
-        "notes": (f"抽取自 {source}；{len(used)} 项有原文依据，"
-                  f"{len(inherited)} 项沿用基线值，{len(dropped)} 项被丢弃，"
-                  f"{len(unverified)} 项未证实未采用"),
+        "verified_by": ("手工建库，未经稿约抽取" if manual
+                        else "AI 从稿约抽取，未经人工核对"),
+        "notes": ((f"手工建库（来源 {source}）；{len(inherited)} 项沿用基线值，"
+                   f"{len(dropped)} 项被丢弃，{len(unverified)} 项未证实未采用")
+                  if manual else
+                  (f"抽取自 {source}；{len(used)} 项有原文依据，"
+                   f"{len(inherited)} 项沿用基线值，{len(dropped)} 项被丢弃，"
+                   f"{len(unverified)} 项未证实未采用")),
         "typography_authority": "guide",
         "extraction": {
             "source_file": source,
             "extracted_at": date.today().isoformat(),
             "baseline": base_id,
+            "mode": "manual" if manual else "ai",
             "pages": (meta or {}).get("pages"),
             "truncated": (meta or {}).get("truncated", False),
             # 文字从哪来的必须留痕：OCR 一定有错字，复核时要区别对待
@@ -474,30 +718,320 @@ def build(extracted, evidence, text, *, jid, name_zh="", source="", meta=None):
             "ocr_engine": (meta or {}).get("engine", ""),
             "ai_model": None,
             "used": {k: v for k, v in used.items()},
+            "manual": {},
             "inherited": inherited,
             "dropped": dropped,
             "unverified": unverified,
         },
     }
-    # 渲染器把 assumptions 逐条当字符串转义，这里只能是字符串数组。
-    # 事实键逐条列；结构字段（blocks/statements/personal_fields 等）数量太多，
-    # 收成一条汇总，逐字段清单在 verification.extraction.inherited 里可查。
-    fact_inherited = [it for it in inherited if it["fact"]]
-    n_struct = len(inherited) - len(fact_inherited)
-    rules["assumptions"] = [
-        f"{it['label']} = {it['value']}（未从稿约抽到，沿用基线值，须人工核对）"
-        for it in fact_inherited if it["value"] not in (None, "", [], {})
-    ]
-    if n_struct:
-        rules["assumptions"].append(
-            f"另有 {n_struct} 个结构字段（blocks 区块清单、statements、personal_fields、"
-            f"tables 边框等）未经稿约逐项抽取，逐字段沿用基线《{base_id}》原值；"
-            f"逐字段清单见 verification.extraction.inherited，发布前须人工核对")
+    rules["assumptions"] = derive_assumptions(inherited, base_id)
 
     report = validate(rules, used=used, inherited=inherited, dropped=dropped)
     report["stats"] = {"extracted": len(used), "inherited": len(inherited),
-                       "dropped": len(dropped), "unverified": len(unverified)}
+                       "manual": 0, "dropped": len(dropped),
+                       "unverified": len(unverified)}
     return rules, report
+
+
+def _line_value(spacing, mode):
+    """从 line_spacing 取当前值：固定值取 value_pt，倍数取 value。"""
+    if mode == "exact":
+        return spacing.get("value_pt")
+    if mode == "multiple":
+        return spacing.get("value")
+    return None
+
+
+# 结构要件（blocks[].required / statements / 匿名）的中文名。与 compliance_report
+# 的展示口径保持一致；只用于复核页，不参与渲染。
+STRUCT_BLOCK_LABELS = {
+    "title": "标题", "subtitle": "副标题", "authors": "作者", "affiliations": "单位",
+    "corresponding_author": "通讯作者", "abstract": "摘要", "keywords": "关键词",
+    "classification_code": "分类号", "document_code": "文献标识码",
+    "article_number": "文章编号", "body": "正文", "references": "参考文献",
+    "appendix": "附录", "acknowledgement": "致谢", "highlights": "Highlights",
+    "received_date": "收稿日期", "author_note": "作者简介", "endnotes": "文末尾注",
+    "conflict_of_interest": "利益冲突声明", "data_availability": "数据可得性",
+    "english_title": "英文标题", "english_abstract": "英文摘要",
+    "english_keywords": "英文关键词", "english_authors": "英文作者",
+    "english_affiliations": "英文单位",
+}
+STRUCT_STATEMENT_LABELS = {
+    "copyright_transfer": "版权转让协议",
+    "conflict_of_interest": "利益冲突声明",
+    "data_availability": "数据可得性声明",
+    "ai_declaration": "AI 使用声明",
+    "originality": "原创性声明",
+    "confidentiality": "保密审查",
+}
+
+
+def structural_fields(rules):
+    """复核页的结构开关：匿名、作者页、区块必备/可选、声明必备/可选。
+
+    这些字段原先只按基线继承、在「沿用基线」清单里逐条披露，用户想改只能
+    手改 draft.json。目标刊结构与基线不同很常见（要不要英文摘要、要不要
+    作者信息页、声明是不是必备），这里做成可视开关；保存仍走同一条
+    apply_manual 事务，改动计入「手工修正」并从继承披露里移出。
+    """
+    sub = rules.get("submission") or {}
+    blocks = []
+    for i, b in enumerate(rules.get("blocks") or []):
+        if not isinstance(b, dict) or not b.get("type"):
+            continue
+        lang = b.get("lang")
+        label = STRUCT_BLOCK_LABELS.get(b["type"], b.get("type"))
+        blocks.append({
+            "index": i, "type": b["type"], "lang": lang or "",
+            "label": label + (f"（{lang}）" if lang else ""),
+            "required": bool(b.get("required")),
+        })
+    statements = []
+    for key, conf in (rules.get("statements") or {}).items():
+        conf = conf if isinstance(conf, dict) else {}
+        statements.append({
+            "key": key, "label": STRUCT_STATEMENT_LABELS.get(key, key),
+            "required": bool(conf.get("required")),
+        })
+    ap = (sub.get("author_page") or {}).get("separate_page")
+    return {
+        "anonymous": bool(sub.get("anonymous")),
+        "author_page": bool(ap),
+        "blocks": blocks,
+        "statements": statements,
+    }
+
+
+def _apply_structural(rules, structural, manual):
+    """把结构开关并入草稿；与 apply_manual 同一事务，出错前不落盘。
+
+    structural 是「开关名 → 期望值」的完整映射（未提交的复选框由调用方
+    填 False）。只处理与当前值不同的项，避免一次保存把所有结构字段都记成
+    「手工修正」、清零继承披露。
+    """
+    def record(key, label, value, previous, path):
+        manual[key] = {"label": label, "value": value,
+                       "previous": _displayable(previous), "path": list(path)}
+
+    sub = rules.setdefault("submission", {})
+    if "anonymous" in structural:
+        old = bool(sub.get("anonymous"))
+        new = bool(structural["anonymous"])
+        if old != new:
+            sub["anonymous"] = new
+            record("structural:anonymous", "正文匿名（双盲）", new, old,
+                   ("submission", "anonymous"))
+    if "author_page" in structural:
+        ap = sub.setdefault("author_page", {})
+        old = bool(ap.get("separate_page"))
+        new = bool(structural["author_page"])
+        if old != new:
+            ap["separate_page"] = new
+            record("structural:author_page", "作者信息单独成页", new, old,
+                   ("submission", "author_page", "separate_page"))
+    for i, want in (structural.get("blocks") or {}).items():
+        blocks = rules.get("blocks") or []
+        if not (0 <= int(i) < len(blocks)) or not isinstance(blocks[int(i)], dict):
+            continue
+        b = blocks[int(i)]
+        old = bool(b.get("required"))
+        new = bool(want)
+        if old == new:
+            continue
+        b["required"] = new
+        label = STRUCT_BLOCK_LABELS.get(b.get("type"), b.get("type")) + "·必备"
+        record(f"structural:blocks:{i}", label, new, old, ("blocks", int(i), "required"))
+    for key, want in (structural.get("statements") or {}).items():
+        st = rules.setdefault("statements", {})
+        conf = st.get(key)
+        if not isinstance(conf, dict):
+            continue
+        old = bool(conf.get("required"))
+        new = bool(want)
+        if old == new:
+            continue
+        conf["required"] = new
+        label = STRUCT_STATEMENT_LABELS.get(key, key) + "·必备"
+        record(f"structural:statements:{key}", label, new, old,
+               ("statements", key, "required"))
+
+
+def apply_manual(rules, values, structural=None):
+    """把复核页提交的字段修正并入草稿。返回 (rules, report, errors)。
+
+    表单每次提交全部字段，所以这里只处理**与当前值不同**的字段：若把所有
+    字段都记成「手工修正」，「沿用基线」披露会瞬间清零，也就失去了复核页
+    存在的意义。
+
+    有错误时返回原 rules 与错误清单，调用方不得落盘半份修改。
+    """
+    out = deepcopy(rules)
+    verification = out.setdefault("verification", {})
+    ext = verification.setdefault("extraction", {})
+    # 手工修正后的继承披露必须对回这份草稿自己的基线；固定用默认基线会
+    # 让选过英文/其他基线的草稿把「与基线相同」判错。
+    base, base_id = baseline_rules(ext.get("baseline") or None)
+    raw_used = ext.get("used")
+    used = dict(raw_used) if isinstance(raw_used, dict) else {}
+    raw_manual = ext.get("manual")
+    manual = dict(raw_manual) if isinstance(raw_manual, dict) else {}
+    unverified = list(ext.get("unverified") or [])
+    errors = []
+    body_size_changed = False
+
+    def take_evidence(key):
+        item = used.pop(key, None)
+        return item.get("evidence", "") if isinstance(item, dict) else ""
+
+    def drop_unverified(key):
+        return [u for u in unverified
+                if not (isinstance(u, dict) and u.get("key") == key)]
+
+    for key, (path, kind, label) in FACTS.items():
+        raw = values.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, str) and not raw.strip():
+            continue                  # 留空 = 不改，不拿空串清掉当前值
+        val, why = _cast(raw, kind)
+        if val is None:
+            errors.append(f"{label}：{why}")
+            continue
+        old = _get_path(out, path)
+        if old == val:
+            continue                  # 未改动，不记「手工修正」
+        if not _set_path(out, path, val):
+            errors.append(f"{label}：字段路径不可写")
+            continue
+        evidence = take_evidence(key)
+        unverified = drop_unverified(key)
+        entry = {"label": label, "value": val, "previous": _displayable(old)}
+        if evidence:
+            entry["evidence"] = evidence
+        manual[key] = entry
+        if key == "body_size_pt":
+            body_size_changed = True
+
+    if "heading_levels" in values:
+        raw = values.get("heading_levels")
+        levels = []
+        if isinstance(raw, str):
+            for line in raw.replace("|", "\n").splitlines():
+                part = line.strip()
+                if part:
+                    levels.append(part)
+        if not levels:
+            errors.append("标题编号：至少保留一级（每行一级，如 一、/（一）/1.）")
+        elif len(levels) > 8:
+            errors.append("标题编号：最多 8 级")
+        elif any(len(x) > 20 for x in levels):
+            errors.append("标题编号：单级编号不超过 20 个字符")
+        else:
+            current = _get_path(out, ("headings", "levels")) or []
+            if levels != current:
+                evidence = take_evidence("heading_levels")
+                unverified = drop_unverified("heading_levels")
+                out.setdefault("headings", {})["levels"] = levels
+                out["headings"]["max_level"] = min(len(levels), 4)
+                entry = {"label": "标题编号", "value": levels,
+                         "previous": _displayable(current)}
+                if evidence:
+                    entry["evidence"] = evidence
+                manual["heading_levels"] = entry
+
+    if "body_line_mode" in values or "body_line_value" in values:
+        mode = str(values.get("body_line_mode") or "").strip()
+        if mode:
+            if mode not in ("exact", "multiple"):
+                errors.append("行距：模式只能是固定值或倍数")
+            else:
+                spacing = _get_path(out, ("typography", "body", "line_spacing")) or {}
+                raw_value = str(values.get("body_line_value") or "").strip()
+                if not raw_value:
+                    current_value = _line_value(spacing, mode)
+                    raw_value = "" if current_value is None else str(current_value)
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    value = None
+                if value is None or not math.isfinite(value):
+                    errors.append("行距：数值无效")
+                elif value <= 0:
+                    errors.append("行距：必须大于 0")
+                else:
+                    old_mode = spacing.get("mode")
+                    old_value = _line_value(spacing, old_mode) if old_mode else None
+                    if old_mode != mode or old_value != value:
+                        evidence = take_evidence("body_line")
+                        unverified = drop_unverified("body_line")
+                        replacement = {"mode": mode}
+                        if mode == "exact":
+                            replacement["value_pt"] = value
+                        else:
+                            size = ((out.get("typography") or {}).get("body") or {}) \
+                                .get("size_pt") or 10.5
+                            replacement["value"] = value
+                            replacement["equivalent_exact_pt"] = round(size * value, 1)
+                        out.setdefault("typography", {}).setdefault("body", {})[
+                            "line_spacing"] = replacement
+                        entry = {"label": "行距", "value": f"{mode} {value:g}",
+                                 "previous": _displayable(spacing)}
+                        if evidence:
+                            entry["evidence"] = evidence
+                        manual["body_line"] = entry
+
+    # 字号改了、行距是倍数制：折算磅值要跟着变，否则规格页与审计的依据
+    # 还是旧字号算出来的数。
+    if body_size_changed:
+        body = (out.get("typography") or {}).get("body") or {}
+        spacing = body.get("line_spacing") or {}
+        if spacing.get("mode") == "multiple" and spacing.get("value"):
+            spacing["equivalent_exact_pt"] = round(
+                float(body.get("size_pt") or 10.5) * float(spacing["value"]), 1)
+
+    # 结构开关（匿名/作者页/区块必备/声明必备）与字段修正同一事务：
+    # 有错时整单不落盘，草稿不会出现「字段改了、结构没改」的半份状态。
+    if structural is not None:
+        _apply_structural(out, structural, manual)
+
+    if errors:
+        return rules, None, errors
+
+    written = written_paths(used,
+                            name_zh=(out.get("journal") or {}).get("name_zh") or "")
+    written |= manual_paths(manual)
+    inherited = collect_inherited(base, out, written)
+
+    ext["used"] = used
+    ext["manual"] = manual
+    ext["unverified"] = unverified
+    ext["inherited"] = inherited
+    ext["edited_at"] = date.today().isoformat()
+    ext.setdefault("mode", "manual" if not used else "ai")
+
+    if manual and used:
+        verified_by = "AI 抽取 + 人工修正，未经人工核对"
+    elif manual:
+        verified_by = "手工建库，未经稿约抽取"
+    elif used:
+        verified_by = "AI 从稿约抽取，未经人工核对"
+    else:
+        verified_by = "基线草稿，未经稿约核对"
+    verification["verified_by"] = verified_by
+
+    source = ext.get("source_file") or "未知来源"
+    dropped = ext.get("dropped") or []
+    verification["notes"] = (
+        f"来源 {source}；{len(used)} 项有原文依据，{len(manual)} 项手工修正，"
+        f"{len(inherited)} 项沿用基线值，{len(dropped)} 项被丢弃，"
+        f"{len(unverified)} 项未证实未采用")
+    out["assumptions"] = derive_assumptions(inherited, base_id)
+
+    report = validate(out, used=used, inherited=inherited, dropped=dropped)
+    report["stats"] = {"extracted": len(used), "inherited": len(inherited),
+                       "manual": len(manual), "dropped": len(dropped),
+                       "unverified": len(unverified)}
+    return out, report, []
 
 
 def validate(rules, *, used=None, inherited=None, dropped=None):
@@ -551,31 +1085,54 @@ def validate(rules, *, used=None, inherited=None, dropped=None):
             "needs_review": len(inherited or [])}
 
 
-def extract(pdf, *, jid, name_zh="", cfg=None, log=None):
-    """完整流程：读 PDF → 抽事实 → 建规则集 → 校验。"""
+def extract(source, *, jid, name_zh="", cfg=None, log=None, manual=False,
+            baseline_id=""):
+    """完整流程：读稿约（PDF/Word/TXT）→ 抽事实（或手工模式）→ 建规则集。
+
+    manual=True 时不调用 AI：读取原文后直接以结构基线起一份空草稿，所有
+    字段先进「沿用基线」清单，由用户在复核页逐项修正。AI 未配置时也能
+    走通建库，只是抽取项为 0。baseline_id 选择结构基线刊。
+    """
     cfg = cfg or ai_assist.load_config()
-    if not ai_assist.available(cfg):
-        raise RuntimeError("未配置可用的 AI 服务，无法抽取规则集")
-    text, meta = pdf_text(pdf, log=log)
-    facts, ev, notes, _raw = ai_facts(text, cfg, log=log)
-    rules, report = build(facts, ev, text, jid=jid, name_zh=name_zh,
-                          source=Path(pdf).name, meta=meta)
-    rules["verification"]["extraction"]["ai_model"] = cfg.get("model")
-    if notes:
-        rules["verification"]["extraction"]["ai_notes"] = notes[:400]
+    use_ai = bool(not manual and ai_assist.available(cfg))
+    text, meta = read_source(source, log=log)
+    if not (text or "").strip():
+        raise RuntimeError("稿约里没有读到任何文字：请确认文件不是空文档，"
+                           "扫描件请装 OCR 或改用文字版 PDF/Word/TXT")
+    if use_ai:
+        facts, ev, notes, _raw = ai_facts(text, cfg, log=log)
+        rules, report = build(facts, ev, text, jid=jid, name_zh=name_zh,
+                              source=Path(source).name, meta=meta,
+                              baseline_id=baseline_id)
+        rules["verification"]["extraction"]["ai_model"] = cfg.get("model")
+        if notes:
+            rules["verification"]["extraction"]["ai_notes"] = notes[:400]
+    else:
+        if not manual and log:
+            log("AI 未配置或未启用，自动改走手工建库：先生成基线草稿，"
+                "再在复核页逐项填写")
+        rules, report = build({}, {}, text, jid=jid, name_zh=name_zh,
+                              source=Path(source).name, meta=meta, manual=True,
+                              baseline_id=baseline_id)
     return rules, report, text
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("pdf")
+    ap.add_argument("source", help="稿约文件：PDF / Word(.docx) / TXT")
     ap.add_argument("--id", required=True, help="期刊代号，小写字母，如 jryj")
     ap.add_argument("--name", default="", help="中文刊名")
+    ap.add_argument("--manual", action="store_true",
+                    help="不调用 AI，只建基线草稿（可在复核页手工填写）")
+    ap.add_argument("--baseline", default="",
+                    help="结构基线刊 id（如 tjyj）；缺省用已核验中文刊")
     ap.add_argument("-o", "--out", required=True)
     a = ap.parse_args()
 
     try:
-        rules, report, _ = extract(a.pdf, jid=a.id, name_zh=a.name, log=print)
+        rules, report, _ = extract(a.source, jid=a.id, name_zh=a.name,
+                                   log=print, manual=a.manual,
+                                   baseline_id=a.baseline)
     except Exception as e:  # noqa: BLE001
         print(f"失败：{e}")
         return 1
@@ -592,8 +1149,9 @@ def main():
         print(f"警告：{s['unverified']} 项模型给了值但没有原文引文（未证实），"
               f"未写入规则集，需人工核对（见草稿 verification.extraction.unverified）",
               file=sys.stderr)
-    print(f"抽取 {s['extracted']} 项 / 沿用基线 {s['inherited']} 项 / "
-          f"丢弃 {s['dropped']} 项 / 未证实 {s['unverified']} 项")
+    print(f"抽取 {s['extracted']} 项 / 手工修正 {s.get('manual', 0)} 项 / "
+          f"沿用基线 {s['inherited']} 项 / 丢弃 {s['dropped']} 项 / "
+          f"未证实 {s['unverified']} 项")
     for e in report["errors"]:
         print("  错误:", e["msg"])
     for w in report["warnings"][:10]:

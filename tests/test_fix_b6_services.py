@@ -494,14 +494,15 @@ def test_backoff_comments_match_implementation():
     0.247s），第 5 次直接 raise。两处注释都要与实现一致；行为本身不变。
 
     app.py 的退避循环后来被并行修复收拢进 replace_with_retry（BKB024 的
-    注释随之落在该函数的 docstring 上），所以这里对两份文件分别核对：
+    注释随之落在该函数的 docstring 上），2026-11-13 又随任务目录读写原语
+    一起搬进 tools/jobstore.py，所以这里对两份文件分别核对：
     虚假说法一处不留，如实说法两处都在。
     """
-    for name in ("app.py", "tools/docx_meta.py"):
+    for name in ("tools/jobstore.py", "tools/docx_meta.py"):
         src = (ROOT / name).read_text(encoding="utf-8")
         assert "0.44s" not in src, f"{name} 不得残留与实现不符的 0.44s 说法"
         assert "共约 0.24s" in src and "最后一次直接抛出" in src, name
     # 实现锚点：attempt==4 直接 raise，只退避 0.02+0.04+0.08+0.1
     assert abs(sum((0.02, 0.04, 0.08, 0.1, 0.2)[:4]) - 0.24) < 1e-9
-    app_src = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert "def replace_with_retry" in app_src and "time.sleep(delays[attempt])" in app_src
+    impl = (ROOT / "tools" / "jobstore.py").read_text(encoding="utf-8")
+    assert "def replace_with_retry" in impl and "time.sleep(delays[attempt])" in impl

@@ -424,12 +424,14 @@ def acceptance_env(tmp_path, monkeypatch):
 
     import app
     import ai_assist
+    import author_profile
 
     work = tmp_path / "work"
     work.mkdir(parents=True)
     monkeypatch.setattr(app, "WORK", work)
     monkeypatch.setattr(app, "DRAFT_DIR", tmp_path / "drafts")
     monkeypatch.setattr(ai_assist, "CONFIG_PATH", tmp_path / "ai.json")
+    monkeypatch.setattr(author_profile, "PROFILE_PATH", tmp_path / "author_profile.json")
 
     def deny(*args, **kwargs):
         raise AssertionError("测试期间禁止联网：请把外部调用换成假客户端")

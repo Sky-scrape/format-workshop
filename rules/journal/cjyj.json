@@ -393,7 +393,6 @@
       "min": 15000,
       "note": "须知要求 15000—25000 字，不接受短文与超短文"
     },
-    "total_min": 15000,
     "abstract": {
       "value": 500,
       "metric": "chars_cn",

@@ -55,6 +55,8 @@ KIND = {
     "文献条目编号归一": "B",
     "表注／图注层序调整": "B",
     "段首缩进空格删除": "B",
+    "段尾空白删除": "B",
+    "全角字母数字归一": "B",
     # 引用转换（--citation 才会产生，按是否触及字符定档）
     "正文引用改作者-年份": "B",
     "条目按目标刊体例重排": "B",
@@ -85,7 +87,8 @@ GRADE_DESC = {
 # tests/test_fix_audit_kinds.py 断言本集合 == B 档 ∩ 渲染器 blocked 分支。
 REJECTABLE = {"标题重新编号", "题注归一", "标签归一", "文献表标题归一",
               "关键词分隔符归一", "文献条目编号归一",
-              "表注／图注层序调整", "段首缩进空格删除"}
+              "表注／图注层序调整", "段首缩进空格删除",
+              "段尾空白删除", "全角字母数字归一"}
 
 
 def clip(text, limit=48):
@@ -188,20 +191,42 @@ def render(d, job=None):
     for it in layout_items:
         groups.setdefault(it["action"], []).append(it)
 
-    text_rows = "".join(
-        f'<tr data-k="{html.escape(it["action"] + " " + it.get("note", ""))}"'
-        f'{" class=rejected" if it.get("rejected") else ""}>'
-        f'<td class="pos">{pos_label(it["idx"])}'
-        f'<span class="sec">{html.escape(it.get("sec") or "")}</span></td>'
-        f'<td class="act">{html.escape(it["action"])}'
-        f'{"<span class=tag>已驳回</span>" if it.get("rejected") else ""}</td>'
-        f'<td class="diff"><span class="old">{clip(it["before"])}</span>'
-        f'<span class="arrow">→</span><span class="new">{clip(it["after"])}</span></td>'
-        f'<td class="note">{html.escape(it.get("note", ""))}'
-        f'{"<code class=ref>" + html.escape(it["rule"]) + "</code>" if it.get("rule") else ""}</td>'
-        f'{reject_cell(it)}</tr>'
-        for it in text_items
-    ) or f'<tr><td colspan="{col}" class="empty">本次没有触及任何字符的改动</td></tr>'
+    # 触及字符的改动同样按动作分组：同类几十条时，逐条勾选「保留原文」
+    # 不现实（DESIGN §3：B 档支持逐条确认或按类批量确认）。每组一个小标题
+    # 行，带「全选本类」开关；单条勾选框仍在，驳回粒度没有变粗。
+    text_groups = {}
+    for it in text_items:
+        text_groups.setdefault(it["action"], []).append(it)
+
+    def text_row(it, gid):
+        return (f'<tr data-g="{gid}" data-k="{html.escape(it["action"] + " " + it.get("note", ""))}"'
+                f'{" class=rejected" if it.get("rejected") else ""}>'
+                f'<td class="pos">{pos_label(it["idx"])}'
+                f'<span class="sec">{html.escape(it.get("sec") or "")}</span></td>'
+                f'<td class="act">{html.escape(it["action"])}'
+                f'{"<span class=tag>已驳回</span>" if it.get("rejected") else ""}</td>'
+                f'<td class="diff"><span class="old">{clip(it["before"])}</span>'
+                f'<span class="arrow">→</span><span class="new">{clip(it["after"])}</span></td>'
+                f'<td class="note">{html.escape(it.get("note", ""))}'
+                f'{"<code class=ref>" + html.escape(it["rule"]) + "</code>" if it.get("rule") else ""}</td>'
+                f'{reject_cell(it)}</tr>')
+
+    if text_items:
+        chunks = []
+        for gid, (action, rows) in enumerate(text_groups.items()):
+            n_rj = sum(1 for it in rows if it["action"] in REJECTABLE)
+            pick = (f'<label class="pickall"><input type="checkbox" class="pickg" '
+                    f'data-g="{gid}"><span>全选本类</span></label>'
+                    f'<span class="gcount">{len(rows)} 条'
+                    f'{f"，其中 {n_rj} 条可驳回" if n_rj else "，均不可驳回"}</span>'
+                    if job and n_rj else
+                    f'<span class="gcount">{len(rows)} 条</span>')
+            chunks.append(f'<tr class="aghead" data-g="{gid}"><td colspan="{col}">'
+                          f'<span class="aname">{html.escape(action)}</span>{pick}</td></tr>')
+            chunks.extend(text_row(it, gid) for it in rows)
+        text_rows = "".join(chunks)
+    else:
+        text_rows = f'<tr><td colspan="{col}" class="empty">本次没有触及任何字符的改动</td></tr>'
 
     group_html = []
     for action, rows in groups.items():
@@ -366,6 +391,13 @@ font-size:12.5px;padding:7px 16px;border-radius:999px;cursor:pointer;white-space
 background:#f2ece0;color:var(--gold)}}
 tr.rejected .old{{text-decoration:none;color:var(--ink3)}}
 tr.rejected .new{{color:var(--ink3);text-decoration:line-through}}
+tr.aghead td{{padding:14px 0 6px;border-top:1px solid var(--line);background:transparent}}
+tr.aghead:first-child td{{padding-top:2px;border-top:none}}
+.aname{{font-weight:500;font-size:13px}}
+.pickall{{display:inline-flex;align-items:center;gap:6px;margin-left:14px;font-size:12px;
+color:var(--ink3);cursor:pointer}}
+.pickall input{{width:14px;height:14px;cursor:pointer;accent-color:var(--gold)}}
+tr.aghead .gcount{{margin-left:10px}}
 .anon li{{margin:4px 0;font-size:12.5px;color:var(--ink2)}}
 @media(max-width:640px){{
   .kpi{{flex-wrap:wrap}}.kpi div{{flex:1 1 45%;border-left:none;border-top:1px solid var(--line2)}}
@@ -444,6 +476,21 @@ q.addEventListener('input',()=>{{
     g.hidden=!!v&&!g.textContent.toLowerCase().includes(v);
     if(v)g.open=true;
   }});
+}});
+/* 按类批量驳回：分组开关只动本组可驳回的勾选框，单条勾选仍可继续微调 */
+document.querySelectorAll('.pickg').forEach(box=>{{
+  const gid=box.dataset.g;
+  const rows=()=>[...document.querySelectorAll('#textTable tbody tr[data-g="'+gid+'"]')]
+    .filter(tr=>!tr.classList.contains('aghead'));
+  const boxes=()=>rows().map(tr=>tr.querySelector('input[name=rid]')).filter(Boolean);
+  const sync=()=>{{
+    const bs=boxes();
+    box.checked=bs.length>0&&bs.every(c=>c.checked);
+    box.indeterminate=!box.checked&&bs.some(c=>c.checked);
+  }};
+  box.addEventListener('change',()=>boxes().forEach(c=>{{c.checked=box.checked}}));
+  boxes().forEach(c=>c.addEventListener('change',sync));
+  sync();
 }});
 </script>
 </body></html>"""

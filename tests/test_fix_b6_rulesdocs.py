@@ -15,7 +15,7 @@
        仍成立。
 - F62  schema 结构图 verification 移到顶层；placement 枚举补三值并配含义。
 - F63  覆盖面计数跨文档一致：会计单列（1 本）、管理学 6 本，桶合计以实际清单为准。
-- F64  needs.md 同步 27 本：第七批入库记录与中文 20 / 英文 7 口径都在。
+- F64  needs.md 同步 29 本：第七/八批入库记录与中文 22 / 英文 7 口径都在。
 - F65  schema §3 block 类型总表覆盖规则集在用的每一个类型（含本批补的
        subtitle/doi/article_number/column_name/endnotes）。
 - READMEIT  已知限制声明重排条目为纯文本、原条目内斜体不保留。
@@ -42,7 +42,7 @@ AUDIT_MD = ROOT / "rules" / "audit-2026-11-01.md"
 README_MD = ROOT / "README.md"
 
 # 本文件钉的是「台账 ↔ 全库磁盘状态」的一致性：coverage/gaps/needs 描述完整
-# 规则库（27 本），开源检出只有 3 本示例（README「开源边界」），文件数对不上
+# 规则库（29 本），开源检出只有 3 本示例（README「开源边界」），文件数对不上
 # 是常态不是回归——全库一致性只在本地全库环境跑，公开检出整文件跳过。
 pytestmark = pytest.mark.skipif(
     len(list(RULES.glob("*.json"))) < 10,
@@ -203,10 +203,10 @@ def test_f61_erratum_facts_hold_in_data():
     assert not failures
     unknown = sum(r["provenance"]["unknown"] for r in rows)
     total = sum(r["size_fields"] for r in rows)
-    assert f"{unknown}/{total}" == "0/556", \
+    assert f"{unknown}/{total}" == "0/627", \
         f"出处计数漂成 {unknown}/{total}——勘误第 4 条的口径要跟着对齐"
     # 推定类单独成桶：纯推定项有出处，但必须与官方/实测区分开、可追踪复核
-    assert sum(r["provenance"]["inferred"] for r in rows) == 43, \
+    assert sum(r["provenance"]["inferred"] for r in rows) == 52, \
         "inferred 桶漂移——勘误第 4 条的推定计数要跟着对齐"
 
 
@@ -269,9 +269,10 @@ def test_f63_counts_agree_across_documents():
 def test_f64_needs_md_synced_to_current_library():
     t = read(NEEDS_MD)
     assert "均已凭正文 PDF 补齐，22 本" not in t, "needs.md 还停在 22 本"
-    # 第七批（2026-11-04）入库后：中文 20 + 英文 7 = 27 本
-    assert "共 27 本" in t, "needs.md 没有同步到 27 本"
+    # 第八批（2026-11-12）入库后：中文 22 + 英文 7 = 29 本
+    assert "共 29 本" in t, "needs.md 没有同步到 29 本"
     assert "第七批" in t, "第七批入库记录缺失"
+    assert "第八批" in t, "第八批入库记录缺失"
     assert "**管理科学学报 / 系统工程理论与实践 / 管理工程学报**" not in t
 
 
@@ -293,13 +294,19 @@ def test_f65_schema_block_table_covers_all_used_types():
 # ---------------------------------------------------------------- READMEIT
 
 def test_readmeit_italic_loss_disclosed():
+    """已知限制必须说清斜体的真实边界（2026-11-13：可按 italic_fields 保留）。
+
+    旧版声明「重排后条目一律纯文本」；现在规则集声明 italic_fields 就会
+    保留斜体区间。限制条目仍要在场，且必须说明「没声明就不加斜体」——
+    不能把可选的版式支持写成默认能力。
+    """
     t = read(README_MD)
     known = t[t.index("## 已知限制"):]
     m = re.search(r"^- \*\*参考文献只改编号写法\*\*.*$", known, re.M | re.S)
     assert m, "已知限制里找不到参考文献条目那一条"
     bullet = m.group(0).split("\n- ")[0]
-    assert "重排后的条目为纯文本" in bullet and "斜体（如英文刊名）不保留" in bullet, \
-        f"已知限制未声明重排条目的斜体损失：{bullet[-120:]}"
+    assert "italic_fields" in bullet and "没声明就保持纯文本" in bullet, \
+        f"已知限制未声明斜体的声明式边界：{bullet[-160:]}"
 
 
 # ---------------------------------------------------------------- PROVCLS

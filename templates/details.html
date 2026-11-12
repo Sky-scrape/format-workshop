@@ -43,6 +43,8 @@ border:1px solid var(--line);border-radius:9px;background:#faf9f6;cursor:pointer
 font-size:var(--fs-aux);color:#7d3a30;line-height:1.9;margin:0 0 14px}
 .skip-box{background:#fbf7ec;border:1px solid #e8dcc0;border-radius:10px;padding:12px 14px;
 font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
+.warn-box a.jump{color:inherit;font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.field:target{background:#fffdf2;border-radius:8px;box-shadow:0 0 0 4px #fffdf2;scroll-margin-top:18px}
 @media(max-width:900px){.fill-grid{grid-template-columns:1fr}.footer-grid{grid-template-columns:1fr}
 .fill-shell{padding:18px 14px 44px}}
 </style>
@@ -59,13 +61,19 @@ font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
   </div>
 
   {% if blocking %}
-  <div class="warn-box"><strong>稿件本体还缺 {{ blocking|length }} 项必备要件：{{ blocking|join('、') }}。</strong>
+  <div class="warn-box"><strong>稿件本体还缺 {{ blocking|length }} 项必备要件：{% for b in blocking_items %}{% if b.anchor %}<a class="jump" href="#field-{{ b.anchor }}">{{ b.label }}</a>{% else %}{{ b.label }}{% endif %}{% if not loop.last %}、{% endif %}{% endfor %}。</strong>
     这些不能靠跳过补录绕过去：能在下方补录的直接填（如英文摘要），补录不了的要先在 Word 原稿里补齐。
     补齐之前不会开始排版，页面上也不会留下占位符。</div>
   {% endif %}
   {% if optional_missing %}
   <div class="skip-box">另有 {{ optional_missing|length }} 项可跳过的补录项：{{ optional_missing|join('、') }}。
     留空即可——这些位置在成品里不会出现，也不会留下占位符。</div>
+  {% endif %}
+  {% if switch_notes %}
+  <div class="skip-box" style="background:#f4f8fb;border-color:#d5e2ec;color:#3d566b">
+    <strong>换刊提醒：</strong>
+    <ul style="margin:6px 0 0;padding-left:18px">{% for n in switch_notes %}<li>{{ n }}</li>{% endfor %}</ul>
+  </div>
   {% endif %}
 
   {# 版式体检是附加信息：只读、不拦排版。旧任务没有这份报告时整块不出现。 #}
@@ -104,7 +112,7 @@ font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
         <h2>缺失要件 <span>只有该刊要求、而稿子里没有的才会出现</span></h2>
         {% if not fields %}<p class="sub">该刊要求的组成部分都已具备，这里没有要补的。</p>{% endif %}
         {% for f in fields %}
-        <div class="field">
+        <div class="field" id="field-{{ f.key }}">
           <label><b>{{ f.label }}</b>
             {% if f.need %}<span class="badge-need">该刊必备<i class="sep"></i>缺失</span>{% else %}<span class="badge-has">已有，可改</span>{% endif %}
           </label>
@@ -124,7 +132,7 @@ font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
       <p class="sub">留空就完全不出现，不会留下"基金项目："这样的空标签。</p>
       <div class="footer-grid">
         {% for key, label, hint, value in footer_fields %}
-        <div class="field">
+        <div class="field" id="field-{{ key }}">
           <label><b>{{ label }}</b></label>
           <input type="text" name="{{ key }}" value="{{ value }}" placeholder="{{ hint }}">
         </div>
@@ -138,7 +146,7 @@ font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
       <p class="sub">按该刊要求逐项填写；跳过的项不会出现在页面上，也不会留下空标签。</p>
       <div class="footer-grid">
         {% for f in author_fields %}
-        <div class="field">
+        <div class="field" id="field-{{ f.key }}">
           <label><b>{{ f.label }}</b></label>
           <input type="text" name="{{ f.key }}" value="{{ f.value }}" placeholder="{{ f.hint }}">
         </div>
@@ -191,6 +199,16 @@ font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
         引错文献比不转更麻烦。
       </p>
     </section>
+    {% endif %}
+
+    {% if profile_enabled %}
+    <p class="sub" style="margin:4px 0 0">已启用本机作者档案{% if profile_prefilled %}，本次预填了 {{ profile_prefilled }} 项身份信息{% endif %}。
+      只补空位，不覆盖你本次填的内容；可在「设置」里暂停或清除。</p>
+    {% else %}
+    <label class="cite-opt" style="margin-top:4px">
+      <input type="checkbox" name="remember_profile">
+      <span>记住这些身份信息，下次自动预填（可选，保存在本机；不存摘要、标题、基金与身份证号）</span>
+    </label>
     {% endif %}
 
     <div class="actions">

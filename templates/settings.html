@@ -60,6 +60,7 @@
   {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
   {% if success %}<div class="flash good">{{ success }}</div>{% endif %}
   {% if shell_saved %}<div class="flash good">桌面壳偏好已保存，下次启动生效。</div>{% endif %}
+  {% if profile_saved %}<div class="flash good">作者档案设置已更新。</div>{% endif %}
 
   <div class="card">
     <h2>桌面软件</h2>
@@ -165,6 +166,37 @@
     </div>
     <div id="testOut"></div>
   </form>
+
+  <div class="card" style="margin-top:16px">
+    <h2>本机作者档案</h2>
+    <p class="hint">默认关闭。启用后，补录页会用这里保存的姓名、单位、邮箱、作者简介等身份信息预填空位；
+      只存与具体论文无关的字段，<strong>不存摘要、标题、基金项目、身份证号</strong>。
+      档案只留在本机，不进规则集、不进审计报告。</p>
+    {% if profile_enabled %}
+    <p style="font-size:var(--fs-body);color:var(--accent);margin:0 0 12px">已启用，已保存 {{ profile_count }} 项。</p>
+    <div class="actions" style="margin:0">
+      <form method="post" action="/settings/profile" style="margin:0">
+        <input type="hidden" name="action" value="disable">
+        <button class="btn-ghost" type="submit">暂停自动预填</button>
+      </form>
+      <form method="post" action="/settings/profile" style="margin:0"
+            onsubmit="return confirm('清除本机作者档案？已保存的姓名、单位、邮箱等会被删除，补录页不再预填。')">
+        <input type="hidden" name="action" value="clear">
+        <button class="btn-ghost" type="submit">清除本机档案</button>
+      </form>
+    </div>
+    {% else %}
+    <p style="font-size:var(--fs-body);color:var(--ink3);margin:0 0 12px">
+      {% if profile_count %}已保存 {{ profile_count }} 项，但当前未启用预填。{% else %}尚未保存任何信息。{% endif %}
+    </p>
+    <form method="post" action="/settings/profile" style="margin:0">
+      <input type="hidden" name="action" value="enable">
+      <button class="btn" type="submit">启用自动预填</button>
+    </form>
+    {% endif %}
+    <p style="font-size:var(--fs-aux);color:var(--ink3);margin:12px 0 0">
+      档案文件：<code>{{ profile_path }}</code>。也可以在补录页勾选「记住这些信息」直接保存。</p>
+  </div>
 
   <div class="card" style="margin-top:16px">
     <h2>AI 在这里做什么，不做什么</h2>

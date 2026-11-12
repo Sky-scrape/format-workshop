@@ -95,6 +95,7 @@
   "reference_list": {
     "sort": "by_order" | "alphabetical",
     "templates": { "cn_journal": "{authors}：《{title}》…", "en_book": "…" },
+    "italic_fields": { "en_journal": ["journal"], "en_book": ["title"] },
     "authors_before_et_al": 3,
     "language_field_required": true
   }
@@ -121,6 +122,8 @@
 
 `reference_list.templates` 是引用体系重排（§1.4）消费的条目模板，键为 `{语言}_{类型}`（`cn_journal` / `en_book`…，与 `citation_ref.KIND` 的 slot 对应），值必须带 `{authors}` 这类**占位符**——渲染器只认带占位符的模板；纯描述式的著录写法说明（如 GB/T 7714 的「[序号]主要责任者.文献题名[M]…」）不是模板，放进来也不会被拿去改写条目。
 
+`reference_list.italic_fields`（可选，2026-11-13）声明模板里哪些占位符要排斜体：可以是一个数组（所有模板共用，如 `["journal"]`），也可以是 `{模板键: [字段]}`（如 `{"en_journal": ["journal"], "en_book": ["title"]}`）。声明后，条目重排会给对应文字区间加 `w:i`，其余字样与 run 格式不动；**不声明就一律不加**——斜体是版式事实，必须有出处，不能替期刊猜。
+
 ---
 
 ## 5. limits：只用于提醒
@@ -146,10 +149,10 @@
 
 总字数的上限与下限：
 
-- 上限写 `limits.total.value`；下限有两种登记位置——`limits.total.min`（推荐，如 cjyj）或顶层 `limits.total_min`（兼容，如 cmjj）。只写下限、不写上限（"不少于 N 字"）是合法形态，报告与规格页显示 `≥` 或区间，不会把下限丢掉。
+- 上限写 `limits.total.value`；下限写 `limits.total.min`（**规范写法**，2026-11-13 起入库样本已全部归一）。读取侧仍兼容顶层 `limits.total_min` 供外部旧规则集使用，但新数据不要再这样写——迁移工具 `tools/normalize_keys.py`。只写下限、不写上限（"不少于 N 字"）是合法形态，报告与规格页显示 `≥` 或区间，不会把下限丢掉。
 - 报告会分别给出"超出上限"与"低于下限"；下限只提醒，本工具不会生成内容去补足。
 
-标题字数上限同样兼容两种写法：`limits.title_chars_max`（多数刊，推荐）与 `limits.title_max_chars`（如 cjwt）。
+标题字数上限的规范写法是 `limits.title_chars_max`；读取侧兼容 `limits.title_max_chars`，新数据不再使用。
 
 `limits.total.scope` 是各刊投稿须知的原话。已认识的写法：`正文`、`正文（含字符）`（cjwt，语义就是正文）、`全文`、`全文（含图表）`。认不出的写法一律保守按全文统计，并在报告里注明回退——绝不把全文数字偷偷对到正文上限上。
 
@@ -196,6 +199,46 @@
 审计页对 ≥12 条的批量推定项按区块分组折叠（默认收起、计数徽标、逐条仍可达），
 对不上号的归入「其他推定」组。落盘 JSON 的 assumptions 条数不因展示分层而减少；
 手工维护的规则集推定项通常少于阈值，保持平铺。共享实现在 `tools/assume_groups.py`。
+
+### 6.2 mode / manual：手工建库与逐项修正
+
+稿约来源不限于 PDF：`tools/extract_journal.py` 的 `read_source()` 按扩展名收
+`.pdf` / `.docx` / `.txt` / `.md`。Word 取正文与表格，TXT 依次按 UTF-8、
+GB18030、UTF-16 解码；取文结果记在 `extraction.text_method`（`text_layer` /
+`ocr` / `mixed` / `docx` / `txt`），PDF 之外的来源没有页数，`pages` 为 `null`。
+
+`verification.extraction.mode` 区分草稿怎么来的：
+
+| 值 | 含义 |
+|---|---|
+| `ai` | AI 从稿约抽事实，每个落盘值带原文引文；`used` 记录依据 |
+| `manual` | 不调用 AI，从结构基线起一份空草稿；全部字段先进 `inherited` |
+
+AI 不可用时，web 与 CLI 都会自动落到 `manual`，不把建库整条路堵死。
+
+复核页的「手工修正规则值」表单通过 `POST /journals/draft/<jid>/edit` 写回
+`draft.json`，并在 `extraction.manual` 留痕。该键是对象，键为 FACTS 键或成组项
+（`body_line` / `heading_levels`），值为：
+
+```json
+{ "label": "正文字号(pt)", "value": 12, "previous": 10.5,
+  "evidence": "原 AI 抽取值若被覆盖，这里保留它当时的原文引文" }
+```
+
+口径：
+
+- 只记录**与当前值不同**的字段。表单每次提交全部字段，未改动项不得记成手工修正，
+  否则 `inherited` 会被瞬间清零。
+- 手工修正的字段路径计入 `manual_paths()`，并从 `inherited` 中移出；没改的字段
+  继续按基线逐条披露。
+- 被人工覆盖的 AI 抽取值从 `used` 移出（它已不再描述当前值），但原文引文保留在
+  `manual.<key>.evidence`，便于追溯模型当时读的是哪一句。
+- 建库页可选结构基线刊，选择结果记在 `extraction.baseline`；`apply_manual()` 必须
+  按这份基线重算继承披露，不能固定用默认基线，否则「与基线相同」会判错。
+- `apply_manual()` 只拒绝类型错误（如字母冒充字号）；超出结构范围的值可以落草稿，
+  由 `validate()` 记成阻断性错误，发布闸不放行。这与 AI 草稿口径一致。
+- 发布后 `verification.status` 仍是 `unverified`，直到人工把 `verified_by` /
+  `status` 改成人工核验状态。
 
 ---
 
@@ -1046,7 +1089,7 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 
 | 权威类型 | 期刊 |
 |---|---|
-| `template` | 国际金融研究、会计研究 |
+| `template` | 国际金融研究、会计研究、**调研世界**、**税务与经济** |
 | `guide` | 中国工业经济、数量经济技术经济研究、财贸经济、经济管理、南开管理评论、外国经济与管理、上海财经大学学报 + 6 本英文刊 |
 | `published` | 金融研究、财经研究、管理世界、世界经济、统计研究、经济研究、**中国管理科学** |
 
@@ -1112,10 +1155,10 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 
 | 权威类型 | 期刊 |
 |---|---|
-| `template` | 国际金融研究、会计研究 |
+| `template` | 国际金融研究、会计研究、**调研世界**、**税务与经济** |
 | `guide` | 中国工业经济、数量经济技术经济研究、财贸经济、经济管理、南开管理评论、外国经济与管理、上海财经大学学报、**管理科学学报** + 6 本英文刊 |
 | `published` | 金融研究、财经研究、管理世界、世界经济、统计研究、经济研究、中国管理科学 |
 
 管理科学学报严格说是"guide + published"混合：结构有官方明文，版式靠实物。`typography_authority` 记 `guide`（版式依据来自同族刊与实物混合），`status` 记 `verified`（有 3 篇实物互证）。
 
-至此中文 17 本、英文 6 本。管理学方向 6 本（工商管理与运筹决策两支），会计研究单列 1 本——分类口径与 `coverage.md`、`gaps.md` 一致（会计不折入管理学）。
+至此中文 22 本、英文 7 本。管理学方向 6 本（工商管理与运筹决策两支），会计研究单列 1 本，财税方向 1 本（税务与经济）——分类口径与 `coverage.md`、`gaps.md` 一致（会计不折入管理学）。

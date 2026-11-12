@@ -81,8 +81,10 @@ STEP_TIMEOUT = 300
 
 import ai_assist        # noqa: E402  AI 配置与调用
 import atomic_io        # noqa: E402  原子写（小配置文件）
+import author_profile   # noqa: E402  本机作者档案（默认关闭，可一键清除）
 import docx_meta        # noqa: E402  DOCX 元数据隐私闸门
 import extract_journal  # noqa: E402  稿约 PDF → 规则集草稿
+import jobstore         # noqa: E402  任务目录读写原语（2026-11-13 拆分）
 import ocr              # noqa: E402  PDF 取文（文字层优先，缺则 OCR）
 import rules_ref        # noqa: E402  审计引用 → 规则集字段解析
 
@@ -419,86 +421,23 @@ def job_dir(job):
     return d
 
 
-def read_json_safe(path):
-    """读 JSON 文件，坏文件（截断 / 编码错 / 读失败）返回 None，绝不抛异常。
-
-    faulthandler 都装上了，说明「进程被硬杀」是预期场景，半截 JSON 会留下。
-    """
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
-def read_meta(d):
-    """读任务 meta。进程硬杀会留下截断的 JSON，一条坏 meta 不许把 history
-    和任务页整页拖成 500（F34）：把它当作缺失，从现场文件推断最低限度的状态。
-
-    推断只回答「这个任务走到了哪一步、还剩什么可用」，能救回多少救多少，
-    救不回的字段留空，由各页面按缺失兜底（fail_page 会把推断结果写回，
-    相当于就地自愈，不再等 24 小时 TTL 整目录删除）。
-    """
-    p = d / "meta.json"
-    if p.exists():
-        m = read_json_safe(p)
-        if isinstance(m, dict):
-            return m
-    m = {}
-    if (d / "error.json").is_file():
-        m["stage"] = "failed"          # 最后一次落笔是失败页 → 停在失败态
-    ir = read_json_safe(d / "manuscript.ir.json")
-    if isinstance(ir, dict) and ir.get("source"):
-        # 解析成功时 IR 里记录了用户上传的原始文件名，可以由此救回
-        m["original"] = ir["source"]
-        m["stem"] = Path(ir["source"]).stem or "稿件"
-    delivered = [q for q in sorted(d.glob("manuscript.*.docx"))
-                 if not q.name.endswith(".anon.docx")]
-    if delivered:                      # 成品文件名 manuscript.<刊id>.docx 反推目标刊
-        m["docx"] = delivered[0].name
-        m["journal"] = delivered[0].name[len("manuscript."):-len(".docx")]
-    return m
-
-
-def replace_with_retry(src, dst):
-    """原子替换；Windows 上目标被读者短暂打开时做有限退避，不无限等待。
-
-    4 次退避共约 0.24s，最后一次直接抛出（FX1 实测 0.247s）。
-    """
-    delays = (0.02, 0.04, 0.08, 0.1, 0.2)
-    for attempt in range(5):
-        try:
-            os.replace(src, dst)
-            return
-        except PermissionError:
-            if attempt == 4:
-                raise
-            time.sleep(delays[attempt])
+# 任务目录的读写原语在 tools/jobstore.py（2026-11-13 拆分）：与 Flask 解耦，
+# 坏文件兜底与原子写的口径只有一份。写入口在 app 层薄包一层，把
+# replace_with_retry 按调用时的模块属性传下去——测试 monkeypatch 它来观察
+# 临时名，默认绑定在 jobstore 里就看不见了。
+from jobstore import (  # noqa: E402,F401  （公开名，供路由与测试 import）
+    read_json, read_json_safe, read_meta, replace_with_retry,
+)
 
 
 def write_json_atomic(path, data):
-    """把 JSON 完整写入同目录唯一临时名，再原子替换目标。
-
-    临时名必须带随机后缀：固定的 meta.json.tmp / details.json.tmp 在两个
-    写者并发时会互相覆盖，甚至一个 finally 把另一个尚未落位的临时文件删掉。
-    同目录替换保证不跨卷；读方只会看到完整旧值或完整新值。
-    """
-    p = Path(path)
-    tmp = p.with_name(f".{p.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        replace_with_retry(tmp, p)
-    finally:
-        tmp.unlink(missing_ok=True)
+    """JSON 原子写；替换实现取模块级 replace_with_retry（可被测试替换）。"""
+    return jobstore.write_json_atomic(path, data, replace=replace_with_retry)
 
 
 def write_meta(d, meta):
     """meta.json 原子写（F34），并支持同任务的并发写者。"""
     write_json_atomic(d / "meta.json", meta)
-
-
-def read_json(path, default=None):
-    p = Path(path)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
 
 
 # ---------------------------------------------------------------- 错误翻译
@@ -1211,18 +1150,16 @@ def _anonymized_types(rules):
             if isinstance(t, str)}
 
 
-def blocking_missing(rows_raw, data, rules=None):
-    """列出会阻断开始排版的「稿件本体必备要件」。
+def blocking_details(rows_raw, data, rules=None):
+    """会阻断排版的必备要件，带补录页锚点。
 
-    只看 required 且判缺的块：article_number / document_code 这类由编辑部
-    给定、highlights 这类另附文件不派给作者；匿名刊要求删掉的署名类块也不
-    算缺件（见 _anonymized_types）；能由补录字段补齐的（英文摘要、英文标题、
-    作者简介…），表单里有非空值就算补齐——否则用户填完还得回 Word 改，
-    补录页就白做了。
+    与 blocking_missing 同一判据；返回值多带 anchor（MISSING_TO_FIELD 的
+    字段键），补录页据此把缺件横幅变成可点的定位链接。补不了项的 anchor
+    为空串，页面按纯文本展示——不能给一个点了没反应的链接。
     """
     cr = compliance()
     anonymized = _anonymized_types(rules)
-    out = []
+    out, seen = [], set()
     for t, lang, name, ok, req in rows_raw or []:
         if ok or not req:
             continue
@@ -1232,9 +1169,23 @@ def blocking_missing(rows_raw, data, rules=None):
         if key and (data.get(key) or "").strip():
             continue
         label = BLOCK_LABEL.get(t, name)
-        if label not in out:
-            out.append(label)
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append({"label": label, "anchor": key or "", "block": t})
     return out
+
+
+def blocking_missing(rows_raw, data, rules=None):
+    """列出会阻断开始排版的「稿件本体必备要件」。
+
+    只看 required 且判缺的块：article_number / document_code 这类由编辑部
+    给定、highlights 这类另附文件不派给作者；匿名刊要求删掉的署名类块也不
+    算缺件（见 _anonymized_types）；能由补录字段补齐的（英文摘要、英文标题、
+    作者简介…），表单里有非空值就算补齐——否则用户填完还得回 Word 改，
+    补录页就白做了。
+    """
+    return [x["label"] for x in blocking_details(rows_raw, data, rules)]
 
 
 def optional_missing(rows_raw):
@@ -1243,6 +1194,60 @@ def optional_missing(rows_raw):
     return [name for t, lang, name, ok, req in rows_raw or []
             if not ok and not req
             and t not in cr.NON_ACTIONABLE and t not in cr.EXTERNAL_BLOCKS]
+
+
+def _author_page_enabled(rules):
+    ap = ((rules or {}).get("submission") or {}).get("author_page") or {}
+    return bool(ap.get("separate_page"))
+
+
+def _footnote_fields(rules):
+    out = {}
+    for f in (rules or {}).get("personal_fields") or []:
+        if isinstance(f, dict) and f.get("id") and f.get("placement") == "footnote":
+            out[f["id"]] = f.get("label_zh") or f["id"]
+    return out
+
+
+def author_info_handoff(old, new, saved=None):
+    """换刊时人员信息的承接提醒（DESIGN §13.3 的已知缺口）。
+
+    作者页上的字段不会重复写进首页脚注；从「要求作者页」的刊换到「不要求」
+    的刊时，已填的作者页内容不会自动跟着进成品，只能靠首页脚注/署名行。
+    这里只提示，不替用户搬内容、不生成占位符。
+    """
+    if not old or not new:
+        return []
+    old_name = (old.get("journal") or {}).get("name_zh") or "原刊"
+    new_name = (new.get("journal") or {}).get("name_zh") or "目标刊"
+    notes = []
+    old_ap, new_ap = _author_page_enabled(old), _author_page_enabled(new)
+    if old_ap and not new_ap:
+        labels = [f.get("label_zh") or f.get("id")
+                  for f in old.get("personal_fields") or []
+                  if isinstance(f, dict) and f.get("placement") == "author_page"]
+        filled = [f["id"] for f in old.get("personal_fields") or []
+                  if isinstance(f, dict) and f.get("placement") == "author_page"
+                  and (saved or {}).get(f.get("id") or "")]
+        detail = ("已填的 " + "、".join(
+            f.get("label_zh") or f["id"] for f in old.get("personal_fields") or []
+            if isinstance(f, dict) and f["id"] in filled)) if filled else \
+                 ("、".join(labels[:4]) + ("等" if len(labels) > 4 else "") if labels else "作者信息页")
+        notes.append(
+            f"《{old_name}》要求作者信息单独成页；《{new_name}》不设作者页。"
+            f"原作者页上的 {detail} 不会自动写进新成品——"
+            f"这些信息只会出现在首页脚注与署名行，请在下方补录页确认通讯作者与基金信息。")
+    elif not old_ap and new_ap:
+        notes.append(
+            f"《{new_name}》要求作者信息单独成页，下方补录页已列出需要填写的字段；"
+            f"匿名稿会整页删除，署名稿保留。")
+    old_fn, new_fn = _footnote_fields(old), _footnote_fields(new)
+    lost = [label for fid, label in old_fn.items() if fid not in new_fn]
+    if lost:
+        notes.append(
+            f"原刊写在首页脚注的 {'、'.join(lost[:4])} 在《{new_name}》规则集里没有对应字段，"
+            f"不会自动带过去；如需保留，请在补录页的「首页脚注」里手工填写。")
+    return notes
 
 
 def author_page_fields(rules, saved=None):
@@ -1381,6 +1386,26 @@ def details_context(d, meta):
 
     for f in field_rows:
         f["value"] = saved.get(f["key"], "")
+    # 本机作者档案（§10.7）：默认关闭；启用后只补空位，不覆盖本次已填值。
+    # 档案里没有论文专属字段（摘要/标题/基金），不会把上一篇的内容带进来。
+    profile_vals, _profile_saved_n = author_profile.prefill(saved)
+    profile_prefilled = 0
+    for f in field_rows:
+        if not f["value"] and profile_vals.get(f["key"]):
+            f["value"] = profile_vals[f["key"]]
+            profile_prefilled += 1
+    footer_values = []
+    for k, label, hint, value in [(k, label, hint, saved.get(k, ""))
+                                  for k, label, hint in FOOTER_FIELDS]:
+        if not value and profile_vals.get(k):
+            value = profile_vals[k]
+            profile_prefilled += 1
+        footer_values.append((k, label, hint, value))
+    author_values = author_page_fields(rules, saved)
+    for f in author_values:
+        if not f["value"] and profile_vals.get(f["key"]):
+            f["value"] = profile_vals[f["key"]]
+            profile_prefilled += 1
 
     # 引用体系重排只在「规则集给了条目模板 + 稿子确实用编号引用」时才提供
     cite_cfg = rules.get("citation") or {}
@@ -1405,11 +1430,14 @@ def details_context(d, meta):
         "abstract_len": len(re.sub(r"\s", "", abstract[0])) if abstract else 0,
         "keywords": keys[0] if keys else "",
         "fields": field_rows,
-        "footer_fields": [(k, label, hint, saved.get(k, "")) for k, label, hint in FOOTER_FIELDS],
-        "author_fields": author_page_fields(rules, saved),
+        "footer_fields": footer_values,
+        "author_fields": author_values,
+        "profile_enabled": author_profile.load()["enabled"],
+        "profile_prefilled": profile_prefilled,
         "placement_groups": placement_groups(rules),
         # 阻断项按已保存的补录值算：填过的英文摘要不该在刷新后又变成「缺件」。
         "blocking": blocking_missing(rows_raw, saved, rules),
+        "blocking_items": blocking_details(rows_raw, saved, rules),
         "optional_missing": optional_missing(rows_raw),
         # 版式体检报告由 _stage_parse 在解析后生成；旧任务没有这份文件时
         # 页面不给死链接，也不显示空摘要。体检脚本直接写文件（非原子），
@@ -1543,10 +1571,34 @@ def settings():
         shell_cfg = json.loads((data_root() / "config" / "close.json").read_text(encoding="utf-8"))
     except Exception:
         shell_cfg = {}
+    prof = author_profile.load()
     return render_template("settings.html", cfg=cfg, error=error, success=success,
                            key_set=bool(str(cfg.get("api_key") or "").strip()),
                            config_path=str(ai_assist.CONFIG_PATH),
-                           close_action=shell_cfg.get("action") or "exit")
+                           close_action=shell_cfg.get("action") or "exit",
+                           profile_enabled=prof["enabled"],
+                           profile_count=len(prof["fields"]),
+                           profile_path=str(author_profile.PROFILE_PATH),
+                           profile_saved=bool(request.args.get("profile_saved")))
+
+
+@app.route("/settings/profile", methods=["POST"])
+def settings_profile():
+    """本机作者档案开关与一键清除（DESIGN §10.7）。
+
+    默认关闭：补录页不勾「记住这些信息」就不会落盘。开启后新任务自动
+    预填空位；关闭只停止预填，不清已存字段；清除才删文件。
+    """
+    action = request.form.get("action")
+    if action == "clear":
+        author_profile.clear()
+    elif action == "enable":
+        author_profile.set_enabled(True)
+    elif action == "disable":
+        author_profile.set_enabled(False)
+    else:
+        abort(400)
+    return redirect(url_for("settings", profile_saved=1))
 
 
 @app.route("/settings/shell", methods=["POST"])
@@ -1601,35 +1653,45 @@ def draft_list():
     return rows
 
 
+def _journal_new_ctx(error=None):
+    journals = load_journals()
+    return dict(ai_ok=ai_assist.available(), cfg=ai_assist.load_config(),
+                error=error, ocr_ok=ocr.available(), ocr_engine=ocr.engine_name(),
+                drafts=draft_list(), journals=journals,
+                existing={j["id"] for j in journals})
+
+
 @app.route("/journals/new")
 def journal_new():
-    return render_template("journal_new.html", ai_ok=ai_assist.available(),
-                           cfg=ai_assist.load_config(), error=None,
-                           ocr_ok=ocr.available(), ocr_engine=ocr.engine_name(),
-                           drafts=draft_list(),
-                           existing={j["id"] for j in load_journals()})
+    return render_template("journal_new.html", **_journal_new_ctx())
 
 
 @app.route("/journals/extract", methods=["POST"])
 def journal_extract():
     def back(msg, status=400):
-        return render_template("journal_new.html", ai_ok=ai_assist.available(),
-                               cfg=ai_assist.load_config(), error=msg,
-                               ocr_ok=ocr.available(), ocr_engine=ocr.engine_name(),
-                               drafts=draft_list(),
-                               existing={j["id"] for j in load_journals()}), status
+        return render_template("journal_new.html", **_journal_new_ctx(msg)), status
 
-    if not ai_assist.available():
-        return back("AI 未配置或未启用。请先到「设置」填写接口与密钥。")
     f = request.files.get("file")
     jid = (request.form.get("jid") or "").strip().lower()
     name = (request.form.get("name") or "").strip()
+    baseline = (request.form.get("baseline") or "").strip().lower()
+    if baseline and (not JID_RE.match(baseline)
+                     or not (RULES_DIR / f"{baseline}.json").exists()):
+        baseline = ""                # 选择项被篡改/规则集已删：退回自动基线
+    mode = (request.form.get("mode") or "auto").strip().lower()
+    if mode not in ("auto", "manual"):
+        mode = "auto"
     if not f or not f.filename:
-        return back("请选择一份稿约 PDF")
-    if not f.filename.lower().endswith(".pdf"):
-        return back("请上传 PDF：稿约通常是 PDF，Word 稿约请先另存为 PDF")
+        return back("请选择一份稿约：PDF、Word（.docx）或 TXT 都可以")
+    suffix = Path(f.filename).suffix.lower()
+    if suffix not in extract_journal.SOURCE_SUFFIXES:
+        return back("只收 PDF、Word（.docx）或 TXT。.doc 老格式请先另存为 .docx；"
+                    "扫描件请用 PDF/Word，并确认本机 OCR 可用。")
     if not JID_RE.match(jid):
         return back("期刊代号只能用小写字母、数字、下划线，2–24 位，例如 jryj")
+    # AI 不可用而用户仍点了「抽取」时，不把整条路堵死：改走手工建库，
+    # 读文后生成基线草稿，字段在复核页填。用户明确选 manual 时同理。
+    manual = mode == "manual" or not ai_assist.available()
     lock = job_lock(f"journal:{jid}")
     if not lock.acquire(blocking=False):
         return back("这本期刊正在抽取或发布，请稍候再试。", 409)
@@ -1640,7 +1702,7 @@ def journal_extract():
 
         d = DRAFT_DIR / jid
         d.mkdir(parents=True, exist_ok=True)
-        src = d / "source.pdf"
+        src = d / f"source{suffix}"
         f.save(src)
 
         try:
@@ -1648,14 +1710,17 @@ def journal_extract():
             # 服务日志——CLI 链路走 stderr，web 链路不传 log 就全部静默，
             # draft.json 里只有结果，查不到「发生过」。
             rules, report, text = extract_journal.extract(
-                src, jid=jid, name_zh=name, log=app.logger.warning)
+                src, jid=jid, name_zh=name, log=app.logger.warning,
+                manual=manual, baseline_id=baseline)
         except Exception as e:  # noqa: BLE001
             app.logger.exception("稿约抽取失败")
-            return back(f"抽取失败：{e}")
+            return back(f"读取稿约失败：{e}")
 
         write_json_atomic(d / "draft.json", rules)
         write_json_atomic(d / "report.json", report)
-        (d / "source.txt").write_text(text, encoding="utf-8")
+        # 取文结果单独落一份，供复核时检索；不能用 source.txt 命名——上传的
+        # 稿约本身可能就叫 source.txt，会把原件覆盖掉。
+        (d / "source_text.txt").write_text(text, encoding="utf-8")
         return redirect(url_for("journal_draft", jid=jid))
     finally:
         lock.release()
@@ -1681,18 +1746,79 @@ def _draft_report(d):
     return report
 
 
+def _draft_ctx(jid, rules, report, error=None):
+    """复核页的统一上下文。GET、保存失败回显与发布失败回显共用一份，
+    避免三处各拼一遍、漏掉新字段（比如手工修正表单）。"""
+    ext = (rules.get("verification") or {}).get("extraction") or {}
+    if not isinstance(ext, dict):
+        ext = {}
+    if not isinstance(ext.get("manual"), dict):
+        ext["manual"] = {}
+    return dict(jid=jid, rules=rules, report=report, ext=ext,
+                journal=rules.get("journal") or {},
+                evidence=ext.get("used") or {},
+                inherited=ext.get("inherited") or [],
+                dropped=ext.get("dropped") or [],
+                field_groups=extract_journal.editable_fields(rules),
+                structural=extract_journal.structural_fields(rules),
+                ai_on=ai_assist.available(), error=error)
+
+
+def _render_draft(jid, rules, report, error=None, status=200):
+    return render_template("journal_draft.html",
+                           **_draft_ctx(jid, rules, report, error)), status
+
+
 @app.route("/journals/draft/<jid>")
 def journal_draft(jid):
     d = draft_dir(jid)
     rules = read_json(d / "draft.json", {}) or {}
-    report = _draft_report(d)
-    ext = (rules.get("verification") or {}).get("extraction") or {}
-    return render_template("journal_draft.html", jid=jid, rules=rules, report=report,
-                           ext=ext, journal=rules.get("journal") or {},
-                           evidence=ext.get("used") or {},
-                           inherited=ext.get("inherited") or [],
-                           dropped=ext.get("dropped") or [],
-                           ai_on=ai_assist.available())
+    return _render_draft(jid, rules, _draft_report(d))
+
+
+@app.route("/journals/draft/<jid>/edit", methods=["POST"])
+def journal_draft_edit(jid):
+    """把复核页手工修正的字段写回草稿，并重新计算继承披露与校验结果。"""
+    if not JID_RE.match(jid or ""):
+        abort(404)
+    lock = job_lock(f"journal:{jid}")
+    if not lock.acquire(blocking=False):
+        return render_template(
+            "error.html", code="…", title="这本期刊正在处理",
+            hint="抽取或发布尚未结束，本次修改没有保存。请稍候再试。"), 409
+    try:
+        d = draft_dir(jid)
+        rules = read_json(d / "draft.json", {}) or {}
+        if not rules:
+            return render_template(
+                "error.html", code="404", title="草稿不存在",
+                hint="这份草稿可能已被删除；请返回规则库重新建刊。"), 404
+        values = {k[2:]: v for k, v in request.form.items() if k.startswith("f_")}
+        structural = None
+        if request.form.get("s_structural"):
+            # 复选框未勾选时浏览器不提交该键：按 context 里的完整清单补齐
+            # False，否则「取消必备」在服务端读不到、等于没保存。
+            ctx = extract_journal.structural_fields(rules)
+            structural = {
+                "anonymous": "s_anon" in request.form,
+                "author_page": "s_author_page" in request.form,
+                "blocks": {b["index"]: f"s_blk_{b['index']}" in request.form
+                           for b in ctx["blocks"]},
+                "statements": {s["key"]: f"s_st_{s['key']}" in request.form
+                               for s in ctx["statements"]},
+            }
+        new_rules, report, errors = extract_journal.apply_manual(
+            rules, values, structural=structural)
+        if errors:
+            # 有错就整单不落盘：不能把一半修正写进草稿，复核页显示的
+            # 值与磁盘上的值必须是同一份。
+            return _render_draft(jid, rules, _draft_report(d),
+                                 error="；".join(errors), status=400)
+        write_json_atomic(d / "draft.json", new_rules)
+        write_json_atomic(d / "report.json", report)
+        return redirect(url_for("journal_draft", jid=jid))
+    finally:
+        lock.release()
 
 
 @app.route("/journals/draft/<jid>/publish", methods=["POST"])
@@ -1717,18 +1843,12 @@ def _journal_publish(jid):
     report = _draft_report(d)
 
     def back(msg, status=400):
-        ext = (rules.get("verification") or {}).get("extraction") or {}
-        return render_template("journal_draft.html", jid=jid, rules=rules, report=report,
-                               ext=ext, journal=rules.get("journal") or {},
-                               evidence=ext.get("used") or {},
-                               inherited=ext.get("inherited") or [],
-                               dropped=ext.get("dropped") or [],
-                               ai_on=ai_assist.available(), error=msg), status
+        return _render_draft(jid, rules, report, error=msg, status=status)
 
     if not report.get("ok_to_publish"):
         return back("还有阻断性错误，先把错误项修掉")
     if request.form.get("confirm") != "on":
-        return back("请先勾选「我已逐项核对」——AI 抽出来的东西不能未经核对就进规则库")
+        return back("请先勾选「我已逐项核对」——草稿不能未经核对就进规则库")
     target = RULES_DIR / f"{jid}.json"
     if target.exists() and request.form.get("overwrite") != "on":
         return back(f"{jid}.json 已存在。确实要覆盖请勾选覆盖选项")
@@ -1748,6 +1868,10 @@ def _journal_publish(jid):
                                for s in (".sample.docx", ".sample.pdf", ".spec.html")]
     token = uuid.uuid4().hex
     backups, applied = {}, []
+    # 复制用 os.replace 是「移动」：复制后草稿里的 PDF 会消失。必须在移动
+    # 之前记下本轮是否真的生成了 PDF，否则后面的「无 PDF 清理旧预览」会把
+    # 刚发布的 PDF 当成旧件删掉。
+    built_pdf = (d / f"{jid}.sample.pdf").is_file()
     try:
         for dst in destinations:
             bak = None
@@ -1783,7 +1907,7 @@ def _journal_publish(jid):
 
     # 本轮没有 PDF 时，旧 PDF 不能留下冒充新样板预览；清理失败只记日志，
     # 规格页本身已不含旧预览，不影响已经成功的发布。
-    if not (d / f"{jid}.sample.pdf").exists():
+    if not built_pdf:
         try:
             (RULES_DIR / f"{jid}.sample.pdf").unlink(missing_ok=True)
         except OSError:
@@ -1979,6 +2103,11 @@ def details(job):
 
     def page_context(base_meta):
         ctx = details_context(d, base_meta)
+        # 换刊时提示人员信息承接（DESIGN §13.3）：作者页/首页脚注里的内容
+        # 不会自动跟着换刊产物走，提前说清楚，别等出稿后才发现少了。
+        ctx["switch_notes"] = (author_info_handoff(
+            rules_of(meta.get("journal") or "") or {}, rules,
+            ctx.get("saved") or {}) if switched else [])
         if not preflight_current:
             ctx["preflight"] = None
             ctx["has_preflight"] = False
@@ -2020,6 +2149,10 @@ def details(job):
                 hint=f"{'、'.join(oversized)} 超过 {DETAIL_FIELD_MAX} 字上限，"
                      "请删减后再提交（一篇论文用不到这么长）。"), 400
         citation = request.form.get("citation") == "on"
+        # 本机作者档案：用户显式勾选「记住这些信息」才落盘（§10.7 默认
+        # 会话级）。只收与论文无关的身份字段，论文专属字段由模块白名单挡掉。
+        if request.form.get("remember_profile") == "on":
+            author_profile.remember(data)
 
         # 结构性要件阻断（DESIGN §10.4）：稿件本体缺件时不允许开始排版。
         # 放在长度闸之后——超长输入先按请求错误拒掉，不必跑体检。
@@ -2286,7 +2419,8 @@ def diff(job):
     ja = journal_by_id(a_id) or {"name": a_id}
     jb = journal_by_id(b_id) or {"name": b_id}
     return render_template("diff.html", job=job, changes=changes,
-                           a=ja, b=jb, n_diff=sum(1 for c in changes if not c["same"]))
+                           a=ja, b=jb, n_diff=sum(1 for c in changes if not c["same"]),
+                           handoff=author_info_handoff(ra, rb))
 
 
 @app.route("/job/<job>/failed")

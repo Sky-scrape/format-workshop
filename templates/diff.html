@@ -18,6 +18,10 @@ vertical-align:top;line-height:1.7}
 .diff-table td.k{color:var(--ink2);white-space:nowrap;width:150px}
 .diff-table .b{color:var(--accent)}
 .diff-actions{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap}
+.handoff{margin-top:16px;padding:14px 16px;border:1px solid #d5e2ec;background:#f4f8fb;
+border-radius:12px;font-size:var(--fs-aux);line-height:1.9;color:#3d566b}
+.handoff ul{margin:6px 0;padding-left:18px}
+.handoff p{margin:4px 0 0;color:#5b7387}
 </style>
 {% endblock %}
 {% block body %}
@@ -38,6 +42,12 @@ vertical-align:top;line-height:1.7}
       {% endfor %}
     </tbody>
   </table>
+  {% if handoff %}
+  <div class="handoff"><b>人员信息承接：</b>
+    <ul>{% for n in handoff %}<li>{{ n }}</li>{% endfor %}</ul>
+    <p>换刊后请回补录页确认；本工具不会替你搬动作者页或脚注内容。</p>
+  </div>
+  {% endif %}
   <div class="diff-actions">
     <a class="btn" href="/result/{{ job }}">返回结果</a>
     <a class="btn btn-light" href="/journals">看看还有哪些刊</a>

@@ -37,7 +37,24 @@ vertical-align:1px}
 .btn-ghost{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:9px;min-height:42px;padding:0 18px;font-size:var(--fs-body);cursor:pointer}
 .meta{font-size:var(--fs-aux);color:var(--ink3);line-height:1.9}
 .meta code{background:var(--soft);padding:1px 5px;border-radius:4px}
-@media(max-width:760px){.dr-shell{padding:20px 14px 50px}.kpis{flex-wrap:wrap}.kpi{min-width:50%}td.q{display:none}}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px 16px}
+.fitem{min-width:0}
+.fitem label{display:block;font-size:var(--fs-aux);color:var(--ink2);margin-bottom:5px}
+.fitem input,.fitem select,.fitem textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);
+border-radius:8px;background:#fbfcfb;color:var(--ink);font-size:var(--fs-body);padding:8px 10px;outline:0}
+.fitem input:focus,.fitem select:focus,.fitem textarea:focus{border-color:#a9c3b7;background:#fff}
+.fitem textarea{min-height:78px;resize:vertical;line-height:1.7}
+.fitem .unit{font-size:var(--fs-aux);color:var(--ink3);margin-top:4px}
+.fgroup{margin:14px 0 0;border-top:1px solid var(--line2);padding-top:12px}
+.fgroup summary{font-size:var(--fs-body);color:var(--ink2);margin:0 0 12px}
+.manual-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 14px;margin:6px 0 4px}
+.sitem{display:flex;align-items:flex-start;gap:8px;font-size:var(--fs-aux);color:var(--ink2);
+line-height:1.6;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;cursor:pointer}
+.sitem input{margin:3px 0 0;accent-color:var(--accent);width:14px;height:14px;flex:none}
+.sitem i{font-style:normal;color:var(--ink3);margin-left:4px}
+.ssh{font-size:var(--fs-aux);font-weight:500;color:var(--ink3);margin:16px 0 6px}
+@media(max-width:760px){.dr-shell{padding:20px 14px 50px}.kpis{flex-wrap:wrap}.kpi{min-width:50%}td.q{display:none}.fgrid{grid-template-columns:1fr}}
 </style>
 {% endblock %}
 {% block body %}
@@ -45,9 +62,16 @@ vertical-align:1px}
   <div class="dr-head">
     <div>
       <h1>{{ journal.name_zh or jid }}</h1>
-      <p>AI 从 <code>{{ ext.source_file }}</code> 抽取的规则集草稿。共 {{ ext.pages or '?' }} 页，模型 {{ ext.ai_model or '未记录' }}。
+      <p>
+        {% if ext.get('mode') == 'manual' %}
+        手工建库：以《{{ ext.baseline or '基线刊' }}》为结构基线，尚未从稿约抽取{% if ext.source_file %}（原稿 <code>{{ ext.source_file }}</code>）{% endif %}；下面每个字段都可以手工填写。
+        {% else %}
+        AI 从 <code>{{ ext.source_file }}</code> 抽取的规则集草稿{% if ext.pages %}，共 {{ ext.pages }} 页{% endif %}，模型 {{ ext.ai_model or '未记录' }}。
+        {% endif %}
         {% if ext.text_method == 'ocr' %}全文由 <strong>OCR 识别</strong>（{{ ext.ocr_engine }}）。
         {% elif ext.text_method == 'mixed' %}{% if ext.ocr_failed_pages %}第 {{ ext.ocr_failed_pages|map(attribute='page')|join('、') }} 页识别失败、内容缺失{% if ext.ocr_pages %}，第 {{ ext.ocr_pages|join('、') }} 页由 OCR 识别{% endif %}，其余取自文字层。{% else %}第 {{ ext.ocr_pages|join('、') }} 页无文字层，其余取自文字层。{% endif %}
+        {% elif ext.text_method == 'docx' %}文字取自 Word 正文与表格，未调用 OCR。
+        {% elif ext.text_method == 'txt' %}文字取自纯文本文件。
         {% else %}文字取自 PDF 原生文字层，逐字精确。{% endif %}</p>
     </div>
     <a class="btn-light btn" href="/journals" style="text-decoration:none">返回规则库</a>
@@ -57,6 +81,7 @@ vertical-align:1px}
 
   <div class="kpis">
     <div class="kpi"><strong>{{ report.stats.extracted or 0 }}</strong><span>有原文依据</span></div>
+    <div class="kpi"><strong>{{ report.stats.manual or 0 }}</strong><span>手工修正</span></div>
     <div class="kpi"><strong>{{ report.stats.unverified or 0 }}</strong><span>未证实，未写入</span></div>
     <div class="kpi"><strong>{{ report.stats.inherited or 0 }}</strong><span>沿用基线，需核对</span></div>
     <div class="kpi"><strong>{{ report.stats.dropped or 0 }}</strong><span>引文核验失败被丢弃</span></div>
@@ -82,7 +107,7 @@ vertical-align:1px}
   {% endif %}
 
   {% if dropped %}
-  <div class="flash warn"><strong>{{ dropped|length }} 项被丢弃。</strong>模型给了值，但它提供的原文引文在 PDF 里找不到——按约定视为编造。
+  <div class="flash warn"><strong>{{ dropped|length }} 项被丢弃。</strong>模型给了值，但它提供的原文引文在原稿里找不到——按约定视为编造。
     <ul class="plain" style="margin-top:6px">{% for d in dropped %}<li>{{ d.label }}：{{ d.why }}</li>{% endfor %}</ul>
   </div>
   {% endif %}
@@ -111,7 +136,7 @@ vertical-align:1px}
 
   <div class="card">
     <h2>从稿约里读到的</h2>
-    <p class="hint">每条右侧是 PDF 原文片段，你可以直接拿去比对。值不对就说明模型读错了这一句。</p>
+    <p class="hint">每条右侧是原稿片段，你可以直接拿去比对。值不对就说明模型读错了这一句；也可以在下面的手工修正表单里直接改。</p>
     {% if evidence %}
     <table>
       <thead><tr><th>字段</th><th>抽取值</th><th>原文依据</th></tr></thead>
@@ -126,7 +151,7 @@ vertical-align:1px}
       </tbody>
     </table>
     {% else %}
-    <p class="hint" style="margin:0">一项都没抽到。可能是稿约写得比较笼统，或 PDF 是扫描件。</p>
+    <p class="hint" style="margin:0">一项都没抽到。稿约可能写得比较笼统，也可能是手工建库模式——直接在下面的表单里按稿约填写即可。</p>
     {% endif %}
   </div>
 
@@ -136,7 +161,7 @@ vertical-align:1px}
         <span class="badge">{{ inherited|length }}</span>
         （事实字段 {{ inherited|selectattr('fact')|list|length }} 项 +
         结构字段 {{ inherited|rejectattr('fact')|list|length }} 项，按区块折叠，逐条可达）</summary>
-      <p class="hint">下面是基线规则集里全部未被本次抽取覆写的字段——不只是上面的事实键，还包括 blocks
+      <p class="hint">下面是基线规则集里全部未被本次抽取或手工修正覆写的字段——不只是上面的事实键，还包括 blocks
         区块清单、statements 声明、personal_fields、表格边框等。它们只保证产物能渲染，不代表本刊。发布前请按区块逐组过一遍。</p>
       {% for section, items in inherited|groupby('section') %}
       <details {{ 'open' if inherited|length < 12 }}>
@@ -155,13 +180,138 @@ vertical-align:1px}
     </details>
   </div>
 
+  {% set manual = ext.get('manual') or {} %}
+  {% if manual %}
+  <div class="flash good"><strong>已手工修正 {{ manual|length }} 项。</strong>
+    这些值不再计入「沿用基线」，下面按字段列出当前值与修正前的值；保存后会重新校验。</div>
+  <div class="card">
+    <h2>手工修正记录</h2>
+    <table>
+      <thead><tr><th>字段</th><th>当前值</th><th>修正前</th><th>依据</th></tr></thead>
+      <tbody>
+      {% for key, it in manual.items() %}
+        <tr>
+          <td class="k">{{ it.label }}</td>
+          <td class="v">{% if it.value is mapping or (it.value is not string and it.value is sequence) %}{{ it.value|tojson }}{% else %}{{ it.value }}{% endif %}</td>
+          <td>{% if it.previous is none %}—{% elif it.previous is mapping or (it.previous is not string and it.previous is sequence) %}{{ it.previous|tojson }}{% else %}{{ it.previous }}{% endif %}</td>
+          <td class="q">{{ it.evidence or '手工填写' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if structural %}
+  <div class="card">
+    <h2>结构要件（必备 / 可选）</h2>
+    <p class="hint">勾选＝该刊要求这一项，缺了会在补录页阻断排版；取消勾选＝可跳过。
+      这些开关与下方字段修正同一事务保存，改动会从「沿用基线」清单移出并计入手工修正。</p>
+    <form method="post" action="/journals/draft/{{ jid }}/edit">
+      <input type="hidden" name="s_structural" value="1">
+      <div class="sgrid">
+        <label class="sitem"><input type="checkbox" name="s_anon" {{ 'checked' if structural.anonymous }}>
+          <span>正文匿名（双盲评审）</span></label>
+        <label class="sitem"><input type="checkbox" name="s_author_page" {{ 'checked' if structural.author_page }}>
+          <span>作者信息单独成页</span></label>
+      </div>
+      <h3 class="ssh">区块必备清单 <span class="badge">{{ structural.blocks|length }}</span></h3>
+      <div class="sgrid">
+        {% for b in structural.blocks %}
+        <label class="sitem"><input type="checkbox" name="s_blk_{{ b.index }}" {{ 'checked' if b.required }}>
+          <span>{{ b.label }}<i>必备</i></span></label>
+        {% endfor %}
+      </div>
+      {% if structural.statements %}
+      <h3 class="ssh">该刊要求的声明 <span class="badge">{{ structural.statements|length }}</span></h3>
+      <div class="sgrid">
+        {% for s in structural.statements %}
+        <label class="sitem"><input type="checkbox" name="s_st_{{ s.key }}" {{ 'checked' if s.required }}>
+          <span>{{ s.label }}<i>必备</i></span></label>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="manual-actions">
+        <button class="btn" type="submit">保存结构开关</button>
+        <span class="meta">取消勾选不会删除该区块规则，只是不再当作本刊必备项。</span>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>手工修正规则值</h2>
+    <p class="hint">稿约里写了、AI 没抽到或抽错的字段，在这里直接改。表单每次提交全部字段，
+      <strong>只保存与当前值不同的项</strong>；留空表示不改。标题编号每行一级（如「一、」「（一）」「1.」）。</p>
+    {% if field_groups %}
+    <form method="post" action="/journals/draft/{{ jid }}/edit">
+      {% for g in field_groups %}
+      <details class="fgroup" {{ 'open' if loop.first }}>
+        <summary>{{ g.title }} <span class="badge">{{ g.fields|length }}</span></summary>
+        <div class="fgrid">
+          {% for f in g.fields %}
+          <div class="fitem">
+            {% if f.kind == 'line' %}
+            <label>行距</label>
+            <div style="display:flex;gap:8px">
+              <select name="f_body_line_mode" aria-label="行距模式">
+                {% if f.mode not in ('exact', 'multiple') %}<option value="">不改</option>{% endif %}
+                <option value="exact" {{ 'selected' if f.mode == 'exact' }}>固定值（磅）</option>
+                <option value="multiple" {{ 'selected' if f.mode == 'multiple' }}>倍数</option>
+              </select>
+              <input type="number" step="0.1" min="0.1" name="f_body_line_value"
+                     value="{{ f.value if f.value is not none else '' }}" aria-label="行距数值">
+            </div>
+            {% elif f.kind == 'levels' %}
+            <label for="f_{{ f.key }}">{{ f.label }}</label>
+            <textarea id="f_{{ f.key }}" name="f_{{ f.key }}" spellcheck="false">{{ f.value }}</textarea>
+            {% elif f.options %}
+            <label for="f_{{ f.key }}">{{ f.label }}</label>
+            <select id="f_{{ f.key }}" name="f_{{ f.key }}">
+              {% if f.value is none %}<option value="">不改</option>{% endif %}
+              {% for o in f.options %}
+              <option value="{{ o.value }}" {{ 'selected' if f.value|string == o.value }}>{{ o.label }}</option>
+              {% endfor %}
+            </select>
+            {% elif f.kind == 'bool' %}
+            <label for="f_{{ f.key }}">{{ f.label }}</label>
+            <select id="f_{{ f.key }}" name="f_{{ f.key }}">
+              {% if f.value is none %}<option value="">不改</option>{% endif %}
+              <option value="true" {{ 'selected' if f.value is sameas true }}>是</option>
+              <option value="false" {{ 'selected' if f.value is sameas false }}>否</option>
+            </select>
+            {% elif f.kind in ('int', 'float') %}
+            <label for="f_{{ f.key }}">{{ f.label }}</label>
+            <input type="number" step="{{ '1' if f.kind == 'int' else '0.1' }}"
+                   id="f_{{ f.key }}" name="f_{{ f.key }}"
+                   value="{{ f.value if f.value is not none else '' }}">
+            {% else %}
+            <label for="f_{{ f.key }}">{{ f.label }}</label>
+            <input type="text" id="f_{{ f.key }}" name="f_{{ f.key }}"
+                   value="{{ f.value if f.value is not none else '' }}">
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+      <div class="manual-actions">
+        <button class="btn" type="submit">保存修改并重新校验</button>
+        <span class="meta">修正项会从「沿用基线」清单移出，并记进草稿的 verification.extraction.manual。</span>
+      </div>
+    </form>
+    {% else %}
+    <p class="hint" style="margin:0">这份草稿缺少可编辑的规则字段（可能是旧版草稿或文件已损坏）。请放弃后重新建刊。</p>
+    {% endif %}
+  </div>
+
   <div class="card">
     <h2>发布为正式规则集</h2>
     <p class="hint">发布后会写入 <code>rules/journal/{{ jid }}.json</code>，并立即重建样板 docx 与规格页。三件产物同源。</p>
     <form method="post" action="/journals/draft/{{ jid }}/publish">
       <label class="publish">
         <input type="checkbox" name="confirm" value="on" required>
-        <div>我已逐项核对过：标注「沿用基线」的字段确实适用于本刊，或已按稿约修正；「未证实」清单里的值若属实，也已手工补录。</div>
+        <div>我已逐项核对过：标注「沿用基线」的字段确实适用于本刊，或已在上面的表单里修正；「未证实」清单里的值若属实，也已手工补录。</div>
       </label>
       {% if ext.baseline %}
       <label class="publish">
@@ -178,7 +328,7 @@ vertical-align:1px}
 
   <div class="card">
     <h2>放弃这份草稿</h2>
-    <form method="post" action="/journals/draft/{{ jid }}/discard" onsubmit="return confirm('删除草稿？原 PDF 与抽取结果都会一起删掉。')">
+    <form method="post" action="/journals/draft/{{ jid }}/discard" onsubmit="return confirm('删除草稿？原稿文件与抽取结果都会一起删掉。')">
       <div class="actions"><button class="btn-ghost" type="submit">删除草稿</button>
       <span class="meta">不影响已有的 {{ jid }}.json（如果有）。</span></div>
     </form>

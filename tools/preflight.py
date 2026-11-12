@@ -28,6 +28,7 @@ import argparse
 import copy
 import html
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -1159,6 +1160,105 @@ def _check_footnotes(rep, doc, rules):
 
 # ---------------------------------------------------------------- 不处理清单
 
+# ---------------------------------------------------------------- 脚注使用方式
+
+# 手敲脚注的常见开头：①②③ 起头，或「注：①」「注1：」。Word 真脚注的
+# 编号是 footnoteReference 对象，不是这些字符——认出来只提示「需你处理」，
+# 不替用户改成真脚注（那会动正文结构）。
+FAKE_FOOTNOTE = re.compile(r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|注\s*\d*\s*[：:])")
+_ENCLOSED = "①②③④⑤⑥⑦⑧⑨⑩"
+
+
+def _footnote_fmt_name(text):
+    """规则集 numbering.footnotes 的写法 → Word numFmt 值。"""
+    return "decimalEnclosedCircle" if any(c in (text or "") for c in _ENCLOSED) \
+        else "decimal"
+
+
+def _footnote_settings(doc):
+    """读 Word 文档的脚注编号格式与重编号范围（未设置时按 Word 默认）。"""
+    fmt, restart = "decimal", "continuous"
+    try:
+        settings = doc.settings.element
+    except Exception:  # noqa: BLE001 —— 设置部件坏了不该拖垮整份体检
+        return fmt, restart
+    pr = settings.find(qn("w:footnotePr"))
+    if pr is None:
+        return fmt, restart
+    nf = pr.find(qn("w:numFmt"))
+    if nf is not None and nf.get(qn("w:val")):
+        fmt = nf.get(qn("w:val"))
+    nr = pr.find(qn("w:numRestart"))
+    if nr is not None and nr.get(qn("w:val")):
+        restart = nr.get(qn("w:val"))
+    return fmt, restart
+
+
+def _check_footnote_usage(rep, doc, rules, blocks):
+    """脚注/尾注的只读体检（DESIGN §12.1 的已知缺口）。
+
+    本工具只改脚注字体字号，不搬位置、不重编号。那几件事仍然不做，但
+    「稿件用了尾注，目标刊要页脚脚注」「Word 设的是全文连续编号，本刊要
+    每页重排」「脚注编号是 1 而本刊要 ①②③」这些偏差必须让作者看见——
+    报告归入「需你处理」，不伪装成已检查或已修正。
+    """
+    num = rules.get("numbering") or {}
+    want_fmt_txt = num.get("footnotes")
+    want_scope = num.get("footnotes_scope")
+    body = doc.element.body
+    fn_refs = len(list(body.iter(qn("w:footnoteReference"))))
+    en_refs = len(list(body.iter(qn("w:endnoteReference"))))
+    rule = _ref(rules, "numbering.footnotes_scope", "numbering.footnotes",
+                "typography.footnote", "journal")
+
+    if en_refs:
+        rep.add(-2, "脚注", "endnote", "位置", rule,
+                "页脚脚注", f"尾注 {en_refs} 处",
+                FIX_MANUAL,
+                note="稿件把注释放在文末尾注，本刊要求页脚脚注。本工具不搬动"
+                     "脚注/尾注位置，请在 Word 的「引用→脚注」里转换后再上传；"
+                     "字体字号套版仍会应用到脚注部件")
+
+    if fn_refs:
+        fmt, restart = _footnote_settings(doc)
+        if want_fmt_txt:
+            want_fmt = _footnote_fmt_name(want_fmt_txt)
+            if fmt != want_fmt:
+                rep.add(-2, "脚注", "footnote", "编号样式",
+                        _ref(rules, "numbering.footnotes", "journal"),
+                        want_fmt_txt,
+                        "①②③（圈号）" if fmt == "decimalEnclosedCircle"
+                        else "1.2.3.（阿拉伯数字）",
+                        FIX_MANUAL,
+                        note="Word 的脚注编号格式与本刊要求不一致。本工具只调"
+                             "字体字号，不改编号格式——请在 Word 里手工设置")
+        if want_scope:
+            want_restart = "eachPage" if want_scope == "per_page" else "continuous"
+            if restart != want_restart:
+                rep.add(-2, "脚注", "footnote", "编号范围",
+                        _ref(rules, "numbering.footnotes_scope", "journal"),
+                        "每页重新编号" if want_restart == "eachPage" else "全文连续编号",
+                        "每页重新编号" if restart == "eachPage" else "全文连续编号",
+                        FIX_MANUAL,
+                        note="Word 的脚注重编号范围与本刊要求不一致。本工具不重"
+                             "编号——请在 Word 的脚注设置里手工改")
+
+    # 手敲的「①②③」段落：形似脚注但根本不是 Word 脚注对象，套版碰不到它，
+    # 投稿系统也不会把它当脚注处理。
+    fakes = [(b.get("idx"), b.get("type") or "body", (b.get("text") or "").strip())
+             for b in blocks
+             if b.get("type") in ("body", "front_matter", "table_note")
+             and FAKE_FOOTNOTE.match((b.get("text") or "").strip())]
+    if fakes:
+        frag = "；".join(t[:16] + ("…" if len(t) > 16 else "") for _i, _t, t in fakes[:3])
+        rep.add(fakes[0][0], "脚注", fakes[0][1], "手工脚注", rule,
+                "Word 脚注功能", f"{len(fakes)} 段以圈号/「注：」开头",
+                FIX_MANUAL,
+                note=f"这些段落看起来是手敲的脚注（{frag}），不是 Word 脚注对象："
+                     f"版式套版不会把它排成页脚，投稿系统也不识别。需要真脚注请在"
+                     f"Word 里用「引用→插入脚注」重建")
+
+
 def _not_handled(rules):
     """规则集声明了、渲染器不消费的项。逐条写明「本工具不修」，不给假承诺。"""
     typo = rules.get("typography") or {}
@@ -1283,6 +1383,7 @@ def analyze(docx_path, rules):
     fm_index = 0
 
     _check_page(rep, doc, rules)
+    _check_footnote_usage(rep, doc, rules, blocks)
 
     for blk in blocks:
         el = elem_of(blk, elems)

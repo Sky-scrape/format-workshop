@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
@@ -645,6 +646,73 @@ def replace_text(p, new_text):
     return None
 
 
+def _set_run_italic(r, italic=True):
+    """给一个 w:r 开/关斜体（同时写 i 与 iCs，中西文一起生效）。"""
+    rpr = r.find(qn("w:rPr"))
+    if rpr is None:
+        rpr = OxmlElement("w:rPr")
+        r.insert(0, rpr)
+    for tag in ("w:i", "w:iCs"):
+        el = rpr.find(qn(tag))
+        if not italic:
+            if el is not None:
+                rpr.remove(el)
+            continue
+        if el is None:
+            el = OxmlElement(tag)
+            rpr.append(el)
+        el.set(qn("w:val"), "1")
+
+
+def replace_text_with_spans(p, new_text, spans):
+    """替换整段文字，并给 spans 指定的区间加斜体（字体字号与颜色不动）。
+
+    用于引用体系重排：英文刊的刊名/书名要斜体，而模板渲染出的只是纯文本。
+    做法是先把整段文字写进首个文字节点（与 replace_text 同一套对象保留
+    规则），再把这一个 run 按区间切成若干同格式 run，只给命中区间的副本
+    加 w:i。区间为空时行为与 replace_text 完全一致。
+    """
+    replace_text(p, new_text)
+    if not spans or not new_text:
+        return
+    owner = next((el for el, chars in text_units(p)
+                  if el.tag == qn("w:t") and (el.text or "") == new_text), None)
+    if owner is None:
+        return
+    run = owner.getparent()
+    # 这个 run 里若有公式/图片/脚注引用之类的对象，切开再复制会重复对象；
+    # 文献条目段落正常情况下只有 rPr + w:t，遇到异常结构就放弃斜体、保文字。
+    if any(child is not owner and child.tag != qn("w:rPr") for child in run):
+        return
+    cuts = {0, len(new_text)}
+    for s, e in spans:
+        cuts.add(max(0, min(len(new_text), s)))
+        cuts.add(max(0, min(len(new_text), e)))
+    bounds = sorted(cuts)
+    segments = []
+    for s, e in zip(bounds, bounds[1:]):
+        if s >= e:
+            continue
+        italic = any(a <= s and e <= b for a, b in spans)
+        segments.append((new_text[s:e], italic))
+    if len(segments) <= 1:
+        return
+    _write_t(owner, segments[0][0])
+    _set_run_italic(run, segments[0][1])
+    anchor = run
+    for text, italic in segments[1:]:
+        # lxml 元素直接深拷贝：不经过任何 XML 解析入口，XSD/实体层面零风险
+        clone = deepcopy(run)
+        for t in clone.findall(qn("w:t")):
+            clone.remove(t)
+        node = OxmlElement("w:t")
+        _write_t(node, text)
+        clone.append(node)
+        _set_run_italic(clone, italic)
+        anchor.addnext(clone)
+        anchor = clone
+
+
 def set_run_xml(r, cn=None, latin=None, size=None):
     """在原始 XML 层给一个 w:r 套字体字号。
 
@@ -844,6 +912,10 @@ def replace_after(p, keep_len, new_text):
 
 
 INDENT_WS = re.compile(r"^[\t \u3000]+")
+TRAILING_WS = re.compile(r"[\t \u3000]+$")
+# N-05：全角字母数字转半角（Ａ-Ｚ ａ-ｚ ０-９）。只认这三段连续区，
+# 不碰全角标点与全角空格——那属于 N-03/N-04 的语境判断，不在本轮口径。
+FULLWIDTH_ALNUM = re.compile(r"[Ａ-Ｚａ-ｚ０-９]")
 
 
 def strip_leading_indent(p):
@@ -888,6 +960,124 @@ def strip_leading_indent_audited(p, audit, idx, btype, indent):
               f"删除段首 {m.end()} 个缩进空白（全角/半角空格、制表符），"
               f"首行缩进改由段落设置 {indent:g} 字符接管",
               rule=rule, sig=sig)
+
+
+def strip_trailing_ws(p):
+    """删掉段尾多余空白（N-01 段尾版），返回删除的字符数。
+
+    从段落末尾倒着走物理文字单元：只删空格／制表符／全角空格，遇到真正的
+    文字就停；段尾是 w:br 换行时不跨过去删上一行的空格（那不是段尾空白）。
+    """
+    m = TRAILING_WS.search(para_full_text(p))
+    if not m:
+        return 0
+    need = m.end() - m.start()
+    removed = 0
+    for el, chars in reversed(text_units(p)):
+        if need <= 0:
+            break
+        if not chars:
+            continue
+        if el.tag == qn("w:tab") or el.tag == qn("w:ptab"):
+            if need:
+                el.getparent().remove(el)
+                need -= 1
+                removed += 1
+            continue
+        if el.tag != qn("w:t"):
+            break                    # 换行/对象：段尾到这里为止，不跨过去删
+        take = min(len(chars), need)
+        tail = chars[-take:]
+        if tail.strip(" \t\u3000"):
+            break
+        _write_t(el, chars[:-take])
+        need -= take
+        removed += take
+    return removed
+
+
+def to_halfwidth_alnum(text):
+    """N-05：只把全角字母数字转半角，其余字符原样返回。"""
+    return "".join(chr(ord(c) - 0xFEE0) if FULLWIDTH_ALNUM.match(c) else c
+                   for c in text)
+
+
+def _change_frag(before, after, limit=30):
+    """审计条目的前后片段：截在第一个差异附近，别只给段首。"""
+    if len(before) <= limit and len(after) <= limit:
+        return before, after
+
+    def cut(s):
+        return s if len(s) <= limit else s[:limit] + "…"
+
+    if not before or not after:
+        return cut(before), cut(after)
+    pos = next((i for i, (a, b) in enumerate(zip(before, after)) if a != b),
+               min(len(before), len(after)))
+    start = max(0, pos - 8)
+    end = start + limit
+    return ("…" if start else "") + before[start:end] + ("…" if len(before) > end else ""), \
+           ("…" if start else "") + after[start:end] + ("…" if len(after) > end else "")
+
+
+def normalize_body_chars_audited(p, blk, audit):
+    """段尾空白删除（N-01 段尾）＋全角字母数字归一（N-05），逐条进审计。
+
+    只用于 body/abstract/keywords（与段首缩进同一适用范围）。含 Word 域的
+    段落一律不改：域结果的文字归域所有，改了会在 F9 更新时回滚并与文献库
+    脱钩（与引用/编号路径同一条边界）。两条动作都是 B 档、各自可驳回。
+    """
+    idx, btype = blk["idx"], blk.get("type", "")
+    if text_locked(blk):
+        return
+    before_txt = block_text(p)
+
+    m = TRAILING_WS.search(before_txt)
+    if m:
+        # 驳回键取「去掉段首空白」后的文本：上一轮若驳回了段首缩进删除，
+        # 本轮段首空格还在，键不能因此漂移（否则驳回决定只生效一次）。
+        sig = reject_sig(before_txt.lstrip("\t \u3000"))
+        # 片段截在末尾而不是段首：段尾改动若只截前 24 字，before == after，
+        # 报告就看不到到底删了什么。
+        b_frag, a_frag = _change_frag(before_txt, block_text(p))
+        if audit.blocked(idx, "段尾空白删除", sig):
+            audit.add(idx, btype, "段尾空白删除", b_frag, b_frag,
+                      "已驳回：保留段尾空白",
+                      rejected=True, rule="typography.body", sig=sig)
+        else:
+            strip_trailing_ws(p)
+            b_frag, a_frag = _change_frag(before_txt, block_text(p))
+            audit.add(idx, btype, "段尾空白删除", b_frag, a_frag,
+                      f"删除段尾 {m.end() - m.start()} 个空白（空格/制表符/全角空格）",
+                      rule="typography.body", sig=sig)
+
+    before_txt = block_text(p)
+    new_txt = to_halfwidth_alnum(before_txt)
+    if new_txt == before_txt:
+        return
+    # 键在「首尾空白都规整后」的文本上算：段首缩进/段尾空白的驳回会改变
+    # before_txt，不能让 N-05 的驳回决定随之失效。全角→半角本身不参与键，
+    # 否则同一处改动的键会随「是否已归一半」漂移。
+    sig = reject_sig(before_txt.strip("\t \u3000"))
+    b_frag, a_frag = _change_frag(before_txt, new_txt)
+    if audit.blocked(idx, "全角字母数字归一", sig):
+        audit.add(idx, btype, "全角字母数字归一", b_frag, b_frag,
+                  "已驳回：保留全角字母数字",
+                  rejected=True, rule="typography.body", sig=sig)
+        return
+    _apply_halfwidth_in_place(p)
+    _, after_frag = _change_frag(before_txt, block_text(p))
+    audit.add(idx, btype, "全角字母数字归一", b_frag, after_frag,
+              "全角字母数字（Ａ１）转半角（A1），其余字符原样保留",
+              rule="typography.body", sig=sig)
+
+
+def _apply_halfwidth_in_place(p):
+    """把段落里每个 w:t 的全角字母数字就地转半角，run 格式一个不动。"""
+    for el, chars in text_units(p):
+        if el.tag == qn("w:t") and chars and FULLWIDTH_ALNUM.search(chars):
+            _write_t(el, to_halfwidth_alnum(chars))
+
 
 
 def split_keywords(text, sep):
@@ -1487,14 +1677,15 @@ def apply_citation(doc, elems, ir, rules, audit):
         if num is None:
             continue
         entry = index[num]
-        new = cr.format_entry(entry, rules)
+        new, spans = cr.format_entry_with_spans(entry, rules)
         old = block_text(p)
         if not new or new == old:
             continue
-        replace_text(p, new)
+        replace_text_with_spans(p, new, spans)
         rewritten.append((idx, p, entry))
         audit.add(idx, "reference_item", "条目按目标刊体例重排", old, new,
-                  "类型、卷期页字段机器提取，请复核作者名与刊名",
+                  "类型、卷期页字段机器提取，请复核作者名与刊名"
+                  + ("；斜体按规则集 italic_fields 声明" if spans else ""),
                   rule="citation.reference_list.templates")
 
     if rewritten:
@@ -2030,6 +2221,7 @@ def main():
             # 段首手工缩进空白先删（N-01 段首＋N-08）：不删的话，段首空格会和
             # 下面的首行缩进设置叠成双重缩进，标签归一的正则也认不出段首的标签
             strip_leading_indent_audited(p, audit, blk["idx"], t, indent)
+            normalize_body_chars_audited(p, blk, audit)
             want = next((b.get("label") for b in rules["blocks"]
                          if b["type"] == t and b.get("lang") == "zh" and b.get("label")), None)
             old = block_text(p)
@@ -2288,6 +2480,9 @@ def main():
             # 段首手工缩进空白删除（N-01 段首＋N-08）：不删就会与下面的首行
             # 缩进设置叠成双重缩进
             strip_leading_indent_audited(p, audit, blk["idx"], t, indent)
+            # 段尾空白（N-01 段尾）与全角字母数字（N-05）同属字符级白名单，
+            # 逐条进审计、可驳回；含域段落跳过（域结果文字归域所有）
+            normalize_body_chars_audited(p, blk, audit)
         before_fmt = fmt_snapshot(p)
         restyle(p, cn=cn, latin=latin, size=size, align="both", line_pt=line_pt, indent=indent,
                 line_multiple=line_mult)

@@ -66,7 +66,8 @@ def add_para(doc, text, *, cn=None, latin=None, size=None, bold=None,
     return p
 
 
-def three_line_table(doc, headers, rows, bp, header_size, body_size):
+def three_line_table(doc, headers, rows, bp, header_size, body_size,
+                     keep_last_with_next=False):
     table = doc.add_table(rows=len(rows) + 1, cols=len(headers))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tbl_pr = table._tbl.tblPr
@@ -83,6 +84,13 @@ def three_line_table(doc, headers, rows, bp, header_size, body_size):
         el.set(qn("w:color"), "000000")
         borders.append(el)
     tbl_pr.append(borders)
+
+    # 样板的表格不能被分页切成「表头在上一页、数据在下一页」；表体各行
+    # 也不该被拆开。cantSplit 挡住单行跨页，keep_with_next 把整张表串成
+    # 一个整体。表注存在时，最后一行还要与表注同页（keep_last_with_next）。
+    for r, row in enumerate(table.rows):
+        tr_pr = row._tr.get_or_add_trPr()
+        tr_pr.append(OxmlElement("w:cantSplit"))
 
     for c, h in enumerate(headers):
         cell = table.rows[0].cells[c]
@@ -109,6 +117,13 @@ def three_line_table(doc, headers, rows, bp, header_size, body_size):
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = para.add_run(str(val))
             set_run(run, cn="宋体", latin="Times New Roman", size=body_size)
+
+    # 单元格填好后再写 keepNext：cell.text 赋值会重置段落属性，先写会丢。
+    for r, row in enumerate(table.rows):
+        if r < len(table.rows) - 1 or keep_last_with_next:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    para.paragraph_format.keep_with_next = True
     return table
 
 
@@ -356,6 +371,14 @@ def build(rules, out_path):
     lv1 = hd["level1"]
     cn_seq = "一二三四五六七八九十"
     numeric = str(hd.get("numbering", "")).startswith("numeric")
+    # 样张只生成规则集实际声明的层级：自定义刊可能只有两级（甚至一级），
+    # 不能拿 levels[1]/levels[2] 裸下标——发布时会直接 IndexError。
+    levels = hd.get("levels") or []
+    try:
+        max_level = int(hd.get("max_level") or len(levels))
+    except (TypeError, ValueError):
+        max_level = len(levels)
+    sample_levels = max(1, min(max_level, len(levels))) if levels else 1
     # 一级标题序号分隔符取 levels[0] 的末字符：可能是「、」，也可能是全角空格（如「一　引言」）
     # 序号分隔符＝levels[0] 去掉首个序号字符后的剩余部分：
     # 「一　」→全角空格、「一、」→顿号、「一、 」→顿号加空格（经济研究）
@@ -384,6 +407,7 @@ def build(rules, out_path):
                         bold=lv.get("bold", False),
                         align=lv1["align"] if level == 1 else lv.get("align", "left"),
                         line=lv1_line() if level == 1 else line_pt,
+                        indent_chars=None if level == 1 else lv.get("indent_chars"),
                         before_lines=lv.get("space_before_lines", 0) if level == 1 else 0,
                         after_lines=lv.get("space_after_lines", 0) if level == 1 else 0)
 
@@ -417,33 +441,35 @@ def build(rules, out_path):
              cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
 
     # ---------- 二级标题 ----------
-    lv2 = hd.get("level2", {})
-    heading(2, sec_no, smp.get("section2_1") or "理论基础")
-    add_para(doc, (smp.get("l2_note") or
-                   f"二级标题：{hd['levels'][1]} 式编号，"
-                   f"{lv2.get('font_cn', body['font_cn'])} {lv2.get('size_pt', body['size_pt'])}pt，"
-                   f"缩进 {lv2.get('indent_chars', 2)} 字，单独占行。"),
-             cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
+    if sample_levels >= 2:
+        lv2 = hd.get("level2", {})
+        heading(2, sec_no, smp.get("section2_1") or "理论基础")
+        add_para(doc, (smp.get("l2_note") or
+                       f"二级标题：{hd['levels'][1]} 式编号，"
+                       f"{lv2.get('font_cn', body['font_cn'])} {lv2.get('size_pt', body['size_pt'])}pt，"
+                       f"缩进 {lv2.get('indent_chars', 2)} 字，单独占行。"),
+                 cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
 
     # ---------- 三级标题 ----------
-    lv3 = hd.get("level3", {})
-    l3_num = head_no(3, sec_no)
-    l3_text = smp.get("section2_1_1") or "货币政策传导机制"
-    l3_note = (smp.get("l3_note") or
-               f"三级标题：{hd['levels'][2]} 式编号，"
-               f"{lv3.get('font_cn', body['font_cn'])} {lv3.get('size_pt', body['size_pt'])}pt，"
-               f"缩进 {lv3.get('indent_chars', 2)} 字，"
-               f"{'与正文接排' if lv3.get('inline_with_body') else '单独占行'}。")
-    if lv3.get("inline_with_body"):
-        # 接排体例：「1.制造业行业差异。接下来的正文……」编号行与正文同一段
-        add_para(doc, f"{l3_num}{l3_text}。{l3_note}",
-                 cn=lv3.get("font_cn") or body["font_cn"],
-                 size=lv3.get("size_pt") or body["size_pt"],
-                 align="both", line=LINE, indent_chars=indent or None)
-    else:
-        heading(3, sec_no, l3_text)
-        add_para(doc, l3_note,
-                 cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
+    if sample_levels >= 3:
+        lv3 = hd.get("level3", {})
+        l3_num = head_no(3, sec_no)
+        l3_text = smp.get("section2_1_1") or "货币政策传导机制"
+        l3_note = (smp.get("l3_note") or
+                   f"三级标题：{hd['levels'][2]} 式编号，"
+                   f"{lv3.get('font_cn', body['font_cn'])} {lv3.get('size_pt', body['size_pt'])}pt，"
+                   f"缩进 {lv3.get('indent_chars', 2)} 字，"
+                   f"{'与正文接排' if lv3.get('inline_with_body') else '单独占行'}。")
+        if lv3.get("inline_with_body"):
+            # 接排体例：「1.制造业行业差异。接下来的正文……」编号行与正文同一段
+            add_para(doc, f"{l3_num}{l3_text}。{l3_note}",
+                     cn=lv3.get("font_cn") or body["font_cn"],
+                     size=lv3.get("size_pt") or body["size_pt"],
+                     align="both", line=LINE, indent_chars=indent or None)
+        else:
+            heading(3, sec_no, l3_text)
+            add_para(doc, l3_note,
+                     cn=body["font_cn"], size=body["size_pt"], align="both", line=LINE, indent_chars=indent or None)
 
     # ---------- 表格 ----------
     t_cap = smp.get("table_caption") or "表1  主要变量描述性统计"
@@ -459,8 +485,9 @@ def build(rules, out_path):
         bp,
         header_size=tb.get("font_size_pt", DEFAULTS["table_font_size_pt"][0]),
         body_size=tb.get("font_size_pt", DEFAULTS["table_font_size_pt"][0]),
+        keep_last_with_next=bool(tb["note_layers"]),
     )
-    for layer in tb["note_layers"]:
+    for i, layer in enumerate(tb["note_layers"]):
         prefix = layer.get("prefix") or ""
         sample = (smp.get("table_notes") or {}).get(layer["kind"]) or {
             "source": "Wind数据库",
@@ -468,9 +495,12 @@ def build(rules, out_path):
             "data_source": "国家统计局年度数据。",
             "cell": "①该数值保留四位小数，原值为8.42061。",
         }[layer["kind"]]
-        add_para(doc, f"{prefix}{sample}", cn=layer.get("font_cn"), size=layer.get("size_pt"),
-                 line=None if tb.get("note_line_spacing", {}).get("mode") == "multiple" else line_pt,
-                 indent_chars=layer.get("first_line_indent_chars"))
+        note_p = add_para(doc, f"{prefix}{sample}", cn=layer.get("font_cn"), size=layer.get("size_pt"),
+                          line=None if tb.get("note_line_spacing", {}).get("mode") == "multiple" else line_pt,
+                          indent_chars=layer.get("first_line_indent_chars"))
+        # 多个表注之间不能跨页拆开；最后一条不粘下一段（图/正文）
+        if i < len(tb["note_layers"]) - 1:
+            note_p.paragraph_format.keep_with_next = True
 
     # ---------- 图 ----------
     add_para(doc, smp.get("figure_placeholder") or "［插图位置：矢量图，无边框］", cn=None,
@@ -594,7 +624,6 @@ def build(rules, out_path):
             en_cls_line(blk)
 
     # ---------- 生成说明 ----------
-    add_para(doc, "", line=LINE)
     if smp.get("sample_note"):
         add_para(doc, smp["sample_note"], cn=body["font_cn"],
                  size=DEFAULTS["note_size_pt"][0], line=LINE)

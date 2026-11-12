@@ -9,8 +9,8 @@
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:16px}
 .field{margin-bottom:16px}
 .field label{display:block;font-size:var(--fs-body);color:var(--ink2);margin-bottom:6px}
-.field input{width:100%;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:var(--fs-body);background:#fbfcfb;outline:0}
-.field input:focus{border-color:#a9c3b7;background:#fff}
+.field input,.field select{width:100%;height:40px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:var(--fs-body);background:#fbfcfb;outline:0}
+.field input:focus,.field select:focus{border-color:#a9c3b7;background:#fff}
 .field .note{font-size:var(--fs-aux);color:var(--ink3);margin-top:6px;line-height:1.7}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .drop{border:1.5px dashed #bdcec5;border-radius:11px;background:var(--soft);padding:26px 20px;text-align:center;cursor:pointer;display:block;transition:.2s}
@@ -44,29 +44,29 @@
 <div class="nj-shell">
   <div class="nj-head">
     <h1>从稿约新建期刊</h1>
-    <p>上传该刊的稿约或投稿须知 PDF，AI 读出其中的格式要求，生成一份规则集草稿。草稿不会直接进规则库——每条都要你核对过才能发布。</p>
+    <p>上传该刊的稿约、投稿须知或格式要求（PDF / Word / TXT），读成一份规则集草稿。有 AI 时逐条抽取并附原文引文；没有 AI 时也能建一份基线草稿，在复核页手工填。草稿不会直接进规则库——每条都要你核对过才能发布。</p>
   </div>
 
   {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
 
   {% if not ai_ok %}
   <div class="flash warn">
-    还没有可用的 AI 配置，这个功能需要模型来读稿约。
-    <a href="/settings" style="color:inherit;text-decoration:underline">去设置 →</a>
+    还没有可用的 AI 配置。仍可上传稿约，选「不用 AI，手工建库」：先生成一份基线草稿，
+    再在复核页按稿约逐项填写。<a href="/settings" style="color:inherit;text-decoration:underline">去设置 →</a>
   </div>
   {% endif %}
 
   <div class="card">
     <div class="steps">
-      <div class="step"><b>1</b><div>上传稿约 PDF。有文字层的直接读，逐字精确；扫描件或图片版自动走本地 OCR，不需要联网。</div></div>
-      <div class="step"><b>2</b><div>AI 逐条抽事实，<strong>每个值必须附一句原文引文</strong>，引文在原文里搜不到就整条丢弃——这是防编造的主闸。</div></div>
-      <div class="step"><b>3</b><div>没抽到的字段沿用一本已核验刊的结构基线，并在复核页逐条标红，提示你补。</div></div>
+      <div class="step"><b>1</b><div>上传稿约 PDF、Word（.docx）或 TXT。PDF 有文字层的直接读，扫描件自动走本地 OCR；Word/TXT 直接取正文与表格，不联网。</div></div>
+      <div class="step"><b>2</b><div>有 AI 时逐条抽事实，<strong>每个值必须附一句原文引文</strong>，引文在原文里搜不到就整条丢弃——这是防编造的主闸。</div></div>
+      <div class="step"><b>3</b><div>没抽到的字段沿用一本已核验刊的结构基线，并在复核页逐条标红。没有 AI 时，全部字段都从这里起步，由你逐项填写。</div></div>
       <div class="step"><b>4</b><div>你确认后才写入 rules/journal，并自动重建样板与规格页。</div></div>
     </div>
 
     <div class="ocr-state {{ 'on' if ocr_ok else 'off' }}">
       <b>{{ 'OCR 可用' if ocr_ok else 'OCR 不可用' }}</b>
-      <span>{{ ocr_engine }}{% if ocr_ok %}<i class="sep"></i>扫描件在本机识别，不上传图像、不联网{% else %}<i class="sep"></i>扫描件将无法读取，请装 rapidocr-onnxruntime 或改用文字版 PDF{% endif %}</span>
+      <span>{{ ocr_engine }}{% if ocr_ok %}<i class="sep"></i>扫描件在本机识别，不上传图像、不联网{% else %}<i class="sep"></i>扫描件 PDF 将无法读取，请装 rapidocr-onnxruntime，或改用 Word/TXT/文字版 PDF{% endif %}</span>
     </div>
 
     <form method="post" action="/journals/extract" enctype="multipart/form-data" id="exForm">
@@ -80,19 +80,31 @@
         <div class="field">
           <label for="name">中文刊名</label>
           <input type="text" id="name" name="name" placeholder="金融研究" autocomplete="off">
-          <div class="note">填了就以你填的为准，不填则用 AI 从稿约里读到的刊名。</div>
+          <div class="note">填了就以你填的为准；不填则用 AI 读到的刊名，手工建库时暂用代号，可在复核页改。</div>
         </div>
       </div>
 
+      <div class="field">
+        <label for="baseline">结构基线</label>
+        <select id="baseline" name="baseline">
+          <option value="">自动（优先已核验中文刊）</option>
+          {% for j in journals or [] %}
+          <option value="{{ j.id }}">{{ j.name }}{% if j.en %} · {{ j.en }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <div class="note">目标刊的结构（区块清单、声明、作者信息页等）与哪本已入库刊最接近就选哪本；不选则用默认中文刊基线。手工建库时，这一项决定你只需要改多少字段。</div>
+      </div>
+
       <label class="drop" id="drop">
-        <input type="file" id="file" name="file" accept=".pdf" required>
-        <strong>选择稿约 PDF</strong>
-        <span>投稿须知、征稿简则、格式要求都可以；扫描件也能读</span>
+        <input type="file" id="file" name="file" accept=".pdf,.docx,.txt,.md" required>
+        <strong>选择稿约文件</strong>
+        <span>PDF / Word（.docx）/ TXT 都可以；Word 老格式 .doc 请先另存为 .docx</span>
         <b id="fileName">点这里选文件</b>
       </label>
 
       <div class="actions" style="margin-top:18px">
-        <button class="btn" type="submit" {{ 'disabled' if not ai_ok }}>开始抽取</button>
+        <button class="btn" type="submit" name="mode" value="auto" {{ 'disabled' if not ai_ok }}>AI 抽取</button>
+        <button class="btn-light btn" type="submit" name="mode" value="manual">不用 AI，手工建库</button>
         <a class="btn-light btn" href="/journals" style="text-decoration:none">返回规则库</a>
       </div>
     </form>
@@ -115,8 +127,8 @@
 <div class="overlay" id="overlay">
   <div class="ov-card">
     <div class="spinner"></div>
-    <h2>正在读稿约</h2>
-    <p>要先抽取 PDF 全文，再让模型逐条比对原文。<br>通常十几秒，稿约长的话会更久一点。</p>
+    <h2 id="ovTitle">正在读稿约</h2>
+    <p id="ovText">先读取稿约全文，再让模型逐条比对原文。<br>通常十几秒，稿约长的话会更久一点。</p>
   </div>
 </div>
 {% endblock %}
@@ -128,7 +140,12 @@ fileInput.addEventListener('change', () => {
   document.getElementById('fileName').textContent = f ? f.name : '点这里选文件';
   document.getElementById('drop').classList.toggle('on', !!f);
 });
-document.getElementById('exForm').addEventListener('submit', () => {
+document.getElementById('exForm').addEventListener('submit', (event) => {
+  const manual = event.submitter && event.submitter.value === 'manual';
+  document.getElementById('ovTitle').textContent = manual ? '正在读取稿约' : '正在读稿约';
+  document.getElementById('ovText').innerHTML = manual
+    ? '读取原文后生成基线草稿，不调用模型。<br>PDF 扫描件走本机 OCR，可能稍慢。'
+    : '先读取稿约全文，再让模型逐条比对原文。<br>通常十几秒，稿约长的话会更久一点。';
   document.getElementById('overlay').classList.add('on');
 });
 </script>

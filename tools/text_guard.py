@@ -4,10 +4,12 @@
 搬出来不是为了整理代码：判定要能在 pytest 之外复用（产物导出前自检、桌面端
 复核），留在夹具里就只有测试能调用，运行期反而没有守卫。
 
-口径（DESIGN §4.1，2026-11-02）：渲染器真正落地的字符级归一只有段首缩进
-删除（N-01 段首＋N-08，仅 body/abstract/keywords）、标题编号前缀重写、题注
-编号间隔归一、文献条目编号前缀（N-07）。N-02～N-06（正文内部空格、全半角）
-与段尾空白未实现，守卫逐字比对——「无条件删全部空白」的宽松口径不许回来。
+口径（DESIGN §4.1，2026-11-13）：渲染器真正落地的字符级归一为段首缩进
+删除（N-01 段首＋N-08，仅 body/abstract/keywords）、段尾空白删除（N-01
+段尾）、全角字母数字转半角（N-05，仅 body/abstract/keywords）、标题编号
+前缀重写、题注编号间隔归一、文献条目编号前缀（N-07）。N-02～N-04、N-06
+（正文内部空格、全半角标点、数字与中文间空格）未实现，守卫逐字比对——
+「无条件删全部空白」的宽松口径不许回来。
 """
 
 import re
@@ -18,6 +20,8 @@ from docx.oxml.ns import qn
 
 # 段首缩进只对这三类块允许删（N-01 段首＋N-08 的唯一落地处）。
 INDENT_LEADING_TYPES = {"body", "abstract", "keywords"}
+# N-05：全角字母数字转半角。只认这三段连续区，与渲染器 FULLWIDTH_ALNUM 同口径。
+FULLWIDTH_ALNUM = re.compile(r"[Ａ-Ｚａ-ｚ０-９]")
 HEADING_TYPES = {"heading1", "heading2", "heading3", "heading4"}
 CAPTION_TYPES = {"table_caption", "figure_caption"}
 
@@ -53,10 +57,17 @@ def normalize(text, btype=""):
     间隔）；文献条目允许抹编号前缀（N-07）。其余——包括全角↔半角、中文与
     拉丁之间的空格——一律不在白名单：normalize('数字金融 A 股') 不再等于
     normalize('数字金融A股')。
+
+    2026-11-13 起 body/abstract/keywords 另吃两项白名单（N-01 段尾、N-05）：
+    段尾空白删除与全角字母数字（Ａ１→A1）转半角。仍只删空白/换编码，不动
+    任何文字、数字或标点；其余块类型不适用。
     """
     s = text
     if btype in INDENT_LEADING_TYPES:
-        s = s.lstrip("\t \u3000")
+        s = s.lstrip("\t \u3000").rstrip("\t \u3000")
+        if FULLWIDTH_ALNUM.search(s):
+            s = "".join(chr(ord(c) - 0xFEE0) if FULLWIDTH_ALNUM.match(c) else c
+                        for c in s)
     if btype in HEADING_TYPES:
         # 先剥编号前缀、再塌留白（F43）：编号与标题之间的空白是分隔符
         # （「一　文献综述」），先塌缩会把编号粘进标题，前缀就再也剥不下来；
@@ -138,8 +149,14 @@ def signature(text, btype, kw_sep=None, label=None):
 
 # 会真正改写文字的动作。只有这些条目的 before/after 是文字快照，
 # 其余（页面设置、套版、悬挂缩进）存的是格式值。
+# 会真正改写文字、且审计 before/after 存的是**整段快照**的动作。
 TEXT_ACTIONS = {"标签归一", "关键词分隔符归一", "题注归一", "文献表标题归一",
                 "标题重新编号", "文献条目编号归一"}
+
+# 同样改文字、但审计只存改动附近片段的动作（N-01 段首/段尾、N-05）。
+# 它们不进 TEXT_ACTIONS——那一组的口径是「before/after 与源稿成品逐字相
+# 等」，片段快照不满足；槽位审计仍按「这里动过字」处理。
+FRAGMENT_TEXT_ACTIONS = {"段首缩进空格删除", "段尾空白删除", "全角字母数字归一"}
 
 # --citation 的豁免凭证（F39）：这两个动作会改写正文/条目文字，属产品唯一
 # 越线开关。豁免以审计条目本身为准——条目存在且 rule 指对才豁免，改了字
@@ -153,7 +170,7 @@ CITATION_REWRITE_RULES = {
 # 删除（N-01＋N-08）同样改字，只是记的是片段快照、没进全文快照登记；槽位审计
 # 认不出它就会把白名单内的缩进归一误判成槽内改字。引用改写不在这里——它是
 # 产品唯一越线开关，动作与 rule 对得上才认（见 _is_text_action）。
-SLOT_TEXT_ACTIONS = TEXT_ACTIONS | {"段首缩进空格删除"}
+SLOT_TEXT_ACTIONS = TEXT_ACTIONS | FRAGMENT_TEXT_ACTIONS
 
 
 class DocumentTexts(dict):

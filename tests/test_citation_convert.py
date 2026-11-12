@@ -172,3 +172,46 @@ def test_citation_skipped_when_mapping_broken(tmp_path):
     audit = json.loads((tmp_path / "out.audit.json").read_text(encoding="utf-8"))
     skip = [i for i in audit["items"] if "引用体系转换（已跳过）" == i["action"]]
     assert skip and "[9]" in skip[0]["note"]
+
+
+# ---------- 斜体保留（italic_fields，2026-11-13） ----------
+
+def rules_with_italics(tmp_path, name="cite_italic.json"):
+    """英文刊声明刊名斜体：模板占位符之外，斜体事实也必须来自规则集。"""
+    return mutated_rules(
+        tmp_path, "tjyj", name,
+        **{"citation.system": "author-year",
+           "citation.in_text": {"en_three_plus": True},
+           "citation.reference_list.templates": TEMPLATES,
+           "citation.reference_list.italic_fields": {"en_journal": ["journal"]},
+           "citation.reference_list.must_require_bidirectional_match": True})
+
+
+def test_format_entry_spans_declared_field_only():
+    rules = {"citation": {"reference_list": {
+        "templates": {"en_journal": "{authors}，{year}，“{title}”，{journal}"
+                                    "{volume_part}{page_part}."},
+        "italic_fields": {"en_journal": ["journal"]}}}}
+    e = cr.parse_entry(
+        "[2] Smith J. Digital finance and constraints[J]. "
+        "Journal of Finance, 2021, 76(2): 20-40.")
+    text, spans = cr.format_entry_with_spans(e, rules)
+    assert spans, "声明了 italic_fields 却没有返回斜体区间"
+    s, t = spans[0]
+    assert text[s:t] == "Journal of Finance", (text, spans)
+    assert cr.format_entry(e, rules) == text, "带区间渲染与纯文本渲染必须逐字一致"
+
+    # 未声明时区间为空，行为与旧版一致
+    plain = {"citation": {"reference_list": {
+        "templates": {"en_journal": "{authors}，{year}，{journal}."}}}}
+    text2, spans2 = cr.format_entry_with_spans(e, plain)
+    assert spans2 == [] and "Journal of Finance" in text2
+
+
+def test_italic_survives_end_to_end_rewrite(tmp_path):
+    src = build_doc(tmp_path / "d.docx")
+    out = run_render(tmp_path, src, rules_with_italics(tmp_path), citation=True)
+    para = next(p for p in out.paragraphs if "Journal of Finance" in p.text)
+    italic_runs = [r for r in para.runs if r.italic and "Journal of Finance" in r.text]
+    assert italic_runs, [(r.text, r.italic) for r in para.runs]
+    assert "Journal of Finance" in para.text

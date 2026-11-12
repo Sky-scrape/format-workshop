@@ -46,8 +46,13 @@ def test_latin_cjk_space_is_no_longer_normalized_away():
 
 
 def test_fullwidth_halfwidth_folding_is_gone():
-    """证据复现：全半角折叠（N-03/N-04/N-05）未实现，守卫不得替它开脱。"""
+    """全半角**标点**折叠（N-03/N-04）仍未实现，守卫不得替它开脱。
+
+    N-05 只收全角字母数字（2026-11-13 落地）；全角逗号属于语境判断，
+    不在白名单，逐字比。
+    """
     assert normalize("研究发现，增长", "body") != normalize("研究发现,增长", "body")
+    assert normalize("２０２０年", "body") == normalize("2020年", "body")
 
 
 def test_heading_number_prefix_strip_is_scoped_to_headings():
@@ -57,9 +62,16 @@ def test_heading_number_prefix_strip_is_scoped_to_headings():
         "body 块的「二、」前缀被守卫剥掉了——渲染器对 body 没有这个授权"
 
 
-def test_body_keeps_trailing_whitespace_significant():
-    """段尾空白删除未实现（DESIGN §4.1 N-01 现行实现栏），不得抹平。"""
-    assert normalize("正文结尾 ", "body") == "正文结尾 "
+def test_body_trailing_whitespace_is_now_whitelisted():
+    """段尾空白删除已实现（DESIGN §4.1 N-01 段尾，2026-11-13）。
+
+    守卫必须按同一口径放行；正文内部空格仍不被抹平（见上一条），
+    「无条件删全部空白」的宽松口径没有回来。
+    """
+    assert normalize("正文结尾 ", "body") == normalize("正文结尾", "body")
+    assert normalize("正文 内部", "body") != normalize("正文内部", "body")
+    # 非正文块不吃段尾删除：文献条目仍逐字比
+    assert normalize("条目  ", "reference_item") != normalize("条目", "reference_item")
 
 
 def test_keyword_terms_keep_inner_word_space():

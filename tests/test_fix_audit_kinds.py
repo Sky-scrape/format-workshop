@@ -210,3 +210,23 @@ def test_render_is_deterministic():
     first = render(audit, job="t1")
     second = render(audit, job="t1")
     assert first == second
+
+
+def test_batch_reject_checkbox_per_action_group():
+    """同类 B 档条目按动作分组，每组一个「全选本类」开关（DESIGN §3）。
+
+    勾选框仍是逐条 name=rid（后端接口不变）；分组开关只是前端把本组
+    可驳回的勾选框一起点掉，驳回粒度没有变粗。
+    """
+    audit = {"source": "x.docx", "target": "统计研究", "items": [
+        _item("段尾空白删除", idx=3, before="甲  ", after="甲"),
+        _item("段尾空白删除", idx=4, before="乙  ", after="乙"),
+        _item("关键词分隔符归一", idx=7, before="GDP CPI", after="GDP；CPI"),
+    ]}
+    html_out = render(audit, job="t1")
+    assert html_out.count('class="pickg"') == 2, "每个动作组应各有一个批量开关"
+    assert 'data-g="0"' in html_out and 'data-g="1"' in html_out
+    # 逐条驳回勾选框仍在（两条段尾 + 一条关键词）
+    assert html_out.count('name="rid"') == 3
+    # 分组标题行确实是全表宽，不会把列挤错
+    assert 'class="aghead"' in html_out
