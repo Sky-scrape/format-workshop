@@ -96,11 +96,16 @@
 const tabs=[...document.querySelectorAll('.tab')],openReport=document.getElementById('openReport');
 /* 报告与本页同源，直接量高度铺开，避免 iframe 内再套一条滚动条 */
 const fit=f=>{if(!f)return;try{const d=f.contentDocument;if(d&&d.documentElement){const h=Math.max(d.documentElement.scrollHeight,d.body?d.body.scrollHeight:0);if(h>0)f.style.height=(h+6)+'px'}}catch(e){}};
-tabs.forEach(tab=>tab.addEventListener('click',()=>{tabs.forEach(item=>{const active=item===tab;item.classList.toggle('on',active);item.setAttribute('aria-selected',active?'true':'false');const pane=document.getElementById(item.dataset.pane);pane.classList.toggle('on',active);pane.hidden=!active;if(active)fit(pane.querySelector('iframe'))});openReport.href=tab.dataset.url}));
+/* 审计报告里的分组会展开/收起、搜索会过滤行，iframe 内容高度随之变化；
+   不跟着重铺的话，操作一次就在报告内部多出一条滚动条。同源可控，直接
+   在子文档 body 上挂 ResizeObserver。 */
+const observe=f=>{try{const d=f.contentDocument;if(!d||!d.body||f._ro)return;const ro=new ResizeObserver(()=>fit(f));ro.observe(d.body);f._ro=ro}catch(e){}};
+const settle=f=>{fit(f);observe(f)};
+tabs.forEach(tab=>tab.addEventListener('click',()=>{tabs.forEach(item=>{const active=item===tab;item.classList.toggle('on',active);item.setAttribute('aria-selected',active?'true':'false');const pane=document.getElementById(item.dataset.pane);pane.classList.toggle('on',active);pane.hidden=!active;if(active)settle(pane.querySelector('iframe'))});openReport.href=tab.dataset.url}));
 const allFrames=()=>document.querySelectorAll('.pane iframe');
-allFrames().forEach(f=>{f.addEventListener('load',()=>fit(f));fit(f)});
-window.addEventListener('load',()=>allFrames().forEach(fit));
-setTimeout(()=>allFrames().forEach(fit),700);
+allFrames().forEach(f=>{f.addEventListener('load',()=>settle(f));settle(f)});
+window.addEventListener('load',()=>allFrames().forEach(settle));
+setTimeout(()=>allFrames().forEach(settle),700);
 const diffTo=document.getElementById('diffTo'),diffLink=document.getElementById('diffLink');
 if(diffTo)diffTo.addEventListener('change',()=>{diffLink.href='/job/{{ job }}/diff?to='+diffTo.value});
 /* 防重复提交：换刊重排是慢操作，双击的第二个请求会被后端任务锁挡回

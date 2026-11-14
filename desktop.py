@@ -499,15 +499,26 @@ def install_engine(window, timeout=25):
         return False
 
     from System import Action
-    state = {}
+    # 失败归因现场：放弃时只写「未就绪」分不清三件事——Invoke 根本投不进
+    # UI 线程、控件还没挂上 webview、还是 CoreWebView2 一直是 None。三路各
+    # 记各的阶段，循环里累计尝试次数与最后一次 Invoke 异常，放弃落盘时一并
+    # 输出（早间 install_engine 放弃未归因就卡在这里）。
+    state = {"attempts": 0, "invoke_errors": 0, "last_invoke_error": None,
+             "stage": "init"}
 
     def install():
         if state.get("ok"):
             return                       # 重试幂等：上一个已装好（D-02）
         try:
-            core = native.webview.CoreWebView2
+            web = getattr(native, "webview", None)
+            if web is None:
+                state["stage"] = "no_webview"
+                return                   # WinForms 控件还没挂上 BrowserView
+            core = web.CoreWebView2
             if core is None:
-                return
+                state["stage"] = "no_core"
+                return                   # 控件在，WebView2 运行时尚未完成初始化
+            state["stage"] = "installing"
             from Microsoft.Web.WebView2.Core import CoreWebView2WebResourceContext
             core.AddWebResourceRequestedFilter(
                 f"{LOCAL_URL}/*", CoreWebView2WebResourceContext.All)
@@ -558,24 +569,34 @@ def install_engine(window, timeout=25):
 
             core.WebResourceRequested += on_request
             state["ok"] = True
+            state["stage"] = "installed"
         except Exception as e:           # noqa: BLE001
             state["error"] = e
+            state["stage"] = "exception"
             log_exc("install：装引擎拦截器失败")
 
     while time.time() < deadline:
+        state["attempts"] += 1
         try:
             native.Invoke(Action(install))
-        except Exception:                # noqa: BLE001
-            pass
+        except Exception as e:           # noqa: BLE001
+            # Invoke 投递失败（主窗已销毁 / COM 已断开）同样算一次尝试：
+            # 只吞掉的话，放弃日志里看不出「一次都没投进去」——那和
+            # 「投进去了但 WebView2 没就绪」是两种完全不同的故障。
+            state["invoke_errors"] += 1
+            state["last_invoke_error"] = e
         if state.get("ok"):
             with _INSTALL_LOCK:
                 _ENGINE_INSTALLED.add(key)
             return True
         time.sleep(0.2)
+    diag = (f"attempts={state['attempts']}，stage={state['stage']}，"
+            f"invoke_errors={state['invoke_errors']}，"
+            f"last_invoke_error={state['last_invoke_error']!r}")
     if state.get("error") is not None:
-        log_line(f"install_engine 放弃：error={state['error']!r}")
+        log_line(f"install_engine 放弃：error={state['error']!r}（{diag}）")
     else:
-        log_line("install_engine 放弃：重试期内 WebView2 未就绪")
+        log_line(f"install_engine 放弃：重试期内 WebView2 未就绪（{diag}）")
     return False
 
 

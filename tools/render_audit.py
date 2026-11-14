@@ -198,9 +198,16 @@ def render(d, job=None):
     for it in text_items:
         text_groups.setdefault(it["action"], []).append(it)
 
-    def text_row(it, gid):
-        return (f'<tr data-g="{gid}" data-k="{html.escape(it["action"] + " " + it.get("note", ""))}"'
-                f'{" class=rejected" if it.get("rejected") else ""}>'
+    # 高频字符动作（段尾空白删除、全角字母数字归一）在长文里动辄几十条，
+    # 明细全量平铺会把真正的结构性改动淹掉：超过这个数默认收起组内明细。
+    # 组头计数、批量开关与逐条勾选框照旧（收起不等于不能驳回），页面脚本
+    # 里搜索命中会强制展开对应组。
+    FOLD_AT = 10
+
+    def text_row(it, gid, folded=False):
+        cls = "gbody" + (" rejected" if it.get("rejected") else "")
+        return (f'<tr class="{cls}" data-g="{gid}" data-k="{html.escape(it["action"] + " " + it.get("note", ""))}"'
+                f'{" hidden" if folded else ""}>'
                 f'<td class="pos">{pos_label(it["idx"])}'
                 f'<span class="sec">{html.escape(it.get("sec") or "")}</span></td>'
                 f'<td class="act">{html.escape(it["action"])}'
@@ -215,15 +222,20 @@ def render(d, job=None):
         chunks = []
         for gid, (action, rows) in enumerate(text_groups.items()):
             n_rj = sum(1 for it in rows if it["action"] in REJECTABLE)
+            folded = len(rows) > FOLD_AT
             pick = (f'<label class="pickall"><input type="checkbox" class="pickg" '
                     f'data-g="{gid}"><span>全选本类</span></label>'
                     f'<span class="gcount">{len(rows)} 条'
                     f'{f"，其中 {n_rj} 条可驳回" if n_rj else "，均不可驳回"}</span>'
                     if job and n_rj else
                     f'<span class="gcount">{len(rows)} 条</span>')
-            chunks.append(f'<tr class="aghead" data-g="{gid}"><td colspan="{col}">'
-                          f'<span class="aname">{html.escape(action)}</span>{pick}</td></tr>')
-            chunks.extend(text_row(it, gid) for it in rows)
+            chunks.append(
+                f'<tr class="aghead" data-g="{gid}"><td colspan="{col}">'
+                f'<button class="gtog" type="button" data-g="{gid}" '
+                f'aria-expanded="{"false" if folded else "true"}">'
+                f'<span class="gtx">{"展开" if folded else "收起"}</span></button>'
+                f'<span class="aname">{html.escape(action)}</span>{pick}</td></tr>')
+            chunks.extend(text_row(it, gid, folded) for it in rows)
         text_rows = "".join(chunks)
     else:
         text_rows = f'<tr><td colspan="{col}" class="empty">本次没有触及任何字符的改动</td></tr>'
@@ -397,6 +409,10 @@ tr.aghead:first-child td{{padding-top:2px;border-top:none}}
 .pickall{{display:inline-flex;align-items:center;gap:6px;margin-left:14px;font-size:12px;
 color:var(--ink3);cursor:pointer}}
 .pickall input{{width:14px;height:14px;cursor:pointer;accent-color:var(--gold)}}
+.gtog{{border:1px solid var(--line);background:var(--surface);color:var(--ink3);
+font-size:11.5px;padding:2px 9px;border-radius:999px;cursor:pointer;margin-right:8px;
+line-height:1.8}}
+.gtog:hover{{background:var(--soft);color:var(--ink)}}
 tr.aghead .gcount{{margin-left:10px}}
 .anon li{{margin:4px 0;font-size:12.5px;color:var(--ink2)}}
 @media(max-width:640px){{
@@ -467,16 +483,38 @@ document.querySelectorAll('.toolbar button').forEach(b=>b.addEventListener('clic
   textSection.style.display=(f==='layout')?'none':'';
   layoutSection.style.display=(f==='text')?'none':'';
 }}));
-q.addEventListener('input',()=>{{
+/* 文本表：组折叠与搜索共用一套显隐判定。搜索优先于折叠——命中组强制展开、
+   无命中组连组头一起藏，避免出现「有明细没组头」的错位；清空搜索后回到
+   用户自己的折叠状态（aria-expanded 是唯一真源）。 */
+const heads=[...document.querySelectorAll('#textTable tbody tr.aghead')];
+const rowsOf=gid=>[...document.querySelectorAll('#textTable tbody tr.gbody[data-g="'+gid+'"]')];
+const applyText=()=>{{
   const v=q.value.trim().toLowerCase();
-  document.querySelectorAll('#textTable tbody tr').forEach(tr=>{{
-    tr.hidden=!!v&&!tr.textContent.toLowerCase().includes(v);
+  heads.forEach(head=>{{
+    const gid=head.dataset.g,bt=head.querySelector('.gtog');
+    const expanded=!!bt&&bt.getAttribute('aria-expanded')==='true';
+    const rows=rowsOf(gid);
+    let hits=0;
+    rows.forEach(tr=>{{
+      const hit=!v||tr.textContent.toLowerCase().includes(v);
+      if(hit)hits++;
+      tr.hidden=v?!hit:!expanded;
+    }});
+    head.hidden=!!v&&hits===0;
   }});
   document.querySelectorAll('details.group').forEach(g=>{{
     g.hidden=!!v&&!g.textContent.toLowerCase().includes(v);
     if(v)g.open=true;
   }});
-}});
+}};
+q.addEventListener('input',applyText);
+document.querySelectorAll('.gtog').forEach(b=>b.addEventListener('click',()=>{{
+  const exp=b.getAttribute('aria-expanded')==='true';
+  b.setAttribute('aria-expanded',exp?'false':'true');
+  b.querySelector('.gtx').textContent=exp?'展开':'收起';
+  applyText();
+}}));
+applyText();
 /* 按类批量驳回：分组开关只动本组可驳回的勾选框，单条勾选仍可继续微调 */
 document.querySelectorAll('.pickg').forEach(box=>{{
   const gid=box.dataset.g;

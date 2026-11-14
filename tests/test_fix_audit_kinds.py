@@ -89,6 +89,30 @@ def test_citation_actions_graded_by_whether_they_touch_text():
     assert "N" in GRADE_DESC
 
 
+def test_text_guard_actions_match_b_grade_table():
+    """text_guard 认作「动过字」的动作与 KIND 的 B 档必须一一对上。
+
+    B 档动作只有三个来源：槽位文字动作（TEXT_ACTIONS ∪
+    FRAGMENT_TEXT_ACTIONS）、引用改写豁免、表注换位（note_reorder_blocks
+    单独识别）。渲染器新加一个改字动作时，漏进 KIND 会被兜底成 A 档、
+    漏进 text_guard 会让运行期闸放行未登记改字——两个方向都在这里钉死。
+    """
+    import text_guard
+
+    b_grades = {a for a, g in KIND.items() if g == "B"}
+    covered = (text_guard.SLOT_TEXT_ACTIONS
+               | set(text_guard.CITATION_REWRITE_RULES)
+               | {"表注／图注层序调整"})
+    assert text_guard.SLOT_TEXT_ACTIONS <= b_grades, (
+        "text_guard 认作改字的动作被渲染器定成了 A/N 档："
+        f"{sorted(text_guard.SLOT_TEXT_ACTIONS - b_grades)}")
+    assert covered == b_grades, (
+        "B 档动作没有进 text_guard 的登记表（运行期闸认不出它改过字）："
+        f"{sorted(b_grades - covered)}；"
+        "或 text_guard 登记了渲染器不再产生的动作："
+        f"{sorted(covered - b_grades)}")
+
+
 # ---------- REJECTABLE 的边界 ----------
 
 def test_rejectable_exactly_matches_blocked_b_grade_actions():
@@ -230,3 +254,31 @@ def test_batch_reject_checkbox_per_action_group():
     assert html_out.count('name="rid"') == 3
     # 分组标题行确实是全表宽，不会把列挤错
     assert 'class="aghead"' in html_out
+
+
+def test_large_text_group_folded_but_still_rejectable():
+    """高频字符动作超过 10 条：明细默认收起，组头/批量开关/勾选框仍可用。"""
+    items = [_item("段尾空白删除", idx=3 + i, before=f"甲{i}  ", after=f"甲{i}")
+             for i in range(12)]
+    html_out = render({"source": "x.docx", "target": "统计研究", "items": items},
+                      job="t1")
+
+    assert html_out.count('aria-expanded="false"') == 1, "大组应默认收起"
+    assert '<span class="gtx">展开</span>' in html_out
+    assert html_out.count('class="gbody"') == 12
+    assert html_out.count(" hidden>") == 12, "收起组的明细行应默认隐藏"
+    # 收起不等于不可驳回：批量开关与逐条勾选框都还在
+    assert html_out.count('class="pickg"') == 1
+    assert html_out.count('name="rid"') == 12
+
+
+def test_small_text_group_stays_expanded():
+    """10 条以内不折叠：折叠按钮在，明细默认可见。"""
+    items = [_item("段尾空白删除", idx=3 + i, before=f"甲{i}  ", after=f"甲{i}")
+             for i in range(4)]
+    html_out = render({"source": "x.docx", "target": "统计研究", "items": items},
+                      job="t1")
+
+    assert html_out.count('aria-expanded="true"') == 1
+    assert '<span class="gtx">收起</span>' in html_out
+    assert " hidden>" not in html_out

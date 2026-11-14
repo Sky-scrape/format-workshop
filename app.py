@@ -19,7 +19,7 @@
 """
 
 import argparse
-import importlib.util
+import importlib
 import json
 import logging
 import os
@@ -336,6 +336,25 @@ def journal_by_id(jid):
     return None
 
 
+_LAZY_IMPORT_LOCK = threading.Lock()
+
+
+def _lazy_module(name):
+    """tools/ 下的重模块按需加载一次。
+
+    sys.path 已在模块顶部挂好 tools/，这里用标准 import 而不是
+    spec_from_file_location 再插一次路径：后者并发首调时每个线程各自 exec
+    一份模块对象，虽然后面会覆盖 sys.modules 同名项，但先拿到的调用方仍
+    攥着旧实例——运行期闸与测试夹具本该共用同一份判定（见 text_guard 的
+    模块头），多实例就是两份实现。双检锁只让一个线程真正执行 import。
+    """
+    mod = sys.modules.get(name)
+    if mod is not None:
+        return mod
+    with _LAZY_IMPORT_LOCK:
+        return importlib.import_module(name)
+
+
 _cr = None
 
 
@@ -343,13 +362,7 @@ def compliance():
     """按需加载体检模块，复用它的判定逻辑，避免 Web 层再写一遍。"""
     global _cr
     if _cr is None:
-        spec = importlib.util.spec_from_file_location(
-            "compliance_report", ROOT / "tools" / "compliance_report.py")
-        m = importlib.util.module_from_spec(spec)
-        sys.modules["compliance_report"] = m
-        sys.path.insert(0, str(ROOT / "tools"))
-        spec.loader.exec_module(m)
-        _cr = m
+        _cr = _lazy_module("compliance_report")
     return _cr
 
 
@@ -361,13 +374,7 @@ def text_guard():
     转出的也是这个模块），避免「测试守得住、上线没人守」的两份实现。"""
     global _tg
     if _tg is None:
-        spec = importlib.util.spec_from_file_location(
-            "text_guard", ROOT / "tools" / "text_guard.py")
-        m = importlib.util.module_from_spec(spec)
-        sys.modules["text_guard"] = m
-        sys.path.insert(0, str(ROOT / "tools"))
-        spec.loader.exec_module(m)
-        _tg = m
+        _tg = _lazy_module("text_guard")
     return _tg
 
 
@@ -824,7 +831,8 @@ def _guard_product_text(d, src, filled_docx, out_docx, render_ir, audit_json, ru
     more = f"（共 {len(violations)} 处，只列前 5 处）" if len(violations) > 5 else ""
     raise ConvertError(
         "成品未通过文字白名单校验",
-        "排版只允许已登记的字符归一（段首缩进、题注/标签/编号前缀）。"
+        "排版只允许已登记的字符归一（段首/段尾空白、全角字母数字、"
+        "题注/标签/编号前缀、关键词分隔符）。"
         "检测到白名单之外的文字改动，已停止交付；请把下方技术细节发给开发者。",
         f"白名单外改动 {len(violations)} 处：{shown}{more}")
 

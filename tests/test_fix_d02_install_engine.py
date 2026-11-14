@@ -129,6 +129,32 @@ def test_give_up_without_core_is_logged(tmp_path, monkeypatch):
     assert "重试期内 WebView2 未就绪" in log
 
 
+def test_give_up_log_names_the_stage(tmp_path, monkeypatch):
+    """放弃日志带阶段与尝试次数：三种卡法可区分（install_engine 未归因收口）。
+
+    此前所有失败都只落「重试期内 WebView2 未就绪」：Invoke 根本投不进 UI
+    线程、控件没挂 webview、CoreWebView2 一直 None 三种故障在日志里长得
+    一模一样，事后无从归因。
+    """
+    _fake_net(monkeypatch)
+    monkeypatch.setattr(desktop, "_ENGINE_INSTALLED", set())
+    monkeypatch.setattr(desktop, "ROOT", tmp_path)
+
+    # ① 控件在、CoreWebView2 一直是 None → stage=no_core
+    assert desktop.install_engine(_window(None), timeout=0.25) is False
+    log = (tmp_path / "outputs" / "desktop.log").read_text(encoding="utf-8")
+    assert "stage=no_core" in log and "attempts=" in log
+
+    # ② Invoke 每次抛错 → 记次数与最后一笔异常，能看出「一次都没投进去」
+    native = types.SimpleNamespace(
+        webview=types.SimpleNamespace(CoreWebView2=None),
+        Invoke=lambda action: (_ for _ in ()).throw(RuntimeError("ui gone")))
+    win = types.SimpleNamespace(uid="d02-invoke-boom", native=native)
+    assert desktop.install_engine(win, timeout=0.25) is False
+    log = (tmp_path / "outputs" / "desktop.log").read_text(encoding="utf-8")
+    assert "invoke_errors=" in log and "ui gone" in log and "stage=init" in log
+
+
 def test_work_failure_leaves_uri_and_traceback(tmp_path, monkeypatch):
     """请求处理异常：deferral 照常 Complete，desktop.log 带 URI 与栈。"""
     _fake_net(monkeypatch)
