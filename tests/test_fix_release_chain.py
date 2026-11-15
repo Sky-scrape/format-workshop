@@ -6,10 +6,12 @@
 """
 
 import subprocess
+from pathlib import Path
 
 from conftest import TOOLS
 
 import release
+import build_portable
 
 
 def test_release_notes_first_release_fallback():
@@ -48,7 +50,8 @@ def test_upstream_synced_true_when_identical(monkeypatch):
 def test_source_pins():
     """源码钉：内联命令列表、显式 --upload 开关、上游核对与脏树闸门都在位。"""
     src = (TOOLS / "release.py").read_text(encoding="utf-8")
-    assert 'subprocess.run([sys.executable, "tools/build_portable.py", "--zip"]' in src
+    assert 'subprocess.run([sys.executable, "tools/build_portable.py", "--zip",' in src
+    assert '"--shipped-only"' in src, "发布包必须只带 3 本示例刊，不能外发私有规则库"
     assert '"tools/build_installer.py", "--version", ver' in src
     assert "if not a.upload:" in src
     assert '"--upload"' in src
@@ -66,3 +69,13 @@ def test_upload_stages_ascii_asset_names():
     assert "shutil.copy2(zip_path, up_zip)" in src
     assert "#格式工坊 " in src        # 中文留在显示标签
     assert "shutil.rmtree(stage" in src  # 暂存目录用完即清
+
+
+def test_release_package_excludes_private_rulesets(monkeypatch):
+    """公开发布只带 3 本示例刊；本机私有规则库与样张不能进 Release。"""
+    monkeypatch.setattr(build_portable, "SHIPPED_ONLY", True)
+    assert build_portable.is_excluded(Path("rules/journal/glpl.json"))
+    assert build_portable.is_excluded(Path("rules/journal/cre.sample.pdf"))
+    assert build_portable.is_excluded(Path("rules/journal/_drafts/x/draft.json"))
+    assert not build_portable.is_excluded(Path("rules/journal/cjyj.json"))
+    assert not build_portable.is_excluded(Path("rules/journal/cjyj.spec.html"))

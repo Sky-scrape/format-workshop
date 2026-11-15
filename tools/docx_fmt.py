@@ -50,6 +50,7 @@ DEFAULTS = {
     "note_size_pt":          (9,      "表注字号未声明，取"),
     "author_note_line_mult": (1.6,    "作者简介行距按字号×1.6 折算"),
     "author_note_label_font_cn": ("黑体", "作者简介标签中文字体未声明，取"),
+    "para_space_pt":         (0,      "段落前后距未声明，取"),
 }
 
 

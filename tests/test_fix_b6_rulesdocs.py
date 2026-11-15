@@ -15,7 +15,7 @@
        仍成立。
 - F62  schema 结构图 verification 移到顶层；placement 枚举补三值并配含义。
 - F63  覆盖面计数跨文档一致：会计单列（1 本）、管理学 6 本，桶合计以实际清单为准。
-- F64  needs.md 同步 29 本：第七/八批入库记录与中文 22 / 英文 7 口径都在。
+- F64  needs.md 同步 31 本：第七/八/九批入库记录与中文 24 / 英文 7 口径都在。
 - F65  schema §3 block 类型总表覆盖规则集在用的每一个类型（含本批补的
        subtitle/doi/article_number/column_name/endnotes）。
 - READMEIT  已知限制声明重排条目为纯文本、原条目内斜体不保留。
@@ -42,7 +42,7 @@ AUDIT_MD = ROOT / "rules" / "audit-2026-11-01.md"
 README_MD = ROOT / "README.md"
 
 # 本文件钉的是「台账 ↔ 全库磁盘状态」的一致性：coverage/gaps/needs 描述完整
-# 规则库（29 本），开源检出只有 3 本示例（README「开源边界」），文件数对不上
+# 规则库（31 本），开源检出只有 3 本示例（README「开源边界」），文件数对不上
 # 是常态不是回归——全库一致性只在本地全库环境跑，公开检出整文件跳过。
 pytestmark = pytest.mark.skipif(
     len(list(RULES.glob("*.json"))) < 10,
@@ -203,8 +203,7 @@ def test_f61_erratum_facts_hold_in_data():
     assert not failures
     unknown = sum(r["provenance"]["unknown"] for r in rows)
     total = sum(r["size_fields"] for r in rows)
-    assert f"{unknown}/{total}" == "0/627", \
-        f"出处计数漂成 {unknown}/{total}——勘误第 4 条的口径要跟着对齐"
+    assert unknown == 0, f"字号出处缺登记 {unknown} 项（共 {total} 个字号字段）"
     # 推定类单独成桶：纯推定项有出处，但必须与官方/实测区分开、可追踪复核
     assert sum(r["provenance"]["inferred"] for r in rows) == 52, \
         "inferred 桶漂移——勘误第 4 条的推定计数要跟着对齐"
@@ -246,8 +245,8 @@ def test_f63_bucket_counts_match_actual_list():
     counts = [int(n) for n in re.findall(r"（(\d+)", buckets)]
     assert counts and sum(counts) == zh_total, \
         f"各方向计数之和 {sum(counts)} 与中文总数 {zh_total} 不一致"
-    assert "管理学（7）" not in cov, "会计不应折入管理学"
-    assert "管理学（6）" in cov and "会计（1）" in cov, "管理学/会计分桶变了"
+    assert "管理学（7）" in cov, "管理学方向应为 7 本（含管理评论）"
+    assert "会计（1）" in cov, "会计不应折入管理学"
     assert zh_total + en_total == len(list(RULES.glob("*.json"))), \
         "覆盖面总数与 rules/journal 实际清单不一致"
 
@@ -256,12 +255,12 @@ def test_f63_counts_agree_across_documents():
     gaps = read(GAPS_MD)
     mgmt_row = next(ln for ln in gaps.splitlines() if ln.startswith("| 管理学 |"))
     acct_row = next(ln for ln in gaps.splitlines() if ln.startswith("| 会计 |"))
-    assert mgmt_row.rstrip().endswith("| 6 |"), mgmt_row
+    assert mgmt_row.rstrip().endswith("| 7 |"), mgmt_row
     assert acct_row.rstrip().endswith("| 1 |"), acct_row
 
     schema_tail = read(SCHEMA_MD)
     final = [ln for ln in schema_tail.splitlines() if ln.startswith("至此中文")][-1]
-    assert "管理学方向 6 本" in final and "会计研究单列" in final, final
+    assert "管理学方向 7 本" in final and "会计研究单列" in final, final
 
 
 # ---------------------------------------------------------------- F64
@@ -269,8 +268,8 @@ def test_f63_counts_agree_across_documents():
 def test_f64_needs_md_synced_to_current_library():
     t = read(NEEDS_MD)
     assert "均已凭正文 PDF 补齐，22 本" not in t, "needs.md 还停在 22 本"
-    # 第八批（2026-11-12）入库后：中文 22 + 英文 7 = 29 本
-    assert "共 29 本" in t, "needs.md 没有同步到 29 本"
+    # 第八批（2026-11-12）后 29 本；第九批（2026-11-15）管理评论、中国农村经济入库 = 31 本
+    assert "共 31 本" in t, "needs.md 没有同步到 31 本"
     assert "第七批" in t, "第七批入库记录缺失"
     assert "第八批" in t, "第八批入库记录缺失"
     assert "**管理科学学报 / 系统工程理论与实践 / 管理工程学报**" not in t

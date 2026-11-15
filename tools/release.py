@@ -79,8 +79,9 @@ def main():
 
     # 构建两条腿：绿色包 zip → setup 安装包（顺序有依赖，不能并行）。
     # 命令列表就地内联（ Mimosa 闸门要求：不把整条命令列表攒在变量里传）
-    print("→ build_portable.py --zip")
-    r = subprocess.run([sys.executable, "tools/build_portable.py", "--zip"],
+    print("→ build_portable.py --zip --shipped-only")
+    r = subprocess.run([sys.executable, "tools/build_portable.py", "--zip",
+                        "--shipped-only"],
                        cwd=str(ROOT), shell=False)
     if r.returncode != 0:
         raise SystemExit("构建步骤失败（build_portable --zip）")

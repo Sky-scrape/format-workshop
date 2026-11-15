@@ -1979,6 +1979,9 @@ def main():
     line_mult = ls["value"] if ls.get("mode") == "multiple" else None
     line_pt = None if line_mult else (ls.get("value_pt") or ls.get("equivalent_exact_pt")
                                       or DEFAULTS["body_line_pt"][0])
+    # 规则集写「最小值 N 磅」时按 atLeast 写入：固定值会裁掉超过行高的
+    # 上标/分式，最小值只保底不封顶。未声明时沿用固定值（中文刊常态）。
+    line_rule = "at_least" if ls.get("mode") == "at_least" else "exact"
     # 行距兜底值是代码约定：用到的审计条目要标缺省（F30）
     line_def = [] if (line_mult or ls.get("value_pt") or ls.get("equivalent_exact_pt")) \
         else ["body_line_pt"]
@@ -2460,6 +2463,8 @@ def main():
             abs_own_line = (absp.get("line_spacing") or {}).get("value_pt") \
                 or (absp.get("line_spacing") or {}).get("equivalent_exact_pt")
             abs_ls = abs_own_line or line_pt
+            abs_rule_mode = ((absp.get("line_spacing") or {}).get("mode") == "at_least"
+                             )
             abs_rule = (f"typography.{key}" if rules["typography"].get(key)
                         else "typography.abstract" if rules["typography"].get("abstract")
                         else "typography.body")
@@ -2474,6 +2479,7 @@ def main():
                             abs_target, abs_rule, tp=absp,
                             cn=absp.get("font_cn", cn), latin=latin, line_multiple=line_mult,
                             size=absp.get("size_pt", size), align="both", line_pt=abs_ls,
+                            line_rule="at_least" if abs_rule_mode else "exact",
                             indent=indent)
             continue
 
@@ -2677,7 +2683,7 @@ def main():
             normalize_body_chars_audited(p, blk, audit)
         before_fmt = fmt_snapshot(p)
         restyle(p, cn=cn, latin=latin, size=size, align="both", line_pt=line_pt, indent=indent,
-                line_multiple=line_mult)
+                line_multiple=line_mult, line_rule=line_rule)
         after_fmt = fmt_snapshot(p)
         if before_fmt != after_fmt:
             audit.add(blk["idx"], t, "正文套版",

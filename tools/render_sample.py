@@ -51,6 +51,12 @@ def add_para(doc, text, *, cn=None, latin=None, size=None, bold=None,
         set_chars_indent(p, indent_chars)
     if before_lines or after_lines:
         set_line_unit_space(p, before_lines, after_lines)
+    else:
+        # docDefaults 常带 8–10pt 段后距；中文期刊正文/摘要的段与段之间
+        # 通常不额外留白，行距已经由固定值控制。不显式清零，PDF 里相邻
+        # 两段的基线距会比规则集多出一截，样板看起来「行距不对」。
+        p.paragraph_format.space_before = Pt(DEFAULTS["para_space_pt"][0])
+        p.paragraph_format.space_after = Pt(DEFAULTS["para_space_pt"][0])
     if keep:
         p.paragraph_format.keep_with_next = True
     if text:

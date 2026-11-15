@@ -356,7 +356,7 @@ python tools/build_journal.py rules/journal/{id}.json
 - **必填**：结构性要件阻断 + 个人信息可选（§10.4）。`blocks[].required` 缺件且不能由补录补齐时阻断；`personal_fields[].required` 只提示，不阻断。
 - **编辑部/另附项**：`highlights` 按另附文件处理，`received_date` 由编辑部填写；连同 `article_number` / `document_code`，都不按正文缺件阻断。
 - **字数与标题限制**：总字数下限兼容 `limits.total.min` 与 `limits.total_min`；标题上限兼容 `title_chars_max` 与 `title_max_chars`；`limits.total.scope` 的「正文（含字符）」按正文口径统计。报告与规格页已同口径显示。**2026-11-13**：入库规则集已由 `tools/normalize_keys.py` 统一到 `limits.total.min` / `title_chars_max`，读取侧保留旧键兼容供外部规则集使用。
-- **起手期刊清单**：已落地 29 本（中文 22 + 英文 7），见 `rules/coverage.md`；"首个英文期刊的引入时点"随之关闭。
+- **起手期刊清单**：已落地 31 本（中文 24 + 英文 7），见 `rules/coverage.md`；"首个英文期刊的引入时点"随之关闭。
 
 ---
 

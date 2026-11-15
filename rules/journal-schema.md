@@ -1174,4 +1174,4 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 
 管理科学学报严格说是"guide + published"混合：结构有官方明文，版式靠实物。`typography_authority` 记 `guide`（版式依据来自同族刊与实物混合），`status` 记 `verified`（有 3 篇实物互证）。
 
-至此中文 22 本、英文 7 本。管理学方向 6 本（工商管理与运筹决策两支），会计研究单列 1 本，财税方向 1 本（税务与经济）——分类口径与 `coverage.md`、`gaps.md` 一致（会计不折入管理学）。
+至此中文 24 本、英文 7 本。管理学方向 7 本（工商管理与运筹决策两支，含 2026-11-15 入库的《管理评论》），农业与农村经济方向 1 本（《中国农村经济》），会计研究单列 1 本，财税方向 1 本（税务与经济）——分类口径与 `coverage.md`、`gaps.md` 一致（会计不折入管理学）。

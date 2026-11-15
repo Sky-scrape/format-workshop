@@ -70,6 +70,11 @@ EXCLUDE_FILES = {"config/ai.json", "config/author_profile.json",
                  ".gitignore", ".gitattributes", "开发版.bat"}
 EXCLUDE_SUFFIX = {".pyc", ".pyo", ".log", ".tmp", ".bak", ".swp"}
 
+# 公开发布只带仓库自带的 3 本示例刊；开发机上的完整规则库是重资产，
+# 不能随 Release 外发。本地日常便携包不加 --shipped-only，仍带全库。
+SHIPPED_JOURNAL_IDS = {"cjyj", "tjyj", "gjjryj"}
+SHIPPED_ONLY = False
+
 
 def rel_posix(p: Path) -> str:
     return p.as_posix()
@@ -98,6 +103,12 @@ def is_excluded(rel: Path) -> bool:
         return True
     if s in EXCLUDE_FILES:
         return True
+    if SHIPPED_ONLY and parts[:2] == ("rules", "journal"):
+        # 只放行 README 与 3 本示例刊的规则集/规格页；样板的 docx/pdf
+        # 也按同一 id 前缀判断，避免私有刊的产物从别的扩展名漏出去。
+        stem = rel.name.split(".", 1)[0]
+        if stem not in SHIPPED_JOURNAL_IDS and rel.name != "README.md":
+            return True
     if any(part in EXCLUDE_DIRS for part in parts):
         return True
     return rel.suffix in EXCLUDE_SUFFIX
@@ -392,7 +403,12 @@ def main():
     ap.add_argument("--zip", action="store_true", help="构建后打包成 zip")
     ap.add_argument("--allow-dirty", action="store_true",
                     help="工作区不干净时仍打包（不推荐：BUILD-INFO 的 git rev 会失真）")
+    ap.add_argument("--shipped-only", action="store_true",
+                    help="只带仓库自带的 3 本示例刊，私有规则库不进包（发布用）")
     a = ap.parse_args()
+
+    global SHIPPED_ONLY
+    SHIPPED_ONLY = a.shipped_only
 
     # 脏树闸门放在一切破坏性操作（rmtree 旧包）之前：发布必须锚到一个提交
     if working_tree_dirty() and not a.allow_dirty:
