@@ -377,7 +377,7 @@ pip install -r requirements-dev.txt
 
 1. 开发版改完 → 全量测试全绿 → 提交 → 推送；
 2. `py -3 tools/release.py` —— 构建 `dist/格式工坊-<版本>.zip` 与 `dist/格式工坊-setup-<版本>.exe`。工作区不干净会被拒绝（产物必须锚定已提交状态，包内 BUILD-INFO 记录精确 git rev）；构建完只打印产物，**不会外发**；
-3. `py -3 tools/release.py --upload` —— 构建并上传 Release（tag `v<版本>`，发布说明自动取上个 tag 以来的提交）。上传前会核对本地 HEAD 与远端一致——没推送就没有发布；
+3. `py -3 tools/release.py --upload` —— 构建并上传 Release（tag `v<版本>`，发布说明自动取上个 tag 以来的提交）。上传前会核对本地 HEAD 与远端一致——没推送就没有发布。**上传构建自动加 `--shipped-only`，包内只带仓库自带的 3 本示例刊**；本机不带上传参数的构建仍带完整规则库，日常便携包/安装版升级走本地构建；
 4. 新版本 = 从 GitHub Releases 下载安装，开发者自己的机器也走这条路径。
 
 ---
