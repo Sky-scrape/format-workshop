@@ -50,8 +50,9 @@ def test_upstream_synced_true_when_identical(monkeypatch):
 def test_source_pins():
     """源码钉：内联命令列表、显式 --upload 开关、上游核对与脏树闸门都在位。"""
     src = (TOOLS / "release.py").read_text(encoding="utf-8")
-    assert 'subprocess.run([sys.executable, "tools/build_portable.py", "--zip",' in src
-    assert '"--shipped-only"' in src, "发布包必须只带 3 本示例刊，不能外发私有规则库"
+    assert 'subprocess.run([sys.executable, "tools/build_portable.py", "--zip", *shipped]' in src
+    assert '"--shipped-only"' in src, "上传发布必须只带 3 本示例刊，不能外发私有规则库"
+    assert 'if a.upload else []' in src, "本机构建仍应带完整规则库"
     assert '"tools/build_installer.py", "--version", ver' in src
     assert "if not a.upload:" in src
     assert '"--upload"' in src
