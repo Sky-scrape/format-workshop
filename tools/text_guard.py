@@ -4,11 +4,13 @@
 搬出来不是为了整理代码：判定要能在 pytest 之外复用（产物导出前自检、桌面端
 复核），留在夹具里就只有测试能调用，运行期反而没有守卫。
 
-口径（DESIGN §4.1，2026-11-13）：渲染器真正落地的字符级归一为段首缩进
+口径（DESIGN §4.1，2026-11-15）：渲染器真正落地的字符级归一为段首缩进
 删除（N-01 段首＋N-08，仅 body/abstract/keywords）、段尾空白删除（N-01
-段尾）、全角字母数字转半角（N-05，仅 body/abstract/keywords）、标题编号
-前缀重写、题注编号间隔归一、文献条目编号前缀（N-07）。N-02～N-04、N-06
-（正文内部空格、全半角标点、数字与中文间空格）未实现，守卫逐字比对——
+段尾）、全角字母数字转半角（N-05）、正文连续空格压缩（N-02）、数字与
+中文之间的空格删除（N-06）、中文语境半角标点转全角（N-03）、英文语境
+全角标点转半角（N-04，以上均仅 body/abstract/keywords）、标题编号前缀
+重写、题注编号间隔归一、文献条目编号前缀（N-07）。N-02～N-04/N-06 的
+纯文本实现与渲染器共用 tools/text_norm.py；中拉之间的空格仍逐字比对——
 「无条件删全部空白」的宽松口径不许回来。
 """
 
@@ -17,6 +19,8 @@ from collections import Counter
 
 from docx import Document
 from docx.oxml.ns import qn
+
+import text_norm
 
 # 段首缩进只对这三类块允许删（N-01 段首＋N-08 的唯一落地处）。
 INDENT_LEADING_TYPES = {"body", "abstract", "keywords"}
@@ -65,9 +69,14 @@ def normalize(text, btype=""):
     s = text
     if btype in INDENT_LEADING_TYPES:
         s = s.lstrip("\t \u3000").rstrip("\t \u3000")
+        # 与渲染器同一顺序：N-05 先转全角字母数字，再跑 N-03/N-04/N-02/N-06。
+        # 反了的话「样本共 １２００ 个」在 N-06 眼里数字仍是全角，判定漂移。
         if FULLWIDTH_ALNUM.search(s):
             s = "".join(chr(ord(c) - 0xFEE0) if FULLWIDTH_ALNUM.match(c) else c
                         for c in s)
+        # N-03/N-04/N-02/N-06：与渲染器共用 tools/text_norm.py，
+        # 顺序也必须一致（中英标点 → 连续空格 → 中文空格）。
+        s = text_norm.normalize(s, include_spaces=(btype == "body"))
     if btype in HEADING_TYPES:
         # 先剥编号前缀、再塌留白（F43）：编号与标题之间的空白是分隔符
         # （「一　文献综述」），先塌缩会把编号粘进标题，前缀就再也剥不下来；
@@ -156,7 +165,9 @@ TEXT_ACTIONS = {"标签归一", "关键词分隔符归一", "题注归一", "文
 # 同样改文字、但审计只存改动附近片段的动作（N-01 段首/段尾、N-05）。
 # 它们不进 TEXT_ACTIONS——那一组的口径是「before/after 与源稿成品逐字相
 # 等」，片段快照不满足；槽位审计仍按「这里动过字」处理。
-FRAGMENT_TEXT_ACTIONS = {"段首缩进空格删除", "段尾空白删除", "全角字母数字归一"}
+FRAGMENT_TEXT_ACTIONS = {"段首缩进空格删除", "段尾空白删除", "全角字母数字归一",
+                         "正文连续空格压缩", "数字与中文间空格删除",
+                         "中文标点半角转全角", "英文标点全角转半角"}
 
 # --citation 的豁免凭证（F39）：这两个动作会改写正文/条目文字，属产品唯一
 # 越线开关。豁免以审计条目本身为准——条目存在且 rule 指对才豁免，改了字
@@ -164,6 +175,8 @@ FRAGMENT_TEXT_ACTIONS = {"段首缩进空格删除", "段尾空白删除", "全�
 CITATION_REWRITE_RULES = {
     "正文引用改作者-年份": "citation.in_text",
     "条目按目标刊体例重排": "citation.reference_list.templates",
+    # 规则集没写模板、由 tools/cite_styles 插件渲染的英文刊条目
+    "条目按样式插件重排": "citation.style_id",
 }
 
 # 槽位覆盖只问「这条审计有没有动文字」，口径比 TEXT_ACTIONS 宽一格：段首缩进

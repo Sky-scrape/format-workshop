@@ -215,6 +215,18 @@ line-height:1.6;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;
         <label class="sitem"><input type="checkbox" name="s_author_page" {{ 'checked' if structural.author_page }}>
           <span>作者信息单独成页</span></label>
       </div>
+      {% if structural.english_section %}
+      <h3 class="ssh">英文区位置</h3>
+      <div class="sgrid">
+        <label class="sitem">
+          <select name="s_english_section">
+            <option value="front" {{ 'selected' if structural.english_section == 'front' }}>正文前（中文关键词之后）</option>
+            <option value="back" {{ 'selected' if structural.english_section == 'back' }}>正文后（参考文献之后）</option>
+          </select>
+          <span>英文标题/作者/摘要/关键词整组移动</span>
+        </label>
+      </div>
+      {% endif %}
       <h3 class="ssh">区块必备清单 <span class="badge">{{ structural.blocks|length }}</span></h3>
       <div class="sgrid">
         {% for b in structural.blocks %}

@@ -302,7 +302,7 @@ def test_readmeit_italic_loss_disclosed():
     """
     t = read(README_MD)
     known = t[t.index("## 已知限制"):]
-    m = re.search(r"^- \*\*参考文献只改编号写法\*\*.*$", known, re.M | re.S)
+    m = re.search(r"^- \*\*参考文献.*$", known, re.M | re.S)
     assert m, "已知限制里找不到参考文献条目那一条"
     bullet = m.group(0).split("\n- ")[0]
     assert "italic_fields" in bullet and "没声明就保持纯文本" in bullet, \

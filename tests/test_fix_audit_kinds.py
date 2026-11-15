@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from conftest import TOOLS  # noqa: E402
 
 from render_audit import KIND, REJECTABLE, GRADE_DESC, render  # noqa: E402
+import text_norm  # noqa: E402
 
 RENDERER = TOOLS / "render_from_ir.py"
 
@@ -48,6 +49,10 @@ def _renderer_actions():
         # 不收条件表达式里的普通字符串（t == "abstract"）。
         if isinstance(node, ast.IfExp):
             return strs(node.body) | strs(node.orelse)
+        # 循环变量 action：渲染器对 text_norm.ACTIONS 逐条调用 add/blocked，
+        # 动作名不在源码字面量里，但四条规则都真的走这两个分支。
+        if isinstance(node, ast.Name) and node.id == "action":
+            return set(text_norm.ACTION_NAMES)
         return {n.value for n in ast.walk(node)
                 if isinstance(n, ast.Constant) and isinstance(n.value, str)}
 

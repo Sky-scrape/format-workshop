@@ -78,7 +78,7 @@
 | Journal of Asian Business and Economic Studies | Emerald | 同上 |
 | Economic Systems | Elsevier | 与 CER 同社，边际成本最低 |
 
-**英文刊的真正门槛不是数据，而是三个插件**：引用格式化器、样式映射表、编号生成器（见 `journal-schema.md` §18.3）。这三个补齐后，同社期刊的边际成本会降到 1–2 小时/本。
+**英文刊的三个插件已补齐（2026-11-15）**：引用格式化器（`tools/cite_styles/`，APA/Harvard/Chicago）、样式映射表（`style_map`）、数字编号生成器（1.1.1 三级递增，见 `journal-schema.md` §18.3）。此后同社期刊的边际成本主要在指南获取与样张核对，引擎侧降到 1–2 小时/本。
 
 ## 二之一、本轮尝试但被挡住的（附证据）
 

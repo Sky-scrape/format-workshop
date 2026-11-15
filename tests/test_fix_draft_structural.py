@@ -78,3 +78,37 @@ def test_manual_paths_includes_structural_paths():
                                       "previous": False,
                                       "path": ["blocks", 3, "required"]}}
     assert ("blocks", 3, "required") in ej.manual_paths(manual)
+
+
+def test_english_section_toggle_moves_the_group():
+    """英文区放正文前还是文末，由复核页开关决定（不再手改 draft.json）。"""
+    rules = _rules()
+    types = [b.get("type") for b in rules["blocks"]]
+    assert ej.structural_fields(rules)["english_section"] == "back"
+
+    out, _report, errors = ej.apply_manual(
+        rules, {}, structural={"english_section": "front"})
+    assert errors == []
+    after = [b.get("type") for b in out["blocks"]]
+    body_at = after.index("body")
+    en_at = [i for i, b in enumerate(out["blocks"]) if b.get("lang") == "en"]
+    assert en_at and max(en_at) < body_at, "英文区没有整组移到正文前"
+    assert "structural:english_section" in \
+        out["verification"]["extraction"]["manual"]
+
+    # 再存一次同一选择：区块顺序与手工修正记录都不再变化（幂等）
+    twice, _r2, _e2 = ej.apply_manual(
+        out, {}, structural={"english_section": "front"})
+    assert [b.get("type") for b in twice["blocks"]] == after
+    assert twice["verification"]["extraction"]["manual"]["structural:english_section"] == \
+        out["verification"]["extraction"]["manual"]["structural:english_section"]
+
+
+def test_english_section_back_places_after_references():
+    rules = _rules()
+    out, _report, errors = ej.apply_manual(
+        rules, {}, structural={"english_section": "back"})
+    assert errors == []
+    after = [b.get("type") for b in out["blocks"]]
+    assert max(i for i, t in enumerate(after) if t == "abstract") > \
+        after.index("references")

@@ -67,3 +67,18 @@ def test_small_table_is_not_a_candidate():
     assert res["appendix_candidates"] == []
     html_out = report.render(_ir(tables=[small]), _rules(), res)
     assert "没有达到" in html_out, "没有候选时也应该说明门槛，而不是静默消失"
+
+
+def test_candidate_summary_says_how_far_from_limit():
+    """超字数时给出「全部移入附录后距上限还差多少」（只是算术定位）。"""
+    big = ["样本观测值统计" * 60 for _ in range(12)]
+    ir = _ir(tables=[big])
+    rules = _rules()
+    rules["limits"]["total"]["value"] = 100       # 确保超限，差额远大于表字数
+    res = report.check(ir, rules)
+    assert res["total_limit"]["over"] > 0
+    html_out = report.render(ir, rules, res)
+    assert "候选合计" in html_out
+    assert ("全部移入后正文仍比上限多约" in html_out
+            or "全部移入后正文可回到上限以内" in html_out)
+    assert "按表格文字估算" in html_out

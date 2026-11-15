@@ -1229,9 +1229,9 @@ def _check_footnote_usage(rep, doc, rules, blocks):
                         want_fmt_txt,
                         "①②③（圈号）" if fmt == "decimalEnclosedCircle"
                         else "1.2.3.（阿拉伯数字）",
-                        FIX_MANUAL,
-                        note="Word 的脚注编号格式与本刊要求不一致。本工具只调"
-                             "字体字号，不改编号格式——请在 Word 里手工设置")
+                        FIX_AUTO,
+                        note="排版时会按本刊要求写入 Word 脚注编号格式"
+                             "（settings.xml 的 footnotePr），脚注文字不动")
         if want_scope:
             want_restart = "eachPage" if want_scope == "per_page" else "continuous"
             if restart != want_restart:
@@ -1239,9 +1239,9 @@ def _check_footnote_usage(rep, doc, rules, blocks):
                         _ref(rules, "numbering.footnotes_scope", "journal"),
                         "每页重新编号" if want_restart == "eachPage" else "全文连续编号",
                         "每页重新编号" if restart == "eachPage" else "全文连续编号",
-                        FIX_MANUAL,
-                        note="Word 的脚注重编号范围与本刊要求不一致。本工具不重"
-                             "编号——请在 Word 的脚注设置里手工改")
+                        FIX_AUTO,
+                        note="排版时会按本刊要求写入 Word 脚注重编号范围"
+                             "（settings.xml 的 footnotePr），序号由 Word 生成")
 
     # 手敲的「①②③」段落：形似脚注但根本不是 Word 脚注对象，套版碰不到它，
     # 投稿系统也不会把它当脚注处理。

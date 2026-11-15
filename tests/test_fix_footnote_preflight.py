@@ -77,10 +77,11 @@ def test_footnote_number_format_and_restart_reported(tmp_path):
     result = preflight.analyze(src, _rules())
     fmt = _items(result, "编号样式")
     scope = _items(result, "编号范围")
-    assert fmt and fmt[0]["fix"] == preflight.FIX_MANUAL, "①②③ 与阿拉伯数字的差异没报"
+    assert fmt and fmt[0]["fix"] == preflight.FIX_AUTO, "①②③ 与阿拉伯数字的差异没报"
     assert "①" in fmt[0]["expected"] and "阿拉伯" in fmt[0]["actual"]
-    assert scope and scope[0]["fix"] == preflight.FIX_MANUAL
+    assert scope and scope[0]["fix"] == preflight.FIX_AUTO
     assert "全文连续" in scope[0]["actual"] and "每页" in scope[0]["expected"]
+    assert "footnotePr" in fmt[0]["note"] and "footnotePr" in scope[0]["note"]
     rules = _rules()
     assert resolvable(rules, fmt[0]["rule"]) and resolvable(rules, scope[0]["rule"])
 

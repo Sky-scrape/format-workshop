@@ -48,3 +48,19 @@ def test_same_shape_journals_have_no_noise():
     b = {"journal": {"name_zh": "乙刊"}, "personal_fields": [
         {"id": "funding_info", "label_zh": "基金项目", "placement": "footnote"}]}
     assert app.author_info_handoff(a, b) == [], "规则集结构相同却弹提醒"
+
+
+def test_author_page_values_become_editable_footnote_draft():
+    """换到不设作者页的刊时，原作者页已填值拼成脚注草稿供用户核对。"""
+    old = _rules("gjjryj")
+    saved = {"author_name": "张三", "organization_and_position": "北京大学经济学院 教授",
+             "email": "zs@pku.edu.cn", "phone": "13800000000",
+             "id_number": "110101199001011234"}       # 身份证号绝不能进草稿
+    text = app.author_page_handoff_text(old, saved)
+    assert "张三" in text and "北京大学经济学院 教授" in text
+    assert "zs@pku.edu.cn" in text and "13800000000" in text
+    assert "110101199001011234" not in text, "身份证号不应被搬进脚注草稿"
+    assert text.count("；") >= 2
+
+    assert app.author_page_handoff_text(old, {}) == ""
+    assert app.author_page_handoff_text({"journal": {}}, saved) == ""

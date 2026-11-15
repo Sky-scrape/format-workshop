@@ -103,19 +103,19 @@ def test_text_fingerprint_zero_change_for_each_shipped_journal(
     assert not problems, f"{target}: " + "；".join(problems)
 
 
-def test_unimplemented_normalizations_are_left_alone(tmp_path):
-    """B-04：N-02～N-04、N-06 未实现，正文内部必须原样保留。
+def test_landed_normalizations_follow_the_whitelist(tmp_path):
+    """B-04：N-01～N-08 中已落地的字符归一按白名单执行，边界不动。
 
-    N-05（全角字母数字转半角）与 N-01 段尾空白自 2026-11-13 起已落地，
-    所以「１２００」会变成「1200」；连续空格、半角标点、中外文之间的空格
-    仍一字不动。
+    2026-11-15 起 N-02（连续空格）、N-03（中文语境半角标点）、N-04（英文
+    语境全角标点）、N-06（中文/数字间空格）与 N-01/N-05 一并落地；中拉之间
+    的空格（F31 边界）与数字千分位仍原样保留。
     """
     source = build_spacing_docx(tmp_path / "spacing.docx")
     pipeline = render_into(tmp_path / "spacing-out", source, target="tjyj")
 
-    expected = "研究发现,  数字金融 显著缓解了融资约束 。样本 共 1200 个。"
+    expected = "研究发现，数字金融显著缓解了融资约束。样本共1200个。"
     assert expected in pipeline.output_texts.values(), \
-        "N-02～N-04/N-06 的白名单外改动被抹平了（应为原样保留，仅全角数字转半角）"
+        "已落地的 N-02/N-03/N-04/N-06 没有按白名单落到成品"
 
 
 def test_layout_values_follow_the_ruleset(sample_docx, tmp_path):

@@ -212,7 +212,10 @@ def test_reject_rerenders_and_marks_item_rejected(client, delivered_job):
     audit = json.loads((d / "manuscript.tjyj.audit.json").read_text(encoding="utf-8"))
     rejectable = {"标题重新编号", "题注归一", "标签归一", "文献表标题归一",
                   "关键词分隔符归一", "文献条目编号归一",
-                  "表注／图注层序调整", "段首缩进空格删除"}
+                  "表注／图注层序调整", "段首缩进空格删除",
+                  "段尾空白删除", "全角字母数字归一",
+                  "正文连续空格压缩", "数字与中文间空格删除",
+                  "中文标点半角转全角", "英文标点全角转半角"}
     target = next(it for it in audit["items"]
                   if (it.get("before") or it.get("after")) and not it.get("rejected"))
     assert target["action"] in rejectable, f"选中的条目不可驳回：{target['action']}"

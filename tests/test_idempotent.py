@@ -6,7 +6,7 @@
 
 import json
 
-from conftest import RULES, TARGET_JOURNAL, layout_signature, render_into
+from conftest import RULES, TARGET_JOURNAL, layout_signature, normalize, render_into
 
 # 驳回这些动作不会引发连锁（标题重新编号会改变后续编号，不适合做单条回退的样本）
 SAFE_ACTIONS = {"标签归一", "关键词分隔符归一", "题注归一", "文献表标题归一"}
@@ -62,7 +62,12 @@ def test_rejecting_one_item_reverts_only_that_block(baseline, sample_docx, tmp_p
     reverted = after.item_by_id(target["id"])
     assert reverted is not None and reverted["rejected"] is True, "驳回没被记录进审计"
 
-    assert after.output_texts[idx] == baseline.source_texts[idx], "被驳回的块没有回到原样"
+    # 被驳回的动作必须回到原样。同一块上还可能有已落地的字符归一
+    # （N-01/N-02/N-03/N-04/N-05/N-06），它们是独立条目；这里按白名单
+    # 抹平后再比，验证驳回没有连带改掉其余文字。
+    btype = baseline.block_type.get(idx, "")
+    assert normalize(after.output_texts[idx], btype) == \
+        normalize(baseline.source_texts[idx], btype), "被驳回的块没有回到原样"
 
     drifted = {i for i in after.output_texts
                if after.output_texts[i] != baseline.output_texts[i]}

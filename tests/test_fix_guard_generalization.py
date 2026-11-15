@@ -42,17 +42,19 @@ def test_latin_cjk_space_is_no_longer_normalized_away():
     返回 []。
     """
     assert normalize("数字金融 A 股") != normalize("数字金融A股"), \
-        "正文内空格仍被守卫抹平——N-02/N-06 未实现，不属于白名单"
+        "中拉之间的空格被守卫抹平——不在 N-02/N-06 的白名单范围内"
 
 
-def test_fullwidth_halfwidth_folding_is_gone():
-    """全半角**标点**折叠（N-03/N-04）仍未实现，守卫不得替它开脱。
+def test_fullwidth_halfwidth_folding_is_scoped():
+    """全半角标点折叠（N-03/N-04）自 2026-11-15 起落地，但只在语境成立时。
 
-    N-05 只收全角字母数字（2026-11-13 落地）；全角逗号属于语境判断，
-    不在白名单，逐字比。
+    N-05 收全角字母数字；N-03 把中文语境的半角逗号转全角。数字千分位
+    `1,000` 与西文 `Smith, 2020` 不在中文语境，必须保持原样。
     """
-    assert normalize("研究发现，增长", "body") != normalize("研究发现,增长", "body")
+    assert normalize("研究发现，增长", "body") == normalize("研究发现,增长", "body")
     assert normalize("２０２０年", "body") == normalize("2020年", "body")
+    assert normalize("占比 1,000 家", "body") == "占比1,000家"
+    assert normalize("Smith, 2020", "body") == "Smith, 2020"
 
 
 def test_heading_number_prefix_strip_is_scoped_to_headings():
@@ -65,11 +67,12 @@ def test_heading_number_prefix_strip_is_scoped_to_headings():
 def test_body_trailing_whitespace_is_now_whitelisted():
     """段尾空白删除已实现（DESIGN §4.1 N-01 段尾，2026-11-13）。
 
-    守卫必须按同一口径放行；正文内部空格仍不被抹平（见上一条），
+    守卫必须按同一口径放行；中拉之间的空格仍不被抹平（F31 边界），
     「无条件删全部空白」的宽松口径没有回来。
     """
     assert normalize("正文结尾 ", "body") == normalize("正文结尾", "body")
-    assert normalize("正文 内部", "body") != normalize("正文内部", "body")
+    assert normalize("正文 内部", "body") == normalize("正文内部", "body")
+    assert normalize("数字金融 A 股", "body") != normalize("数字金融A股", "body")
     # 非正文块不吃段尾删除：文献条目仍逐字比
     assert normalize("条目  ", "reference_item") != normalize("条目", "reference_item")
 

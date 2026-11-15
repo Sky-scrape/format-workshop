@@ -41,6 +41,7 @@ from docx_fmt import (  # noqa: F401  （公开名，供 preflight/测试 import
 )
 import xmlsafe
 import assume_groups
+import text_norm
 
 # 对齐方式的中文说法，只用于审计条目的说明文字，不是格式值
 ALIGN_DESC = {"center": "居中", "left": "左对齐", "right": "右对齐", "both": "两端对齐"}
@@ -837,6 +838,92 @@ def style_footnotes(doc, rules):
     return changed, desc, external
 
 
+def align_footnote_numbering(doc, rules, audit):
+    """按规则集对齐 Word 的脚注编号格式与重编号范围（DESIGN §12.1）。
+
+    只写文档级设置（settings.xml 的 w:footnotePr），不碰任何正文文字：
+    - numbering.footnotes："①②③" → decimalEnclosedCircle，否则 decimal；
+    - numbering.footnotes_scope："per_page" → eachPage，其余 → continuous。
+
+    仅当稿件里真有脚注引用时动作。尾注不在此列——把尾注搬成页脚脚注会
+    改动文档结构，仍属「需你处理」。本来已合规时不出审计条目。
+    """
+    body = doc.element.body
+    if not list(body.iter(qn("w:footnoteReference"))):
+        return
+    num = rules.get("numbering") or {}
+    want_fmt_txt = num.get("footnotes")
+    want_scope = num.get("footnotes_scope")
+    settings = doc.settings.element
+    pr = settings.find(qn("w:footnotePr"))
+    if pr is None:
+        pr = OxmlElement("w:footnotePr")
+        settings.insert_element_before(
+            pr, "w:endnotePr", "w:compat", "w:docVars", "w:rsids",
+            "m:mathPr", "w:attachedSchema", "w:themeFontLang",
+            "w:clrSchemeMapping")
+
+    def desc_fmt(val):
+        return "①②③（圈号）" if val == "decimalEnclosedCircle" else "1,2,3（阿拉伯数字）"
+
+    def desc_scope(val):
+        return "每页重新编号" if val == "eachPage" else "全文连续编号"
+
+    if want_fmt_txt:
+        want = ("decimalEnclosedCircle"
+                if any(c in want_fmt_txt for c in "①②③④⑤⑥⑦⑧⑨⑩") else "decimal")
+        nf = pr.find(qn("w:numFmt"))
+        cur = nf.get(qn("w:val")) if nf is not None else "decimal"
+        if cur != want:
+            if nf is None:
+                nf = OxmlElement("w:numFmt")
+                pr.append(nf)
+            nf.set(qn("w:val"), want)
+            audit.add(-2, "footnote", "脚注编号样式对齐",
+                      note=f"{desc_fmt(cur)} → {desc_fmt(want)}；"
+                           f"写 Word 脚注设置，正文与脚注文字未动",
+                      rule="numbering.footnotes")
+
+    if want_scope:
+        want = "eachPage" if str(want_scope) == "per_page" else "continuous"
+        nr = pr.find(qn("w:numRestart"))
+        cur = nr.get(qn("w:val")) if nr is not None else "continuous"
+        if cur != want:
+            if nr is None:
+                nr = OxmlElement("w:numRestart")
+                pr.append(nr)
+            nr.set(qn("w:val"), want)
+            audit.add(-2, "footnote", "脚注重编号范围对齐",
+                      note=f"{desc_scope(cur)} → {desc_scope(want)}；"
+                           f"写 Word 脚注设置，脚注序号由 Word 生成",
+                      rule="numbering.footnotes_scope")
+
+
+def apply_word_style(p, doc, btype, rules, idx, audit):
+    """规则集声明了 style_map 时，把段落套到对应的 Word 样式名。
+
+    style_map 是语义块类型 → Word 样式名的映射（如 {"body": "Body Text",
+    "heading1": "Heading 1"}）。只查表，代码不内置任何刊或语言的样式名。
+    样式不存在时不临时造一个——那会让成品带着一份规则集没声明过的样式；
+    声明了却找不到，就该在规则集/模板侧修，而不是由渲染器猜。
+    """
+    name = (rules.get("style_map") or {}).get(btype)
+    if not name or not isinstance(p, Paragraph):
+        return
+    try:
+        style = doc.styles[name]
+    except KeyError:
+        return
+    before = p.style.name if p.style is not None else ""
+    if before == name:
+        return
+    p.style = style
+    audit.add(idx, btype, "套用 Word 样式",
+              note=f"{before or '（无）'} → {name}；仅样式名，"
+                   f"字号字体仍按规则集逐项写入",
+              rule=f"style_map.{btype}")
+
+
 def replace_prefix(p, old_len, new_prefix):
     """只改段落开头的 old_len 个字符，其余文字与格式原样保留。
 
@@ -914,7 +1001,7 @@ def replace_after(p, keep_len, new_text):
 INDENT_WS = re.compile(r"^[\t \u3000]+")
 TRAILING_WS = re.compile(r"[\t \u3000]+$")
 # N-05：全角字母数字转半角（Ａ-Ｚ ａ-ｚ ０-９）。只认这三段连续区，
-# 不碰全角标点与全角空格——那属于 N-03/N-04 的语境判断，不在本轮口径。
+# 不碰全角标点与全角空格——标点归 tools/text_norm.py 的 N-03/N-04 管。
 FULLWIDTH_ALNUM = re.compile(r"[Ａ-Ｚａ-ｚ０-９]")
 
 
@@ -1020,17 +1107,28 @@ def _change_frag(before, after, limit=30):
            ("…" if start else "") + after[start:end] + ("…" if len(after) > end else "")
 
 
+_TEXT_NORM_NOTE = {
+    "正文连续空格压缩": "两个及以上连续半角空格/制表符压成一个半角空格，其余字符未动",
+    "数字与中文间空格删除": "删除中文与中文/数字之间的多余空格，中拉之间的空格保留",
+    "中文标点半角转全角": "中文语境的半角逗号、分号、冒号、问号、叹号、括号转全角",
+    "英文标点全角转半角": "英文语境的全角标点转半角，句读后补一个半角空格",
+}
+
+
 def normalize_body_chars_audited(p, blk, audit):
     """段尾空白删除（N-01 段尾）＋全角字母数字归一（N-05），逐条进审计。
 
     只用于 body/abstract/keywords（与段首缩进同一适用范围）。含 Word 域的
     段落一律不改：域结果的文字归域所有，改了会在 F9 更新时回滚并与文献库
-    脱钩（与引用/编号路径同一条边界）。两条动作都是 B 档、各自可驳回。
+    脱钩（与引用/编号路径同一条边界）。各条动作都是 B 档、各自可驳回。
     """
     idx, btype = blk["idx"], blk.get("type", "")
     if text_locked(blk):
         return
     before_txt = block_text(p)
+    # N-02/N-06/N-03/N-04 的驳回键统一取「首尾空白规整后」的原文：这四条
+    # 互不重叠，但前序动作是否被驳回会改变段首/段尾，键不能跟着漂移。
+    base_sig = reject_sig(before_txt.strip("\t \u3000"))
 
     m = TRAILING_WS.search(before_txt)
     if m:
@@ -1051,25 +1149,52 @@ def normalize_body_chars_audited(p, blk, audit):
                       f"删除段尾 {m.end() - m.start()} 个空白（空格/制表符/全角空格）",
                       rule="typography.body", sig=sig)
 
+    # N-05 先跑：全角数字转半角后，N-06 才能识别「样本共 １２００ 个」这类
+    # 中文与数字之间的空格。四条语境界定本身不依赖全角/半角数字。
     before_txt = block_text(p)
     new_txt = to_halfwidth_alnum(before_txt)
-    if new_txt == before_txt:
-        return
-    # 键在「首尾空白都规整后」的文本上算：段首缩进/段尾空白的驳回会改变
-    # before_txt，不能让 N-05 的驳回决定随之失效。全角→半角本身不参与键，
-    # 否则同一处改动的键会随「是否已归一半」漂移。
-    sig = reject_sig(before_txt.strip("\t \u3000"))
-    b_frag, a_frag = _change_frag(before_txt, new_txt)
-    if audit.blocked(idx, "全角字母数字归一", sig):
-        audit.add(idx, btype, "全角字母数字归一", b_frag, b_frag,
-                  "已驳回：保留全角字母数字",
-                  rejected=True, rule="typography.body", sig=sig)
-        return
-    _apply_halfwidth_in_place(p)
-    _, after_frag = _change_frag(before_txt, block_text(p))
-    audit.add(idx, btype, "全角字母数字归一", b_frag, after_frag,
-              "全角字母数字（Ａ１）转半角（A1），其余字符原样保留",
-              rule="typography.body", sig=sig)
+    if new_txt != before_txt:
+        # 键在「首尾空白都规整后」的文本上算：段首缩进/段尾空白的驳回会改变
+        # before_txt，不能让 N-05 的驳回决定随之失效。全角→半角本身不参与键，
+        # 否则同一处改动的键会随「是否已归一半」漂移。
+        sig = reject_sig(before_txt.strip("\t \u3000"))
+        b_frag, a_frag = _change_frag(before_txt, new_txt)
+        if audit.blocked(idx, "全角字母数字归一", sig):
+            audit.add(idx, btype, "全角字母数字归一", b_frag, b_frag,
+                      "已驳回：保留全角字母数字",
+                      rejected=True, rule="typography.body", sig=sig)
+        else:
+            _apply_halfwidth_in_place(p)
+            _, after_frag = _change_frag(before_txt, block_text(p))
+            audit.add(idx, btype, "全角字母数字归一", b_frag, after_frag,
+                      "全角字母数字（Ａ１）转半角（A1），其余字符原样保留",
+                      rule="typography.body", sig=sig)
+
+    # N-03/N-04/N-02/N-06（DESIGN §4.1，2026-11-15）：中英文语境的半全角
+    # 标点、连续空白、中文与数字之间的空格。四条与守卫共用
+    # tools/text_norm.py 的同一实现，逐块进审计、各自可驳回。标点先转、
+    # 空白后收，转换后残留的空格才收得掉。
+    for action, fn in text_norm.ACTIONS:
+        # 空白类归一（N-02/N-06）只作用于正文：摘要与关键词里的连续空白
+        # 可能是标签自身的排布（「[摘  要]」）或目标刊的分隔符（gjjryj 的
+        # 两个空格），压掉会改掉结构性文字。标点与全角字母数字三类照常。
+        if btype != "body" and action in ("正文连续空格压缩",
+                                          "数字与中文间空格删除"):
+            continue
+        before_txt = block_text(p)
+        target = fn(before_txt)
+        if target == before_txt:
+            continue
+        b_frag, a_frag = _change_frag(before_txt, target)
+        if audit.blocked(idx, action, base_sig):
+            audit.add(idx, btype, action, b_frag, b_frag,
+                      "已驳回：保留原文", rejected=True,
+                      rule="typography.body", sig=base_sig)
+            continue
+        apply_text_edits(p, text_norm.edits_for(before_txt, target))
+        _, after_frag = _change_frag(before_txt, block_text(p))
+        audit.add(idx, btype, action, b_frag, after_frag,
+                  _TEXT_NORM_NOTE[action], rule="typography.body", sig=base_sig)
 
 
 def _apply_halfwidth_in_place(p):
@@ -1077,6 +1202,56 @@ def _apply_halfwidth_in_place(p):
     for el, chars in text_units(p):
         if el.tag == qn("w:t") and chars and FULLWIDTH_ALNUM.search(chars):
             _write_t(el, to_halfwidth_alnum(chars))
+
+
+def apply_text_edits(p, edits):
+    """把 [(start, end, 新文字)] 落回段落的物理文字节点。
+
+    与 replace_prefix / rewrite_citations 同一计数口径（text_units 的聚合
+    文字），但支持任意多处编辑：删除区间里的字符逐个扣掉，新文字落在命中
+    起点所在的节点，继承该节点的字体。区间里的 tab/br 随文字一起删。
+    编辑互不重叠（difflib 保证），因此按节点一次性重建即可。
+    """
+    if not edits:
+        return
+    nodes, pos = [], 0
+    for el, chars in text_units(p):
+        nodes.append({"el": el, "off": pos, "chars": chars})
+        pos += len(chars)
+    total = pos
+    dels = [[] for _ in nodes]
+    ins = [[] for _ in nodes]
+    for start, end, new in edits:
+        owner = next((i for i, n in enumerate(nodes)
+                      if n["off"] <= start < n["off"] + len(n["chars"])), None)
+        if owner is None and start >= total and nodes:
+            owner = len(nodes) - 1
+        if owner is not None and new:
+            ins[owner].append((start - nodes[owner]["off"], new))
+        for i, n in enumerate(nodes):
+            s, e = n["off"], n["off"] + len(n["chars"])
+            a, b = max(start, s), min(end, e)
+            if a < b:
+                dels[i].append((a - s, b - s))
+    for i, n in enumerate(nodes):
+        el, chars = n["el"], n["chars"]
+        if not dels[i] and not ins[i]:
+            continue
+        if el.tag != qn("w:t"):
+            el.getparent().remove(el)     # tab/br 落在编辑区间里，随文字删
+            continue
+        pieces = []
+        for j, ch in enumerate(chars):
+            for at, text in ins[i]:
+                if at == j:
+                    pieces.append(text)
+            if any(a <= j < b for a, b in dels[i]):
+                continue
+            pieces.append(ch)
+        for at, text in ins[i]:
+            if at >= len(chars):
+                pieces.append(text)
+        _write_t(el, "".join(pieces))
 
 
 
@@ -1681,12 +1856,16 @@ def apply_citation(doc, elems, ir, rules, audit):
         old = block_text(p)
         if not new or new == old:
             continue
+        from_plugin = cr.entry_from_plugin(entry, rules)
         replace_text_with_spans(p, new, spans)
         rewritten.append((idx, p, entry))
-        audit.add(idx, "reference_item", "条目按目标刊体例重排", old, new,
+        audit.add(idx, "reference_item",
+                  "条目按样式插件重排" if from_plugin else "条目按目标刊体例重排",
+                  old, new,
                   "类型、卷期页字段机器提取，请复核作者名与刊名"
-                  + ("；斜体按规则集 italic_fields 声明" if spans else ""),
-                  rule="citation.reference_list.templates")
+                  + ("；斜体按样式插件或规则集声明" if spans else ""),
+                  rule="citation.style_id" if from_plugin
+                  else "citation.reference_list.templates")
 
     if rewritten:
         # 排序体例只由规则集声明决定（F21）：声明了渲染器实现的 scheme 才排；
@@ -1880,6 +2059,9 @@ def main():
             blk = {**blk, "idx": f'{blk["idx"]}.{blk["sdt_pos"]}'}
         p = el
         t = blk["type"]
+        # 样式映射（DESIGN §9.2）：规则集声明了 Word 样式名才套；只改样式名，
+        # 后面的逐项套版照常执行，样式里没声明的值不会被带进成品。
+        apply_word_style(p, doc, t, rules, blk["idx"], audit)
 
         if t == "front_matter":
             fm_index += 1
@@ -2221,23 +2403,29 @@ def main():
             # 段首手工缩进空白先删（N-01 段首＋N-08）：不删的话，段首空格会和
             # 下面的首行缩进设置叠成双重缩进，标签归一的正则也认不出段首的标签
             strip_leading_indent_audited(p, audit, blk["idx"], t, indent)
-            normalize_body_chars_audited(p, blk, audit)
+            # 摘要：字符归一连同标签一起做（N-05 先跑，N-06 才认得出全角数字
+            # 两侧的空格）。标签条目的 before 取归一前的原文、after 取本块最终
+            # 文字，报告里的快照才与源稿/成品逐字对得上。
+            source_before = block_text(p)
+            if t == "abstract":
+                normalize_body_chars_audited(p, blk, audit)
             want = next((b.get("label") for b in rules["blocks"]
                          if b["type"] == t and b.get("lang") == "zh" and b.get("label")), None)
             old = block_text(p)
+            audit_before = source_before if t == "abstract" else old
             if want:
                 m = re.match(r"^(内容摘要|内容提要|摘\s*要|提\s*要|关\s*键\s*词)\s*[:：]", old)
                 if m and not old.startswith(want):
                     new = want + old[m.end():]
                     sig = reject_sig(old)
                     if audit.blocked(blk["idx"], "标签归一", sig):
-                        audit.add(blk["idx"], t, "标签归一", old, new,
+                        audit.add(blk["idx"], t, "标签归一", audit_before, block_text(p),
                                   "已驳回：保留原标签", rejected=True,
                                   rule=f"blocks:{t}/zh/label", sig=sig)
                     else:
                         # 只换前缀，不整段重写：标签的加粗不该传染给整段摘要
                         replace_prefix(p, m.end(), want)
-                        audit.add(blk["idx"], t, "标签归一", old, new,
+                        audit.add(blk["idx"], t, "标签归一", audit_before, block_text(p),
                                   "仅改标签前缀，正文文字未动",
                                   rule=f"blocks:{t}/zh/label", sig=sig)
             # 关键词分隔符归一：各刊要求「；」「，」或空格，稿件里常是混的
@@ -2261,6 +2449,10 @@ def main():
                         audit.add(blk["idx"], t, "关键词分隔符归一", before_kw, block_text(p),
                                   f"改为「{sep}」，共 {len(items)} 个关键词，词条文字未动",
                                   rule="blocks:keywords/zh/separator", sig=sig)
+            # 关键词的字符归一放在标签/分隔符之后：不会把分隔符用的双空格
+            # 先压成一个（N-02/N-06 对关键词块直接跳过，这里只跑标点与 N-05）。
+            if t == "keywords":
+                normalize_body_chars_audited(p, blk, audit)
             # 摘要与关键词常各自定字体（统计研究：提要宋体、关键词黑体），必须分别取
             key = ("abstract_en" if t == "abstract" else "keywords_en") if blk.get("lang") == "en" \
                 else ("abstract" if t == "abstract" else "keywords")
@@ -2502,6 +2694,8 @@ def main():
     out = Path(a.out)
 
     fn_count, fn_desc, fn_external = style_footnotes(doc, rules)
+    # 脚注编号格式与重编号范围（DESIGN §12.1）：真脚注对象才改，尾注不搬
+    align_footnote_numbering(doc, rules, audit)
     if fn_count:
         audit.add(-2, "footnote", "脚注正文套版",
                   note=f"{fn_count} 条脚注改为 {fn_desc}",

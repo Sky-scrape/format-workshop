@@ -30,9 +30,18 @@
   "tables":        { ... },          // 表格规格
   "figures":       { ... },
   "limits":        { ... },          // 只用于提醒，不触发修改
-  "statements":    { ... }           // 必备声明
+  "statements":    { ... },          // 必备声明
+  "style_map":     { ... }           // 可选：块类型 → Word 样式名（只查表）
 }
 ```
+
+`style_map` 是可选顶层键，给需要套 Word 命名样式的刊（多见于英文刊）用：
+
+```json
+"style_map": { "body": "Body Text", "heading1": "Heading 1", "title": "Title" }
+```
+
+渲染器只按块类型查表套样式名，字号字体仍逐项按 `typography` 写入；样式在稿件里不存在时不临时造一个（那会制造规则集没声明过的样式），保持原样并跳过。
 
 `journal.language` 决定语言能力，**不由稿件语言决定**。英文期刊的中国作者不需要中英对照摘要；中文期刊的英文摘要则是必备项。这一条如果搞反，输出会整篇错。
 
@@ -119,6 +128,10 @@
 消费点三处，口径必须一致：补录页勾选闸（仅 `author-year` 刊提供转换选项，DESIGN §1.4）、`render_from_ir.apply_citation` 入口硬闸（非 `author-year` 时记审计并整体跳过）、`citation_ref.in_text_style`（作者-年份括注与分隔符只认 `author-year` 刊的声明）。`system` 缺省按「不支持转换」对待——引用重排是越线开关，宁可不做。
 
 `style_id` 指向**独立的引用格式化器插件**，不写在渲染器里。新增一种引用体系 = 新增一个格式化器，不改渲染器。
+
+内置插件（`tools/cite_styles/`，2026-11-15）：`APA-7`／`APA`、`HARVARD-ELSEVIER`、`HARVARD-WILEY`、`CHICAGO`。优先级固定：`reference_list.templates` 写了可渲染模板时用模板（期刊自己的体例永远压过通用样式）；没写模板、`style_id` 又能解析到插件时用插件；两者都没有就保持条目不重排。插件只换文献写法，不增删文献、不改作者名与题名。
+
+`in_text` 里的 `one_author` / `two_authors` / `three_plus` 示例是正文引注写法的依据（连接词 `and` / `&`、作者与年份之间的逗号、三位以上用 `et al.`）：渲染器从示例推导，不按刊名特判。没写示例时保留旧行为（全角逗号、and / 等）。
 
 `reference_list.templates` 是引用体系重排（§1.4）消费的条目模板，键为 `{语言}_{类型}`（`cn_journal` / `en_book`…，与 `citation_ref.KIND` 的 slot 对应），值必须带 `{authors}` 这类**占位符**——渲染器只认带占位符的模板；纯描述式的著录写法说明（如 GB/T 7714 的「[序号]主要责任者.文献题名[M]…」）不是模板，放进来也不会被拿去改写条目。
 
@@ -837,13 +850,13 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 2. **样板占位文字数据化（`sample` 段）**：英文刊的样板若沿用"张　三""表1 主要变量描述性统计"，规格页会显得不专业。现在 `sample` 可提供 title/abstract/keywords/表格/图注/作者页说明等占位文字，缺省仍用中文，已有十二本刊的产物不变。
 3. **纯英文刊不重复渲染"英文四件套"**：原逻辑默认"中文主体 + 文末英文摘要"，英文刊会整篇重复。现在按"是否存在中文摘要块"判断，纯英文刊跳过该段；英文分类号（JEL）改为**按 blocks 顺序**决定前置还是末尾——《世界经济》的 JEL 在文末，CER 的 JEL 紧跟关键词。
 
-### 18.3 仍然缺的三件（英文刊真正的门槛）
+### 18.3 三件门槛（2026-11-15 已补齐）
 
-| 部件 | 现状 | 补齐方式 |
+| 部件 | 旧现状 | 补齐情况 |
 |---|---|---|
-| 引用格式化器插件 | `style_id` 已能指向 `APA-7`，但**没有插件真的把条目改写成 APA**；目前只做悬挂缩进，条目文本原样保留 | 新增 `tools/cite_styles/` 目录，每个 style 一个函数：读 `reference_item` 的字段（作者/年/题/刊/卷期页/DOI），输出目标样式。属 §9.2 允许的"新增插件"，不动渲染器 |
-| 样式映射表 | 英文刊的 Word 样式名（Title/Heading 1/Body Text）与中文刊不同 | 规则集内加 `style_map`，代码只查表 |
-| 标题编号的自动生成 | 数字体系目前只生成"第几级 + .1"，不支持 1.1.2 的第三段递增 | 编号生成器按 `levels` 模板做多段递增 |
+| 引用格式化器插件 | `style_id` 已能指向 `APA-7`，但没有插件真的把条目改写成 APA | **已落地** `tools/cite_styles/`：APA-7 / Harvard-Elsevier / Harvard-Wiley / Chicago，读 `reference_item` 的字段输出目标样式并给出斜体区间。规则集写了 `reference_list.templates` 时模板优先 |
+| 样式映射表 | 英文刊的 Word 样式名（Title/Heading 1/Body Text）与中文刊不同 | **已落地**：规则集顶层 `style_map`（块类型 → Word 样式名），渲染器只查表，样式不存在时不临时造 |
+| 标题编号的自动生成 | 数字体系不支持 1.1.2 第三段递增 | **已落地**：`headings.levels` 模板按层级替换数字，`1` / `1.1` / `1.1.1` / `1.1.1.1` 逐级递增 |
 
 ### 18.4 英文刊特有的块与校验（下一轮）
 
@@ -853,7 +866,7 @@ python tools/analyze_pdf_layout.py 论文*.pdf --compare rules/journal/{id}.json
 
 ### 18.5 结论
 
-**schema 不需要为英文刊新增任何 block 类型**，验证了 §9.1 第 3 条。真正的成本在三处插件（引用格式化器、样式映射、编号生成器）与英文专属校验，属于 §9.1 允许的"新增引用格式化器插件"范围内，不算扩展性失败。
+**schema 不需要为英文刊新增任何 block 类型**，验证了 §9.1 第 3 条。三处插件（引用格式化器、样式映射、编号生成器）已于 2026-11-15 补齐；英文专属校验（摘要词数、JEL、Highlights 字符数）仍按 `limits.metric` 逐刊声明，`chars` 口径待补。
 
 ---
 

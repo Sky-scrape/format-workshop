@@ -38,7 +38,12 @@ import ocr        # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 RULES_DIR = ROOT / "rules" / "journal"
 
-MAX_PDF_CHARS = 24000
+MAX_PDF_CHARS = 60000
+# 单次喂给模型的上限。稿约超过这个长度时分段抽取，合并事实清单——
+# 旧版一次性截断到 24000 字，后半本「图表规范」整章静默丢失。
+AI_CHUNK_CHARS = 12000
+# 分段上限：再多就超出一次建库的合理成本，截断并如实标注。
+AI_MAX_CHUNKS = 8
 
 # 键 → (写入路径, 类型, 中文名)。类型只用于校验与格式化，不做业务判断。
 FACTS = {
@@ -319,6 +324,66 @@ def _get_path(root, path):
     return cur
 
 
+def _chunk_text(text, size=AI_CHUNK_CHARS, limit=AI_MAX_CHUNKS):
+    """把长稿约按段落边界切成若干段；返回 (chunks, truncated)。
+
+    段内尽量在换行处断开，避免把「不超过 300 字」这类句子劈成两半。
+    超过 limit 段的部分不再喂给模型，truncated=True 如实记进报告。
+    """
+    text = text or ""
+    chunks, pos = [], 0
+    while pos < len(text) and len(chunks) < limit:
+        end = min(pos + size, len(text))
+        if end < len(text):
+            nl = text.rfind("\n", pos + size // 2, end)
+            if nl > pos:
+                end = nl
+        chunks.append(text[pos:end])
+        pos = end
+    return chunks, pos < len(text)
+
+
+def recommend_baseline(text):
+    """按稿约文字猜一本结构最接近的已入库刊，返回 id；猜不出返回空串。
+
+    只作基线推荐：语言、引用制、印刷分栏三项来自稿件原文的关键词，
+    不写死任何刊名。用户显式选了基线时调用方不会走到这里。
+    """
+    t = text or ""
+    if not t.strip():
+        return ""
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", t))
+    latin = len(re.findall(r"[A-Za-z]", t))
+    want_lang = "en" if latin > cjk * 1.5 else "zh"
+    author_year = bool(re.search(
+        r"作者\s*[-—–]?\s*年份|著者\s*[-—–]?\s*年份|author\s*[-—–]?\s*year|"
+        r"\bAPA\b|\bHarvard\b|\bChicago\b", t, re.IGNORECASE))
+    double_col = bool(re.search(r"双栏|双列|两栏|two[\s-]*column", t, re.IGNORECASE))
+    best, best_score = "", -1
+    for path in sorted(RULES_DIR.glob("*.json")):
+        try:
+            rules = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        score = 0
+        lang = ((rules.get("journal") or {}).get("language") or "zh")
+        if lang == want_lang:
+            score += 3
+        system = ((rules.get("citation") or {}).get("system") or "")
+        if author_year and system == "author-year":
+            score += 3
+        elif not author_year and system == "numbered":
+            score += 2
+        printed = ((rules.get("page") or {}).get("printed_columns") or 1)
+        if double_col and printed == 2:
+            score += 2
+        elif not double_col and printed == 1:
+            score += 1
+        if score > best_score:
+            best, best_score = rules.get("journal", {}).get("id") or path.stem, score
+    return best if best_score >= 3 else ""
+
+
 def ai_facts(text, cfg, log=None):
     """让模型抽事实。返回 (facts, evidence, notes, raw)。
 
@@ -326,34 +391,61 @@ def ai_facts(text, cfg, log=None):
     max_tokens 会把 JSON 截成半截——而这条链路原本没有重试，一次即失败
     （F52）。截断/非法 JSON 时降级重试一次：只要取值、不要引文，没有引文
     的值经 build() 进 unverified，不会混进规则集。
+
+    长稿约按 AI_CHUNK_CHARS 分段抽取，各段事实按「首个非空值」合并；
+    引文核验仍对完整原文做，后半本的要求不会再被 24000 字截断丢掉。
     """
     keys = "\n".join(f"- {k}: {meta[2]}" for k, meta in FACTS.items())
     keys += "\n- body_line_mode: exact（固定行距，给磅值）或 multiple（倍数行距）\n"
     keys += "- body_line_value: 行距数值（固定值给磅，倍数给倍数）\n"
     keys += "- heading_levels: 各级标题的编号写法数组，如 [\"一、\",\"（一）\",\"1.\"]"
     prompt = EXTRACT_PROMPT.format(keys=keys, enums=ENUM_HINT)
+    chunks, truncated = _chunk_text(text)
+    if truncated and log:
+        log(f"稿约过长，按 {AI_CHUNK_CHARS} 字分 {len(chunks)} 段抽取；"
+            f"超出 {AI_MAX_CHUNKS} 段的部分未送入模型")
 
-    messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": "以下是稿约正文：\n\n" + text},
-    ]
-    try:
-        content = ai_assist._chat(cfg, messages, max_tokens=8192)
-        obj = json.loads(_json_blob(content))
-    except ValueError:
-        # JSONDecodeError 是 ValueError 子类；_json_blob 找不到花括号也抛 ValueError
-        if log:
-            log("事实抽取的输出被截断或不是合法 JSON，降级重试一次：只要取值，不要引文")
-        degrade = [dict(messages[0], content=prompt + DEGRADE_HINT), messages[1]]
-        content = ai_assist._chat(cfg, degrade, max_tokens=8192)
-        obj = json.loads(_json_blob(content))
-    facts = obj.get("facts") or {}
-    ev = obj.get("evidence") or {}
-    if not isinstance(facts, dict):
-        facts = {}
-    if not isinstance(ev, dict):
-        ev = {}
-    return facts, ev, str(obj.get("notes") or ""), content
+    facts_all, ev_all, notes_all, raws = {}, {}, [], []
+    for i, chunk in enumerate(chunks, 1):
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": f"以下是稿约正文第 {i}/{len(chunks)} 段：\n\n" + chunk},
+        ]
+        try:
+            content = ai_assist._chat(cfg, messages, max_tokens=8192)
+            obj = json.loads(_json_blob(content))
+        except ValueError:
+            # JSONDecodeError 是 ValueError 子类；_json_blob 找不到花括号也抛 ValueError
+            if log:
+                log(f"第 {i} 段事实抽取的输出被截断或不是合法 JSON，降级重试一次：只要取值，不要引文")
+            degrade = [dict(messages[0], content=prompt + DEGRADE_HINT), messages[1]]
+            try:
+                content = ai_assist._chat(cfg, degrade, max_tokens=8192)
+                obj = json.loads(_json_blob(content))
+            except ValueError as exc:
+                if log:
+                    log(f"第 {i} 段降级重试仍失败（{exc}），该段跳过；"
+                        f"其余段照常抽取，缺失项进「沿用基线」披露")
+                continue
+
+        facts = obj.get("facts") or {}
+        ev = obj.get("evidence") or {}
+        if not isinstance(facts, dict):
+            facts = {}
+        if not isinstance(ev, dict):
+            ev = {}
+        for key, value in facts.items():
+            if key not in facts_all or facts_all[key] in ("", None, [], {}):
+                facts_all[key] = value
+        for key, value in ev.items():
+            if str(value or "").strip() and not str(ev_all.get(key) or "").strip():
+                ev_all[key] = value
+        note = str(obj.get("notes") or "").strip()
+        if note:
+            notes_all.append(note)
+        raws.append(content)
+
+    return facts_all, ev_all, "；".join(notes_all), "\n".join(raws)
 
 
 def _json_blob(s):
@@ -766,6 +858,62 @@ STRUCT_STATEMENT_LABELS = {
 }
 
 
+def _is_english_block(block):
+    """英文区块：显式 english_* 类型，或同一构件标了 lang: en。
+
+    两种写法都在用：部分规则集把英文标题/摘要写成 title/abstract + lang:en，
+    另一些用 english_title 这类类型名。英文区位置开关要两种都认。
+    """
+    if not isinstance(block, dict):
+        return False
+    return (str(block.get("type", "")).startswith("english_")
+            or block.get("lang") == "en")
+
+
+def _english_section_position(rules):
+    """英文区（english_* / lang:en 块）当前在正文前还是正文后；没有返回空串。"""
+    blocks = rules.get("blocks") or []
+    idx = [i for i, b in enumerate(blocks) if _is_english_block(b)]
+    if not idx:
+        return ""
+    body = next((i for i, b in enumerate(blocks)
+                 if isinstance(b, dict) and b.get("type") == "body"), None)
+    if body is None:
+        return "front"
+    return "back" if idx[0] > body else "front"
+
+
+def _move_english_section(rules, where):
+    """把 english_* 块整组移到正文前或正文后，组内顺序保持不变。
+
+    只挪规则集里的区块顺序，不改任何字段值。英文区放首页还是文末是
+    刊物结构差异（经济研究放文末、统计研究放首页），此前只能手改
+    draft.json；复核页给出开关后仍走同一条 apply_manual 事务。
+    """
+    blocks = rules.get("blocks") or []
+    group = [b for b in blocks if _is_english_block(b)]
+    if not group:
+        return False
+    rest = [b for b in blocks if id(b) not in {id(x) for x in group}]
+    if where == "back":
+        at = next((i for i, b in enumerate(rest)
+                   if isinstance(b, dict) and b.get("type") == "appendix"), len(rest))
+        new = rest[:at] + group + rest[at:]
+    else:
+        at = next((i for i, b in enumerate(rest)
+                   if isinstance(b, dict) and b.get("type") == "body"), None)
+        if at is None:
+            at = next((i + 1 for i, b in enumerate(rest)
+                       if isinstance(b, dict)
+                       and b.get("type") in ("keywords", "classification_code")),
+                      len(rest))
+        new = rest[:at] + group + rest[at:]
+    if new == blocks:
+        return False
+    rules["blocks"] = new
+    return True
+
+
 def structural_fields(rules):
     """复核页的结构开关：匿名、作者页、区块必备/可选、声明必备/可选。
 
@@ -797,6 +945,8 @@ def structural_fields(rules):
     return {
         "anonymous": bool(sub.get("anonymous")),
         "author_page": bool(ap),
+        # 英文区位置：front（正文前）/ back（正文后）/ ""（该刊没有英文块）
+        "english_section": _english_section_position(rules),
         "blocks": blocks,
         "statements": statements,
     }
@@ -829,6 +979,12 @@ def _apply_structural(rules, structural, manual):
             ap["separate_page"] = new
             record("structural:author_page", "作者信息单独成页", new, old,
                    ("submission", "author_page", "separate_page"))
+    if structural.get("english_section") in ("front", "back"):
+        old = _english_section_position(rules)
+        if old and old != structural["english_section"]:
+            _move_english_section(rules, structural["english_section"])
+            record("structural:english_section", "英文区位置",
+                   structural["english_section"], old, ("blocks",))
     for i, want in (structural.get("blocks") or {}).items():
         blocks = rules.get("blocks") or []
         if not (0 <= int(i) < len(blocks)) or not isinstance(blocks[int(i)], dict):
@@ -1099,6 +1255,12 @@ def extract(source, *, jid, name_zh="", cfg=None, log=None, manual=False,
     if not (text or "").strip():
         raise RuntimeError("稿约里没有读到任何文字：请确认文件不是空文档，"
                            "扫描件请装 OCR 或改用文字版 PDF/Word/TXT")
+    if not baseline_id:
+        # 没有显式选择时按稿约文字推荐结构基线：语言、引用制、分栏三项
+        # 决定继承值偏差有多大。猜不出（得分不足）才退回默认基线。
+        baseline_id = recommend_baseline(text)
+        if baseline_id and log:
+            log(f"按稿约内容推荐结构基线：{baseline_id}")
     if use_ai:
         facts, ev, notes, _raw = ai_facts(text, cfg, log=log)
         rules, report = build(facts, ev, text, jid=jid, name_zh=name_zh,

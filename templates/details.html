@@ -73,6 +73,13 @@ font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
   <div class="skip-box" style="background:#f4f8fb;border-color:#d5e2ec;color:#3d566b">
     <strong>换刊提醒：</strong>
     <ul style="margin:6px 0 0;padding-left:18px">{% for n in switch_notes %}<li>{{ n }}</li>{% endfor %}</ul>
+    {% if handoff_prefill %}
+    <div style="margin-top:10px">
+      <button type="button" class="btn ghost" id="handoff-fill"
+              data-text="{{ handoff_prefill|e }}">把原作者页信息填入首页脚注草稿</button>
+      <span class="note" style="margin-left:8px">只填进「作者简介」输入框，提交前可改；不会自动写入成品。</span>
+    </div>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -231,5 +238,17 @@ font-size:var(--fs-aux);color:#6b5a33;line-height:1.9;margin:0 0 14px}
 const fillForm=document.getElementById('fillForm');
 if(fillForm)fillForm.addEventListener('submit',()=>{const b=fillForm.querySelector('button[type="submit"]');if(b.disabled)return;b.disabled=true;document.getElementById('renderOverlay').hidden=false});
 window.addEventListener('pageshow',event=>{if(event.persisted){const b=fillForm&&fillForm.querySelector('button[type="submit"]');if(b)b.disabled=false;const o=document.getElementById('renderOverlay');if(o)o.hidden=true}});
+/* 换刊承接：把原作者页已填字段拼好的草稿填进首页脚注的「作者简介」。
+   只改输入框的值，用户看得到、改得动，提交前不会写入任何成品。 */
+const handoff=document.getElementById('handoff-fill');
+if(handoff)handoff.addEventListener('click',()=>{
+  const input=document.querySelector('input[name="author_bio"]');
+  if(!input)return;
+  const text=handoff.dataset.text||'';
+  if(!text)return;
+  input.value=input.value.trim()?input.value.trim()+'；'+text:text;
+  input.focus();
+  input.scrollIntoView({behavior:'smooth',block:'center'});
+});
 </script>
 {% endblock %}

@@ -87,12 +87,12 @@
       <div class="field">
         <label for="baseline">结构基线</label>
         <select id="baseline" name="baseline">
-          <option value="">自动（优先已核验中文刊）</option>
+          <option value="">自动（按稿约内容推荐）</option>
           {% for j in journals or [] %}
           <option value="{{ j.id }}">{{ j.name }}{% if j.en %} · {{ j.en }}{% endif %}</option>
           {% endfor %}
         </select>
-        <div class="note">目标刊的结构（区块清单、声明、作者信息页等）与哪本已入库刊最接近就选哪本；不选则用默认中文刊基线。手工建库时，这一项决定你只需要改多少字段。</div>
+        <div class="note">目标刊的结构（区块清单、声明、作者信息页等）与哪本已入库刊最接近就选哪本；不选则按稿约文字自动推荐（语言、引用制、印刷分栏三项匹配）。手工建库时，这一项决定你只需要改多少字段。</div>
       </div>
 
       <label class="drop" id="drop">

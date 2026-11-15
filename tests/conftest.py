@@ -24,8 +24,9 @@ from docx.text.paragraph import Paragraph
 # 转出同名 API：现有测试仍从 conftest 取，test_text_guard.py 的 parity 用例
 # 盯着两边逐条相同——夹具里再抄一份实现，迟早一边先松。
 from text_guard import (
-    CAPTION_PREFIX, CAPTION_TYPES, CITATION_REWRITE_RULES, HEADING_NUMBER_PREFIXES,
-    HEADING_TYPES, INDENT_LEADING_TYPES, REF_NUMBER_PREFIX, TEXT_ACTIONS,
+    CAPTION_PREFIX, CAPTION_TYPES, CITATION_REWRITE_RULES, FRAGMENT_TEXT_ACTIONS,
+    HEADING_NUMBER_PREFIXES, HEADING_TYPES, INDENT_LEADING_TYPES,
+    REF_NUMBER_PREFIX, TEXT_ACTIONS,
     content_of, document_texts as body_texts, keyword_terms, normalize, signature,
 )
 from text_guard import (
@@ -282,7 +283,7 @@ def text_snapshot_violations(p):
     版式条目记录的格式目标值（悬挂缩进的「2.3 字符」）与层序名词（表注／图注
     层序调整的「source / general」）不是文字快照，不在后一条之列。
     """
-    registered = TEXT_ACTIONS | set(CITATION_REWRITE_RULES)
+    registered = TEXT_ACTIONS | FRAGMENT_TEXT_ACTIONS | set(CITATION_REWRITE_RULES)
     bad = []
     for it in p.items:
         action = (it.get("action") or "").strip()

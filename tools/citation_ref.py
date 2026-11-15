@@ -283,9 +283,17 @@ def label_body(entry, rules=None):
 
 
 def in_text_label(entry, rules=None):
-    """正文里的作者-年份写法：（周志华，2026）/（Kang and Kim，2008）。"""
+    """正文里的作者-年份写法：（周志华，2026）/（Kang and Kim，2008）。
+
+    英文刊的连接词与年月分隔从规则集 citation.in_text 的示例推导
+    （one_author/two_authors/three_plus），不按刊名特判：
+    APA 的「(Smith, 2020)」带逗号、两位作者用 &、三位以上 et al.；
+    Harvard 的「(Smith and Jones, 2020)」用 and。规则集没写示例时
+    退回「and / et al.」的西文惯例。
+    """
     cfg = ((rules or {}).get("citation") or {}).get("in_text") or {}
     names = entry["authors"]
+    (open_b, close_b), _sep = in_text_style(rules)
     if entry["lang"] == "cn":
         if len(names) == 1:
             who = names[0]
@@ -293,15 +301,29 @@ def in_text_label(entry, rules=None):
             who = "、".join(names)
         else:
             who = names[0] + "等"
+        return f"{open_b}{who}，{entry['year']}{close_b}"
+
+    one = (cfg.get("one_author") or "").strip("()（）")
+    if one:
+        m = re.search(r"[,，]\s*$|[,，]\s*(?=(?:19|20)\d{2}|n\.d\.)", one)
+        year_sep = m.group(0).rstrip() if m else ", "
+        if not year_sep.endswith((" ", "\u3000")):
+            year_sep += " "
+        two = cfg.get("two_authors") or ""
+        joiner = " & " if "&" in two else " and "
+        three = cfg.get("three_plus") or ""
+        etal = " et al." if "et al" in three.lower() else "等"
     else:
-        if len(names) == 1:
-            who = en_author(names[0]).split("，")[0]
-        elif len(names) == 2:
-            who = f"{names[0].split()[0]} and {names[1].split()[0]}"
-        else:
-            who = names[0].split()[0] + (" et al." if cfg.get("en_three_plus") else "等")
-    (open_b, close_b), _sep = in_text_style(rules)
-    return f"{open_b}{who}，{entry['year']}{close_b}"
+        # 规则集没声明英文引注示例：保持旧版行为（全角逗号、and/等），
+        # 不为没有声明的刊物猜 APA 写法。
+        year_sep, joiner, etal = "，", " and ", "等"
+    if len(names) == 1:
+        who = names[0].split()[0]
+    elif len(names) == 2:
+        who = f"{names[0].split()[0]}{joiner}{names[1].split()[0]}"
+    else:
+        who = names[0].split()[0] + etal
+    return f"{open_b}{who}{year_sep}{entry['year']}{close_b}"
 
 
 def volume_part(entry):
@@ -378,10 +400,18 @@ def format_entry_with_spans(entry, rules):
     返回 (text, [(start, end)])；没有可用模板时返回 (None, [])。区间是在
     最终文本上的偏移，供渲染器只给刊名/书名加斜体，条目其余字符与 run
     格式不动。未声明 italic_fields 时区间为空，行为与旧版逐字节一致。
+
+    规则集没有写模板、但 citation.style_id 能解析到 tools/cite_styles/
+    插件时，由插件按结构化字段渲染（APA/Harvard/Chicago）。模板优先：
+    期刊自己的体例声明永远压过通用样式。
     """
     tpl, key, _rl = _tpl_for(entry, rules)
     if tpl is None:
-        return None, []
+        try:
+            import cite_styles
+            return cite_styles.format_entry(entry, rules)
+        except ImportError:
+            return None, []
     fields = _entry_fields(entry)
     want = italic_fields(rules, key or "")
     # 用控制字符标出斜体字段的位置，渲染完再换算成偏移并剥掉标记。
@@ -437,9 +467,28 @@ def format_entry(entry, rules):
     GB/T 7714 的著录写法说明「[序号]主要责任者.文献题名[M]…」）是给人看的
     格式描述——拿去 format 只会原样返回，把真条目替换成一句格式说明，
     属于语义级破坏，一律视为不可渲染。
+
+    规则集没有模板时，若 style_id 指向内置样式插件，则返回插件结果。
     """
     text, _spans = format_entry_with_spans(entry, rules)
     return text
+
+
+def entry_from_plugin(entry, rules):
+    """该条目是由样式插件渲染的吗（而不是规则集模板）。
+
+    审计条目的 rule 要指向真正生效的依据：插件路径记 `citation.style_id`，
+    模板路径记 `citation.reference_list.templates`。运行时文字闸按这两个
+    引用之一核对豁免凭证，指错的仍算白名单外改动。
+    """
+    tpl, _key, _rl = _tpl_for(entry, rules)
+    if tpl is not None:
+        return False
+    try:
+        import cite_styles
+    except ImportError:
+        return False
+    return cite_styles.resolve(((rules or {}).get("citation") or {}).get("style_id")) is not None
 
 
 def expand_numbers(spec):

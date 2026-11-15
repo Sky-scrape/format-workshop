@@ -724,11 +724,23 @@ def render(ir, rules, res):
             f'<td class="num">{a["rows"]} × {a["cols"]}</td>'
             f'<td class="num">{a["A"]:,} / {a["B"]:,} / {a["C"]:,}</td></tr>'
             for a in appendix)
+        tl = res.get("total_limit") or {}
+        metric = tl.get("metric") or "B"
+        saved = sum(a.get(metric, a["B"]) for a in appendix)
+        over = tl.get("over") or 0
+        if over > 0:
+            left = over - saved
+            gap = (f"全部移入后正文仍比上限多约 {left:,} 字"
+                   if left > 0 else "全部移入后正文可回到上限以内")
+            gap += "（按表格文字估算，不含题注与表注）"
+        else:
+            gap = "当前正文未超上限；若需压缩篇幅，可优先考虑这些表"
         appendix_html = (
             f'<h2 style="margin-top:22px">可附录化候选（定位用，不是修改建议）</h2>'
             f'<table><thead><tr><th>表格</th><th>行 × 列</th><th>字数（A / B / C）</th></tr></thead>'
             f'{ap_rows}</table>'
             f'<p class="meta">门槛：{threshold:,} 字（B 口径，中文字符 + 英文单词）。'
+            f'候选合计 {saved:,} 字（{metric} 口径）；{gap}。'
             f'把表移入附录会改变正文结构，是否移、移到哪由作者决定——'
             f'本工具不会搬动任何表，也不会为迁就字数删改内容。</p>')
     elif res.get("tables"):

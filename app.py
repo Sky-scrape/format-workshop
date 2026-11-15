@@ -1258,6 +1258,31 @@ def author_info_handoff(old, new, saved=None):
     return notes
 
 
+def author_page_handoff_text(old, saved=None):
+    """把原作者页上已填的身份字段拼成一段可编辑的草稿，供填进首页脚注。
+
+    只做「搬运草稿」：值全部来自用户已填内容，按「标签：值」顺序拼接，
+    返回给页面填入输入框，用户核对/修改后才随表单提交。工具不替用户
+    决定作者简介该怎么写，也不把这段文字自动写进成品（DESIGN §13.3）。
+    """
+    if not old:
+        return ""
+    keep = {"author_name", "affiliation", "organization_and_position",
+            "professional_title", "highest_degree", "research_direction",
+            "corresponding_author", "email", "phone", "mailing_address",
+            "author_bio"}
+    parts = []
+    for f in old.get("personal_fields") or []:
+        if not isinstance(f, dict) or f.get("placement") != "author_page":
+            continue
+        fid = f.get("id") or ""
+        val = str((saved or {}).get(fid) or "").strip()
+        if fid not in keep or not val:
+            continue
+        parts.append(f"{f.get('label_zh') or fid}：{val}")
+    return "；".join(parts)[:1000]
+
+
 def author_page_fields(rules, saved=None):
     """该刊要求作者信息单独成页时，列出这一页还需要作者填的项。
 
@@ -1502,7 +1527,7 @@ def journals():
                            drafts=draft_list())
 
 
-APP_VERSION = "1.0.2"       # 版本真源：构建脚本经 tools/app_version.py 解析这里（D-10）
+APP_VERSION = "1.0.3"       # 版本真源：构建脚本经 tools/app_version.py 解析这里（D-10）
 
 
 @app.route("/healthz")
@@ -1810,6 +1835,7 @@ def journal_draft_edit(jid):
             structural = {
                 "anonymous": "s_anon" in request.form,
                 "author_page": "s_author_page" in request.form,
+                "english_section": request.form.get("s_english_section", ""),
                 "blocks": {b["index"]: f"s_blk_{b['index']}" in request.form
                            for b in ctx["blocks"]},
                 "statements": {s["key"]: f"s_st_{s['key']}" in request.form
@@ -2116,6 +2142,12 @@ def details(job):
         ctx["switch_notes"] = (author_info_handoff(
             rules_of(meta.get("journal") or "") or {}, rules,
             ctx.get("saved") or {}) if switched else [])
+        # 原作者页字段 → 首页脚注草稿（只填进输入框，用户可改；不自动落稿）
+        old_rules = rules_of(meta.get("journal") or "") or {}
+        ctx["handoff_prefill"] = (
+            author_page_handoff_text(old_rules, ctx.get("saved") or {})
+            if switched and _author_page_enabled(old_rules)
+            and not _author_page_enabled(rules) else "")
         if not preflight_current:
             ctx["preflight"] = None
             ctx["has_preflight"] = False
