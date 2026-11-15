@@ -2,6 +2,10 @@
 ;
 ; 输入：tools/build_portable.py 的产物 dist\格式工坊（自带解释器与依赖，
 ; 所以安装版 = 把绿色包铺进 Program Files + 快捷方式 + 卸载器，不另装 Python）。
+; 从备用构建目录出包时由 build_installer --source 传 MySourceDir 覆盖。
+#ifndef MySourceDir
+#define MySourceDir "..\..\dist\格式工坊"
+#endif
 ; 构建：py -3 tools/build_installer.py [--version x.y.z]
 ;
 ; 中文界面语言文件取自官方 issrc 仓库 Unofficial 翻译（is-6_7_4 tag），
@@ -46,7 +50,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式(&D)"; \
     GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
-Source: "..\..\dist\格式工坊\*"; DestDir: "{app}"; \
+Source: "{#MySourceDir}\*"; DestDir: "{app}"; \
     Flags: recursesubdirs ignoreversion createallsubdirs
 
 [Icons]

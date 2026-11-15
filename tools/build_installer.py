@@ -91,11 +91,15 @@ def main():
     # 曾经默认值在这里另写一份 1.0.0，两处一漂移产物就对不上号（D-10）
     ap.add_argument("--version", default=appver.app_version())
     ap.add_argument("--iscc", default=None, help="ISCC.exe 路径（默认自动探测）")
+    ap.add_argument("--source", default=None,
+                    help="便携包目录（默认 dist/格式工坊）；用于正式目录被运行时"
+                         "从备用构建目录出安装包")
     a = ap.parse_args()
 
-    portable = ROOT / "dist" / "格式工坊"
+    portable = Path(a.source) if a.source else ROOT / "dist" / "格式工坊"
     if not (portable / "app.py").is_file():
         raise SystemExit(f"缺少 {portable}——先跑 python tools/build_portable.py")
+    portable = portable.resolve()
 
     # 分发包若被拿去做过冒烟测试，outputs 里会留着运行日志；安装包不带这些
     stale = portable / "outputs"
@@ -113,7 +117,7 @@ def main():
     print(f"ISCC {iscc}")
     print(f"版本 {a.version} → {out.name}")
     r = subprocess.run(
-        [iscc, f"/DMyAppVersion={a.version}", str(gen)],
+        [iscc, f"/DMyAppVersion={a.version}", f"/DMySourceDir={portable}", str(gen)],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     # ISCC 的进度/告警在 stdout，出错时原样带出来好排查
     if r.returncode != 0:
